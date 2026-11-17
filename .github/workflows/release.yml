@@ -1,0 +1,69 @@
+# Pushing a tag like v0.2.0 builds the Linux binary and publishes a GitHub
+# release with it. The release text is the tag's section in CHANGELOG.md.
+# Uses only the built-in GITHUB_TOKEN of this repository.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Version matches the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' app/Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$crate" ]; then
+            echo "tag v$tag does not match app/Cargo.toml version $crate" >&2
+            exit 1
+          fi
+
+      - name: Test
+        working-directory: app
+        run: cargo test --locked
+
+      - name: Build
+        working-directory: app
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          name="catwright-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir -p "$name"
+          cp app/target/release/catwright "$name/"
+          strip "$name/catwright"
+          cp -r dist "$name/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$name/"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v tag="## ${GITHUB_REF_NAME}" '
+            $0 == tag { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "no section ${GITHUB_REF_NAME} in CHANGELOG.md" >&2; exit 1; }
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$NAME.tar.gz" "$NAME.tar.gz.sha256" \
+            --title "Catwright $GITHUB_REF_NAME" \
+            --notes-file notes.md

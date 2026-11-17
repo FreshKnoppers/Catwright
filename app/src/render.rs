@@ -1,0 +1,2597 @@
+//! egui rendering of transcripts: markdown blocks and the generative-UI DSL
+//! (```ui fenced JSON blocks render as native widgets).
+
+use crate::i18n::{self, tr, trf};
+use crate::markdown::{MdBlock, MdInline};
+use crate::model::{parse_ui_blocks, UiEvent, UiNode};
+use crate::script::{ActionOutcome, ScriptTool};
+use egui::{Color32, RichText};
+use std::collections::HashMap;
+
+pub const ACCENT: Color32 = crate::theme::ORANGE;
+pub const CODE_BG: Color32 = crate::theme::CARD;
+pub const TEXT: Color32 = crate::theme::TEXT;
+pub const DIM: Color32 = crate::theme::DIM;
+pub const LINK: Color32 = crate::theme::AMBER;
+/// Inline code spans.
+const CODE_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
+
+/// True only for link schemes we are willing to open from a model answer:
+/// http://, https:// and mailto: (case-insensitive, after trim). Everything
+/// else (javascript:, file:, data:, …) is rendered as plain text.
+pub fn is_safe_link(url: &str) -> bool {
+    let u = url.trim().to_lowercase();
+    u.starts_with("http://") || u.starts_with("https://") || u.starts_with("mailto:")
+}
+
+/// Mutable render state shared while painting one message.
+pub struct RenderCtx<'a> {
+    pub ui_events: &'a mut Vec<UiEvent>,
+    /// Id of the chat/session whose transcript is painted (`owner` of every
+    /// per-interaction state key, see `field_key`): the session id in the
+    /// harness world, the chat id in the API-chat world. One view's values
+    /// never surface in another (Handoff 2.5).
+    pub owner: &'a str,
+    /// Input state of the UI blocks, keyed by `field_key`
+    /// ("<owner>#<msg_idx>#<block>#<name>").
+    pub form_values: &'a mut HashMap<String, String>,
+    /// Nodes of the ```ui block currently being painted: `computed` and a
+    /// `form` submit read the inputs of their own block from here.
+    /// (owned copy: ui blocks are small, and a borrowed slice would tie the
+    /// context's lifetime to every temporary parse result)
+    pub block_nodes: Vec<UiNode>,
+    /// Persistent ```ui-js tools of the view, keyed by `script_key`, each
+    /// carrying its own boa context (`owner`-prefixed, Handoff 2.5).
+    pub scripts: Option<&'a mut HashMap<String, ScriptTool>>,
+    /// Set while the frame paints a slider the pointer is dragging. The
+    /// enclosing ui-js block reads it after painting itself to throttle
+    /// its re-evaluations (Handoff 2.7); `render_script_tool` resets it
+    /// first, so it always speaks for the block just painted.
+    pub slider_dragging: bool,
+    /// Running count of ```ui / ```ui-js blocks already painted in this
+    /// message: every block draws with its own number, so the per-block
+    /// state keys (`field_key`, `script_key`) never collide (review
+    /// N17). Top-level blocks count from 0; a run nested inside a ui
+    /// `text` node counts in its own space past 1_000_000 (final audit
+    /// G), so nested content cannot shift the outer numbers — restored
+    /// after the nested run, the counter resumes as if the host block
+    /// had contained no ui children.
+    pub block_offset: usize,
+    /// Salt separating scroll-state id paths of nested markdown blocks
+    /// from the top-level blocks of the same message (review N16): 0 for
+    /// a message's own blocks, the text hash under a ui `text` node, the
+    /// file path in the artifacts preview.
+    pub scroll_salt: u64,
+    /// How many `text` nodes deep the current paint is (a `text` node holds
+    /// markdown, which can hold ```ui blocks again). Bounded by
+    /// `MAX_TEXT_DEPTH`; a ```ui-js block below depth 0 never runs, so a
+    /// script cannot spawn itself (a tool printing its own source as a new
+    /// ```ui-js block re-ran until the stack overflowed).
+    pub depth: u8,
+}
+
+/// Deepest nesting of `text` nodes that is still rendered as markdown.
+const MAX_TEXT_DEPTH: u8 = 4;
+
+impl<'a> RenderCtx<'a> {
+    pub fn new(
+        ui_events: &'a mut Vec<UiEvent>,
+        form_values: &'a mut HashMap<String, String>,
+        owner: &'a str,
+    ) -> Self {
+        Self {
+            ui_events,
+            owner,
+            form_values,
+            block_nodes: Vec::new(),
+            scripts: None,
+            slider_dragging: false,
+            block_offset: 0,
+            scroll_salt: 0,
+            depth: 0,
+        }
+    }
+
+    /// Enable ```ui-js tools, keeping their state in `scripts`.
+    pub fn with_scripts(mut self, scripts: &'a mut HashMap<String, ScriptTool>) -> Self {
+        self.scripts = Some(scripts);
+        self
+    }
+}
+
+/// Paint one ```ui block: its nodes become the block context, so `computed`
+/// sees the sliders/fields of the same block.
+pub fn render_ui_block(
+    ui: &mut egui::Ui,
+    nodes: &[UiNode],
+    msg_idx: usize,
+    block: usize,
+    ctx: &mut RenderCtx,
+) {
+    let outer = std::mem::replace(&mut ctx.block_nodes, nodes.to_vec());
+    for n in nodes {
+        render_ui_node(ui, n, msg_idx, block, ctx);
+    }
+    ctx.block_nodes = outer;
+}
+
+/// Key of one input inside a UI block: the owning chat/session id first,
+/// then message, block index and field name —
+/// `"<owner>#<msg_idx>#<block>#<name>"`. The owner prefix keeps the UI
+/// state of one chat/session out of another at the same transcript position
+/// and makes a dropped owner's entries removable wholesale (Handoff 2.5).
+/// Pure, so the rule is unit-tested (`keys_are_owner_scoped`).
+pub fn field_key(owner: &str, msg_idx: usize, block: usize, name: &str) -> String {
+    format!("{owner}#{msg_idx}#{block}#{name}")
+}
+
+/// The shared prefix of every per-interaction key of `owner`:
+/// `"<owner>#"` (see `field_key` / `script_key`).
+pub fn owner_key_prefix(owner: &str) -> String {
+    format!("{owner}#")
+}
+
+/// Drop every entry that belongs to `owner` from a per-interaction state
+/// map (its keys start with `owner_key_prefix`). Called when a session /
+/// chat goes away, so its form inputs and ui-js tools (their boa contexts)
+/// cannot leak into another view or grow the map without bound
+/// (Handoff 2.5).
+pub fn drop_owner_entries<V>(map: &mut HashMap<String, V>, owner: &str) {
+    let prefix = owner_key_prefix(owner);
+    map.retain(|k, _| !k.starts_with(&prefix));
+}
+
+/// The values of all slider/number/select inputs of one block, as numbers
+/// (selects contribute their numeric option, everything else 0).
+/// All nodes of a block, including those nested in `card`/`columns`
+/// (inputs inside a card must still feed the block's formulas).
+fn flatten_nodes(nodes: &[UiNode]) -> Vec<&UiNode> {
+    let mut out = Vec::new();
+    for n in nodes {
+        out.push(n);
+        if let UiNode::Card { children, .. } | UiNode::Columns { children } = n {
+            out.extend(flatten_nodes(children));
+        }
+    }
+    out
+}
+
+fn block_vars(
+    ctx: &RenderCtx,
+    msg_idx: usize,
+    block: usize,
+    nodes: &[UiNode],
+) -> HashMap<String, f64> {
+    let mut vars = HashMap::new();
+    for n in flatten_nodes(nodes) {
+        let (name, value) = match n {
+            UiNode::Slider { name, value, .. } => {
+                let v = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .or(*value)
+                    .unwrap_or(0.0);
+                (name, v)
+            }
+            UiNode::Number { name, value, .. } => {
+                let v = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .or(*value)
+                    .unwrap_or(0.0);
+                (name, v)
+            }
+            UiNode::Select {
+                name,
+                options,
+                value,
+                ..
+            } => {
+                let current = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .cloned()
+                    .or_else(|| value.clone())
+                    .unwrap_or_default();
+                let v = current.trim().parse::<f64>().unwrap_or(0.0);
+                let _ = options;
+                (name, v)
+            }
+            UiNode::Toggle { name, value, .. } => {
+                let on = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .map(|s| s == "true")
+                    .or(*value)
+                    .unwrap_or(false);
+                (name, if on { 1.0 } else { 0.0 })
+            }
+            _ => continue,
+        };
+        vars.insert(name.clone(), value);
+    }
+    vars
+}
+
+/// The checkbox states of the block's checklists as one array of bools
+/// under the name `checklist`, with the next form submit of the same
+/// block — SKILL.md promises "their values are sent with the next form
+/// submit of the same block" without naming a concrete shape, so the
+/// block's states travel as one `true`/`false` array, consistent in both
+/// submit paths (review M9). The value rule is the checklist painter's:
+/// the stored `check:{i}` entry wins over the item's default. The second
+/// return says whether the user changed any of them (the `changed_inputs`
+/// gate); the whole array is sent, not just the toggled item, so a
+/// consumer can read it as the checklist's state.
+fn checklist_values(
+    ctx: &RenderCtx,
+    msg_idx: usize,
+    block: usize,
+    nodes: &[UiNode],
+) -> Option<(serde_json::Value, bool)> {
+    let mut states: Option<Vec<bool>> = None;
+    let mut touched = false;
+    for n in flatten_nodes(nodes) {
+        let UiNode::Checklist { items } = n else {
+            continue;
+        };
+        let out = states.get_or_insert_with(Vec::new);
+        for (i, item) in items.iter().enumerate() {
+            let key = field_key(ctx.owner, msg_idx, block, &format!("check:{i}"));
+            match ctx.form_values.get(&key) {
+                // a stored entry (whatever it says) marks the item as
+                // the user's own change
+                Some(s) => {
+                    touched = true;
+                    out.push(s == "true");
+                }
+                None => out.push(item.done),
+            }
+        }
+    }
+    states.map(|states| {
+        (
+            serde_json::Value::Array(states.into_iter().map(serde_json::Value::Bool).collect()),
+            touched,
+        )
+    })
+}
+
+/// The inputs of one block as JSON values (for a form submit of that
+/// block).
+fn block_inputs(
+    ctx: &RenderCtx,
+    msg_idx: usize,
+    block: usize,
+    nodes: &[UiNode],
+) -> Vec<(String, serde_json::Value)> {
+    let mut out = Vec::new();
+    for n in flatten_nodes(nodes) {
+        match n {
+            UiNode::Slider { name, value, .. } | UiNode::Number { name, value, .. } => {
+                let v = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .or(*value)
+                    .unwrap_or(0.0);
+                out.push((name.clone(), serde_json::json!(v)));
+            }
+            UiNode::Select { name, value, .. } => {
+                let v = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .cloned()
+                    .or_else(|| value.clone())
+                    .unwrap_or_default();
+                out.push((name.clone(), serde_json::Value::String(v)));
+            }
+            UiNode::Toggle { name, value, .. } => {
+                let on = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .map(|s| s == "true")
+                    .or(*value)
+                    .unwrap_or(false);
+                out.push((name.clone(), serde_json::Value::Bool(on)));
+            }
+            UiNode::TextInput { name, value, .. } => {
+                let v = ctx
+                    .form_values
+                    .get(&field_key(ctx.owner, msg_idx, block, name))
+                    .cloned()
+                    .or_else(|| value.clone())
+                    .unwrap_or_default();
+                out.push((name.clone(), serde_json::Value::String(v)));
+            }
+            _ => {}
+        }
+    }
+    // the checklist state travels with the same submit (review M9)
+    if let Some((value, _)) = checklist_values(ctx, msg_idx, block, nodes) {
+        out.push(("checklist".to_string(), value));
+    }
+    out
+}
+
+/// Inputs the user actually changed in this block (present in form_values),
+/// typed for a script tool's state: numbers, bools and strings. A touched
+/// checklist contributes its full state array (`checklist`, same shape as
+/// the form submit of the block).
+fn changed_inputs(
+    ctx: &RenderCtx,
+    msg_idx: usize,
+    block: usize,
+    nodes: &[UiNode],
+) -> Vec<(String, serde_json::Value)> {
+    let mut out = Vec::new();
+    for n in flatten_nodes(nodes) {
+        let (name, numeric, boolean) = match n {
+            UiNode::Slider { name, .. } | UiNode::Number { name, .. } => (name, true, false),
+            UiNode::Toggle { name, .. } => (name, false, true),
+            UiNode::Select { name, .. } | UiNode::TextInput { name, .. } => (name, false, false),
+            _ => continue,
+        };
+        let Some(raw) = ctx
+            .form_values
+            .get(&field_key(ctx.owner, msg_idx, block, name))
+        else {
+            continue;
+        };
+        let value = if numeric {
+            match raw.trim().replace(',', ".").parse::<f64>() {
+                Ok(f) => serde_json::json!(f),
+                Err(_) => continue, // half-typed number: keep the old state
+            }
+        } else if boolean {
+            serde_json::Value::Bool(raw == "true")
+        } else {
+            serde_json::Value::String(raw.clone())
+        };
+        out.push((name.clone(), value));
+    }
+    if let Some((value, true)) = checklist_values(ctx, msg_idx, block, nodes) {
+        out.push(("checklist".to_string(), value));
+    }
+    out
+}
+
+/// Stable cache key for a ui-js tool: the owning chat/session id, the
+/// position in the view and a hash of the code (`owner`-prefixed like
+/// `field_key`, so one owner's tools are scoped and droppable, Handoff 2.5).
+pub fn script_key(owner: &str, msg_idx: usize, block: usize, code: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut h);
+    format!("{owner}#{msg_idx}#{block}#{:x}", h.finish())
+}
+
+/// A ```ui-js block: run the script tool (sandboxed boa), paint its nodes,
+/// feed input changes back into its state, route button clicks to
+/// `onAction` (local) or to the agent.
+fn render_script_tool(
+    ui: &mut egui::Ui,
+    code: &str,
+    closed: bool,
+    msg_idx: usize,
+    block: usize,
+    ctx: &mut RenderCtx,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("■ TOOL")
+                .monospace()
+                .size(11.5)
+                .color(crate::theme::ORANGE),
+        );
+        ui.label(
+            RichText::new(tr("runs locally, without network"))
+                .color(DIM)
+                .small(),
+        );
+    });
+    if ctx.depth > 0 {
+        // a script inside another node's output (a ```ui-js fence in a
+        // `text` node): shown, never run — no tool can start another one
+        ui.label(
+            RichText::new(tr("Nested tools do not run."))
+                .color(DIM)
+                .small(),
+        );
+        render_code_block(
+            ui,
+            egui::Id::new((ctx.owner, msg_idx, block, "ui-js-nested")),
+            "ui-js",
+            code,
+        );
+        return;
+    }
+    if !closed {
+        // the answer is still streaming: never run half a script
+        ui.label(RichText::new(tr("Loading tool…")).color(DIM).small());
+        return;
+    }
+    let key = script_key(ctx.owner, msg_idx, block, code);
+    // take the tool out of the map while painting (the paint needs &mut ctx)
+    let Some(mut tool) = ctx
+        .scripts
+        .as_deref_mut()
+        .map(|m| m.remove(&key).unwrap_or_else(|| ScriptTool::new(code)))
+    else {
+        render_code_block(
+            ui,
+            egui::Id::new((ctx.owner, msg_idx, block, "ui-js")),
+            "ui-js",
+            code,
+        );
+        return;
+    };
+    let result = tool.nodes().clone();
+    // did the throttle skip a dirty evaluation? then come back when the
+    // gap allows it, so a dragged slider's final value is never stale
+    let throttled = tool.eval_pending();
+    // the flag speaks for this block only: measure it from scratch
+    ctx.slider_dragging = false;
+    match result {
+        Ok(nodes) => {
+            if throttled {
+                ui.ctx().request_repaint();
+            }
+            let before = ctx.ui_events.len();
+            render_ui_block(ui, &nodes, msg_idx, block, ctx);
+            // the ui-js block decides over this tool's next evaluation
+            tool.set_dragging(ctx.slider_dragging);
+            // clicks of this tool: onAction first, the agent only if unhandled
+            let new_events: Vec<UiEvent> = ctx.ui_events.drain(before..).collect();
+            let mut state_reset = false;
+            for e in new_events {
+                match e {
+                    UiEvent::Button { action } => match tool.on_action(&action) {
+                        ActionOutcome::Local => state_reset = true,
+                        ActionOutcome::SendToAgent => {
+                            ctx.ui_events.push(UiEvent::Button { action })
+                        }
+                    },
+                    UiEvent::Form { submit, mut values } => {
+                        if let serde_json::Value::Object(map) = &mut values {
+                            map.insert("state".into(), tool.state().clone());
+                        }
+                        ctx.ui_events.push(UiEvent::Form { submit, values });
+                    }
+                }
+            }
+            if state_reset {
+                // the script set a new state: inputs re-seed from it
+                // (every key of this owner's block shares the prefix)
+                let prefix = field_key(ctx.owner, msg_idx, block, "");
+                ctx.form_values.retain(|k, _| !k.starts_with(&prefix));
+            } else {
+                let before_state = tool.state().clone();
+                for (name, value) in changed_inputs(ctx, msg_idx, block, &nodes) {
+                    tool.set_value(&name, value);
+                }
+                if tool.state() != &before_state {
+                    ui.ctx().request_repaint();
+                }
+            }
+            if state_reset {
+                ui.ctx().request_repaint();
+            }
+        }
+        Err(e) => {
+            egui::Frame::default()
+                .fill(crate::theme::CARD)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::RED))
+                .rounding(egui::Rounding::same(4.0))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(&e).color(crate::theme::RED).size(13.0));
+                    egui::CollapsingHeader::new(crate::theme::mono_label(tr("Source")))
+                        .id_salt(("tool_src", msg_idx, block))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(code).monospace().size(12.0).color(TEXT));
+                        });
+                });
+        }
+    }
+    if let Some(m) = ctx.scripts.as_deref_mut() {
+        m.insert(key, tool);
+    }
+}
+
+/// A slider's range in order: the model may send `min > max` (or a script
+/// may compute it), and `f64::clamp` panics on that. Non-finite bounds fall
+/// back to 0 so the slider always has a usable range.
+fn slider_bounds(min: f64, max: f64) -> (f64, f64) {
+    let min = if min.is_finite() { min } else { 0.0 };
+    let max = if max.is_finite() { max } else { 0.0 };
+    (min.min(max), min.max(max))
+}
+
+/// Narrowest column a `columns` node lays out side by side.
+const MIN_COLUMN_WIDTH: f32 = 120.0;
+
+/// How many children of a `columns` node share one row: all of them when
+/// they fit at `MIN_COLUMN_WIDTH`, else as many as fit (at least one).
+fn columns_per_row(children: usize, available: f32) -> usize {
+    let fit = (available / MIN_COLUMN_WIDTH).floor().max(1.0) as usize;
+    children.clamp(1, fit.max(1))
+}
+
+/// Angle where a pie chart starts: 12 o'clock.
+const PIE_START: f32 = -std::f32::consts::FRAC_PI_2;
+
+/// The slices of a pie chart that have a share: `(slice index, start
+/// angle, sweep)`, clockwise from 12 o'clock. `fracs` are the slices'
+/// shares of the whole (summing to 1).
+fn pie_slices(fracs: &[f32]) -> Vec<(usize, f32, f32)> {
+    let mut out = Vec::new();
+    let mut angle = PIE_START;
+    for (i, frac) in fracs.iter().enumerate() {
+        let sweep = frac.max(0.0) * std::f32::consts::TAU;
+        if sweep > 0.0 {
+            out.push((i, angle, sweep));
+            angle += sweep;
+        }
+    }
+    out
+}
+
+/// The angles where one slice ends and the next begins (one separator line
+/// each); none for a pie with fewer than two slices that have a share.
+fn pie_boundaries(fracs: &[f32]) -> Vec<f32> {
+    let shares: Vec<f32> = fracs.iter().copied().filter(|f| *f > 0.0).collect();
+    if shares.len() < 2 {
+        return Vec::new();
+    }
+    let mut angle = PIE_START;
+    let mut out = vec![angle];
+    for f in &shares[..shares.len() - 1] {
+        angle += f * std::f32::consts::TAU;
+        out.push(angle);
+    }
+    out
+}
+
+/// Fractional digits of a slider `step`, used to format the value it shows:
+/// an integer step renders without decimals (`1` → "5", not "5.00"),
+/// `0.5` → 1 digit, `0.05` → 2 digits; capped for steps with float noise.
+fn step_decimals(step: f64) -> usize {
+    let frac = format!("{step}")
+        .split_once('.')
+        .map_or(0, |(_, f)| f.len());
+    frac.min(6)
+}
+
+/// Format a computed value: `decimals` digits (default 2) in the notation of
+/// `lang` (English: thousands commas, decimal point; German: thousands dots,
+/// decimal comma), plus an optional unit.
+fn format_computed(
+    lang: i18n::Lang,
+    value: f64,
+    decimals: Option<u8>,
+    unit: Option<&str>,
+) -> String {
+    let d = decimals.unwrap_or(2).min(10) as usize;
+    let s = format!("{value:.d$}");
+    let (int_part, frac) = match s.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (s.as_str(), None),
+    };
+    let (group, point) = match lang {
+        i18n::Lang::En => (',', '.'),
+        i18n::Lang::De => ('.', ','),
+    };
+    let mut out = group_thousands(int_part, group);
+    if let Some(f) = frac {
+        out.push(point);
+        out.push_str(f);
+    }
+    match unit {
+        Some(u) if !u.trim().is_empty() => {
+            out.push(' ');
+            out.push_str(u);
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Thousands separators (`sep`) for the integer part of a fixed-point
+/// number: "22645" → "22.645", "-1234" → "-1.234", "999" stays "999".
+/// Anything that is not plain digits ("NaN", "inf") passes through unchanged.
+fn group_thousands(int_part: &str, sep: char) -> String {
+    if int_part.is_empty() || !int_part.bytes().all(|b| b == b'-' || b.is_ascii_digit()) {
+        return int_part.to_string();
+    }
+    let (sign, digits) = match int_part.strip_prefix('-') {
+        Some(d) => ("-", d),
+        None => ("", int_part),
+    };
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(sep);
+        }
+        out.push(ch);
+    }
+    format!("{sign}{out}")
+}
+
+/// Colour of series `i` of a chart: `theme::CHART_SERIES` in its fixed
+/// order (neighbouring series in clearly different hues).
+fn series_color(i: usize) -> Color32 {
+    crate::theme::CHART_SERIES[i % crate::theme::CHART_SERIES.len()]
+}
+
+/// The parsed nodes of a ```ui fence, cached by its content: the same memo
+/// pattern as `markdown::parse_cached` — the frame asks for the same block
+/// again and again, and parsing its json again is per-frame work for
+/// nothing (review M10). The code string is the key; a full cache is
+/// dropped wholesale (ui blocks are small, the next frame refills it).
+fn parse_ui_blocks_cached(code: &str) -> std::sync::Arc<Vec<UiNode>> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<Vec<UiNode>>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| crate::memo::Memo::new(256))
+        .get_or_insert(crate::memo::hash_str(code), || {
+            parse_ui_blocks(&format!("```ui\n{code}\n```"))
+        })
+}
+
+/// Scroll id of one markdown code block: the owning view, the message
+/// index, the nesting salt and the block's position — never the content.
+/// A content-derived id (the code's length) shared the scroll state
+/// between equally long blocks and reset a streamed block's scroll with
+/// every chunk (review N16). Pure, so the rule is unit-tested.
+fn code_scroll_id(ctx: &RenderCtx, msg_idx: usize, block: usize) -> egui::Id {
+    egui::Id::new((ctx.owner, msg_idx, ctx.scroll_salt, block))
+}
+
+pub fn render_blocks(ui: &mut egui::Ui, blocks: &[MdBlock], msg_idx: usize, ctx: &mut RenderCtx) {
+    // The index of a ```ui block inside this message is `ctx.block_offset`:
+    // a running counter at the top level and a per-host-block space
+    // under ui `text` nodes, so every block keeps its own field/script
+    // keys (N17, final audit G). It advances BEFORE the block's nodes
+    // paint, so the block's own number is spent before its children.
+    for (block_idx, b) in blocks.iter().enumerate() {
+        match b {
+            MdBlock::Heading(level, inl) => {
+                let size = match level {
+                    1 => 22.0,
+                    2 => 19.0,
+                    3 => 17.0,
+                    _ => 15.5,
+                };
+                ui.add_space(8.0);
+                paragraph(
+                    ui,
+                    inl,
+                    InlineStyle {
+                        size,
+                        bold: true,
+                        ..InlineStyle::BODY
+                    },
+                );
+                ui.add_space(4.0);
+            }
+            MdBlock::Para(inl) => {
+                paragraph(ui, inl, InlineStyle::BODY);
+                ui.add_space(8.0);
+            }
+            MdBlock::Code { lang, code, closed } => {
+                if lang.eq_ignore_ascii_case("ui-js") {
+                    let block = ctx.block_offset;
+                    ctx.block_offset += 1;
+                    render_script_tool(ui, code, *closed, msg_idx, block, ctx);
+                } else if lang.eq_ignore_ascii_case("ui") {
+                    // generative UI block: render as native widgets, the
+                    // json parsed once per content (review M10)
+                    let nodes = parse_ui_blocks_cached(code);
+                    let block = ctx.block_offset;
+                    ctx.block_offset += 1;
+                    if nodes.is_empty() {
+                        render_code_block(ui, code_scroll_id(ctx, msg_idx, block_idx), lang, code);
+                    } else {
+                        render_ui_block(ui, &nodes, msg_idx, block, ctx);
+                    }
+                } else {
+                    render_code_block(ui, code_scroll_id(ctx, msg_idx, block_idx), lang, code);
+                }
+                ui.add_space(8.0);
+            }
+            MdBlock::List(items) => {
+                for item in items {
+                    ui.horizontal_top(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(14.0, InlineStyle::BODY.size * 1.4),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(
+                            egui::Rect::from_center_size(
+                                egui::pos2(rect.left() + 4.0, rect.center().y),
+                                egui::vec2(5.0, 5.0),
+                            ),
+                            0.0,
+                            ACCENT,
+                        );
+                        ui.vertical(|ui| paragraph(ui, item, InlineStyle::BODY));
+                    });
+                }
+                ui.add_space(8.0);
+            }
+            MdBlock::Quote(inl) => {
+                let resp = ui.horizontal_top(|ui| {
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            render_inline_styled(
+                                ui,
+                                inl,
+                                InlineStyle {
+                                    size: 14.0,
+                                    color: DIM,
+                                    ..InlineStyle::BODY
+                                },
+                            );
+                        });
+                    });
+                });
+                let r = resp.response.rect;
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(r.min, egui::vec2(3.0, r.height())),
+                    0.0,
+                    ACCENT,
+                );
+                ui.add_space(8.0);
+            }
+            MdBlock::Table { columns, rows } => {
+                let id = egui::Id::new(("md_tbl", msg_idx, block_idx, columns.len(), rows.len()));
+                render_table_grid(ui, id, columns, rows);
+                ui.add_space(10.0);
+            }
+            MdBlock::Hr => {
+                ui.separator();
+                ui.add_space(8.0);
+            }
+        }
+    }
+}
+
+pub(crate) fn render_code_block(ui: &mut egui::Ui, id: egui::Id, lang: &str, code: &str) {
+    egui::Frame::default()
+        .fill(CODE_BG)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_SOFT))
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // copy button first (right edge), then the language tag in what
+            // is left, truncated: a long tag must never widen the block, or
+            // the transcript column grows with it for every row below
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let copy =
+                        crate::widgets::IconButton::new(crate::icons::Icon::Copy, tr("Copy"))
+                            .side(22.0);
+                    if ui.add(copy).clicked() {
+                        ui.ctx().copy_text(code.to_string());
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(crate::theme::mono_label(if lang.is_empty() {
+                                "code"
+                            } else {
+                                lang
+                            }))
+                            .truncate(),
+                        );
+                    });
+                });
+            });
+            ui.add_space(2.0);
+            egui::ScrollArea::horizontal()
+                .id_salt(id)
+                .auto_shrink([false, true])
+                .max_width(ui.available_width())
+                .show(ui, |ui| {
+                    let mut job = egui::text::LayoutJob::default();
+                    for (tok, text) in crate::syntax::tokenize(lang, code) {
+                        let color = match tok {
+                            crate::syntax::Tok::Keyword => crate::theme::BLUE,
+                            crate::syntax::Tok::Str => crate::theme::GREEN,
+                            crate::syntax::Tok::Comment => crate::theme::DIM,
+                            crate::syntax::Tok::Num => crate::theme::AMBER,
+                            crate::syntax::Tok::Plain => TEXT,
+                        };
+                        job.append(
+                            text.as_str(),
+                            0.0,
+                            egui::TextFormat {
+                                font_id: crate::widgets::mono(12.5),
+                                color,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    ui.add(egui::Label::new(job).extend());
+                });
+        });
+}
+
+/// Inner column widths for a table of the given natural widths. Everything
+/// fits as measured when it can; otherwise narrow columns keep their width
+/// and the wide ones share what is left (water filling), so no column is
+/// squeezed to a few letters while another has room. When even the minima
+/// do not fit, the table is still never wider than `available`: columns
+/// shrink below the minimum and their cells wrap instead.
+pub(crate) fn table_widths(
+    natural: &[f32],
+    available: f32,
+    padding: f32,
+    minimum: f32,
+) -> Vec<f32> {
+    let count = natural.len();
+    if count == 0 {
+        return Vec::new();
+    }
+    let full: Vec<f32> = natural.iter().map(|w| w.max(minimum)).collect();
+    if full.iter().sum::<f32>() + padding * count as f32 <= available {
+        return full;
+    }
+    // too tight for the minima: water filling without a floor, so the total
+    // stays inside the space the panel has
+    let inner = (available - padding * count as f32).max(0.0);
+    let mut widths = vec![0.0_f32; count];
+    let mut open: Vec<usize> = (0..count).collect();
+    let mut left = inner;
+    while !open.is_empty() {
+        let share = left / open.len() as f32;
+        let (fit, wide): (Vec<usize>, Vec<usize>) =
+            open.iter().partition(|&&i| natural[i] <= share);
+        if fit.is_empty() {
+            for i in wide {
+                widths[i] = share;
+            }
+            break;
+        }
+        for i in fit {
+            widths[i] = natural[i];
+            left -= natural[i];
+        }
+        open = wide;
+    }
+    widths
+}
+
+/// Paint one table: a header row in the small dim style of the generative-ui
+/// `table` node and body rows at 14.0, with widths from the content (both
+/// paths — `ui` JSON tables and markdown pipe tables — share this painter).
+pub(crate) fn render_table_grid(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    columns: &[Vec<MdInline>],
+    rows: &[Vec<Vec<MdInline>>],
+) {
+    const PADDING: f32 = 20.0;
+    const MINIMUM: f32 = 48.0;
+    let count = columns
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if count == 0 {
+        return;
+    }
+    let header_st = InlineStyle {
+        size: 12.5,
+        color: DIM,
+        bold: true,
+        ..InlineStyle::BODY
+    };
+    let body_st = InlineStyle {
+        size: 14.0,
+        color: TEXT,
+        ..InlineStyle::BODY
+    };
+    // natural width of each column, measured on the unwrapped cell text
+    let measure = |cell: &[MdInline], st: InlineStyle| {
+        let mut job = egui::text::LayoutJob::default();
+        append_inline(&mut job, cell, st);
+        ui.fonts(|f| f.layout_job(job)).size().x.ceil() + 2.0
+    };
+    let mut natural = vec![0.0_f32; count];
+    for (i, cell) in columns.iter().enumerate() {
+        natural[i] = natural[i].max(measure(cell, header_st));
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            natural[i] = natural[i].max(measure(cell, body_st));
+        }
+    }
+    let widths = table_widths(&natural, ui.available_width() - 2.0, PADDING, MINIMUM);
+    let total: f32 = widths.iter().map(|w| w + PADDING).sum();
+
+    egui::Frame::none()
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_SOFT))
+        .show(ui, |ui| {
+            ui.set_max_width(total);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            let table_row =
+                |ui: &mut egui::Ui, cells: &[Vec<MdInline>], st: InlineStyle, index: usize| {
+                    let bg = ui.painter().add(egui::Shape::Noop);
+                    let row = ui.horizontal_top(|ui| {
+                        for (col, width) in widths.iter().enumerate() {
+                            let frame = egui::Frame::none()
+                                .inner_margin(egui::Margin::symmetric(PADDING / 2.0, 5.0));
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(width + PADDING, 0.0),
+                                egui::Layout::top_down(egui::Align::LEFT),
+                                |ui| {
+                                    ui.set_min_width(width + PADDING);
+                                    frame.show(ui, |ui| {
+                                        ui.set_width(*width);
+                                        if let Some(cell) = cells.get(col) {
+                                            render_table_cell(ui, cell, st);
+                                        }
+                                    });
+                                },
+                            );
+                        }
+                    });
+                    let rect = row.response.rect;
+                    let fill = if index == 0 {
+                        crate::theme::RAISED
+                    } else {
+                        crate::theme::CARD.gamma_multiply(if index.is_multiple_of(2) {
+                            1.0
+                        } else {
+                            0.4
+                        })
+                    };
+                    ui.painter()
+                        .set(bg, egui::Shape::rect_filled(rect, 0.0, fill));
+                };
+            let _ = id;
+            table_row(ui, columns, header_st, 0);
+            for (i, row) in rows.iter().enumerate() {
+                table_row(ui, row, body_st, i + 1);
+            }
+        });
+}
+
+/// One grid cell: a horizontal run of inline markdown, with zero item
+/// spacing so several snippets look like one line of text.
+fn render_table_cell(ui: &mut egui::Ui, cell: &[MdInline], st: InlineStyle) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        render_inline_styled(ui, cell, st);
+    });
+}
+
+/// Text style of an inline run; bold/italic accumulate through nesting.
+#[derive(Clone, Copy)]
+struct InlineStyle {
+    size: f32,
+    color: Color32,
+    bold: bool,
+    italic: bool,
+}
+
+impl InlineStyle {
+    const BODY: InlineStyle = InlineStyle {
+        size: 15.0,
+        color: TEXT,
+        bold: false,
+        italic: false,
+    };
+
+    fn apply(&self, text: RichText) -> RichText {
+        let mut t = text.size(self.size);
+        if self.bold {
+            t = t.family(crate::fonts::bold());
+        }
+        if self.italic {
+            t = t.italics();
+        }
+        t
+    }
+}
+
+/// True when the run holds a link (links need real widgets).
+fn has_link(inl: &[MdInline]) -> bool {
+    inl.iter().any(|i| match i {
+        MdInline::Link { .. } => true,
+        MdInline::Bold(inner) | MdInline::Italic(inner) => has_link(inner),
+        _ => false,
+    })
+}
+
+/// Append an inline run to one layout job: bold, italics and code spans keep
+/// a common baseline and line height.
+fn append_inline(job: &mut egui::text::LayoutJob, inl: &[MdInline], st: InlineStyle) {
+    for item in inl {
+        match item {
+            MdInline::Text(t) => {
+                let family = if st.bold {
+                    crate::fonts::bold()
+                } else {
+                    egui::FontFamily::Proportional
+                };
+                job.append(
+                    t,
+                    0.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::new(st.size, family),
+                        color: st.color,
+                        italics: st.italic,
+                        line_height: Some(st.size * 1.42),
+                        ..Default::default()
+                    },
+                );
+            }
+            MdInline::Bold(inner) => append_inline(job, inner, InlineStyle { bold: true, ..st }),
+            MdInline::Italic(inner) => {
+                append_inline(job, inner, InlineStyle { italic: true, ..st })
+            }
+            MdInline::Code(c) => job.append(
+                c,
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::monospace(st.size - 1.5),
+                    color: CODE_TEXT,
+                    line_height: Some(st.size * 1.42),
+                    ..Default::default()
+                },
+            ),
+            // has_link() routes these to widgets; here only table cells get
+            // measured with them
+            MdInline::Link { text, .. } => job.append(
+                text,
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::proportional(st.size),
+                    color: LINK,
+                    ..Default::default()
+                },
+            ),
+        }
+    }
+}
+
+/// One paragraph-like block. A single layout job wraps cleanly and selects
+/// as one text; a run with links keeps the widget path (links are clickable).
+fn paragraph(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
+    if has_link(inl) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            render_inline_styled(ui, inl, st);
+        });
+        return;
+    }
+    let mut job = egui::text::LayoutJob::default();
+    append_inline(&mut job, inl, st);
+    job.wrap.max_width = ui.available_width();
+    ui.add(egui::Label::new(job).wrap());
+}
+
+fn render_inline_styled(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
+    for item in inl {
+        match item {
+            MdInline::Text(t) => {
+                // keep soft newlines as line breaks inside the paragraph
+                for (i, seg) in t.split('\n').enumerate() {
+                    if i > 0 {
+                        ui.end_row();
+                    }
+                    if !seg.is_empty() {
+                        ui.label(st.apply(RichText::new(seg).color(st.color)));
+                    }
+                }
+            }
+            MdInline::Bold(inner) => {
+                render_inline_styled(ui, inner, InlineStyle { bold: true, ..st });
+            }
+            MdInline::Italic(inner) => {
+                render_inline_styled(ui, inner, InlineStyle { italic: true, ..st });
+            }
+            MdInline::Code(c) => {
+                ui.label(
+                    RichText::new(c)
+                        .monospace()
+                        .size(st.size - 2.0)
+                        .color(CODE_TEXT),
+                );
+            }
+            MdInline::Link { text, url } => {
+                if is_safe_link(url) {
+                    let resp = ui.add(
+                        egui::Label::new(st.apply(RichText::new(text).color(LINK).underline()))
+                            .sense(egui::Sense::click()),
+                    );
+                    if resp.clicked() {
+                        ui.ctx().output_mut(|o| {
+                            o.open_url = Some(egui::OpenUrl::same_tab(url));
+                        });
+                    }
+                    if resp.hovered() {
+                        resp.on_hover_text(url);
+                    }
+                } else {
+                    // unsafe scheme: plain, non-clickable text with an explanation
+                    ui.label(st.apply(RichText::new(text).color(st.color)))
+                        .on_hover_text(trf("Link blocked: {url}", &[("url", &url)]));
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generative-UI DSL rendering (egui-native analog of CopilotKit generative UI)
+// ---------------------------------------------------------------------------
+
+pub fn render_ui_node(
+    ui: &mut egui::Ui,
+    node: &UiNode,
+    msg_idx: usize,
+    block: usize,
+    ctx: &mut RenderCtx,
+) {
+    match node {
+        UiNode::Card { title, children } => {
+            egui::Frame::default()
+                .fill(CODE_BG)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .inner_margin(egui::Margin::same(12.0))
+                .show(ui, |ui| {
+                    if let Some(t) = title {
+                        ui.label(
+                            RichText::new(t)
+                                .color(ACCENT)
+                                .size(15.0)
+                                .family(crate::fonts::bold()),
+                        );
+                        ui.add_space(4.0);
+                    }
+                    for c in children {
+                        render_ui_node(ui, c, msg_idx, block, ctx);
+                    }
+                });
+            ui.add_space(6.0);
+        }
+        UiNode::Text { text } if ctx.depth >= MAX_TEXT_DEPTH => {
+            // nested too deep: plain text, no further markdown or blocks
+            ui.label(RichText::new(text).color(TEXT).size(14.0));
+        }
+        UiNode::Text { text } => {
+            let blocks = crate::markdown::parse_cached(text);
+            // Nested markdown: its blocks get a salted scroll-id path, so
+            // their code blocks stay distinct from the outer message's
+            // blocks (N16); the ui-block numbering inside runs in its own
+            // space (final audit G), so a nested run cannot shift the
+            // field/script keys of the outer blocks painted after it —
+            // the outer counter resumes where it was. Host block +
+            // 1_000_000 leaves a margin of 1_024 nested ui blocks per
+            // host block, far past any node budget, and no outer message
+            // paints enough ui blocks to reach the space.
+            let outer_offset = ctx.block_offset;
+            ctx.block_offset = 1_000_000 + block * 1_024;
+            let outer_salt = std::mem::replace(&mut ctx.scroll_salt, crate::memo::hash_str(text));
+            ctx.depth += 1;
+            render_blocks(ui, &blocks, msg_idx, ctx);
+            ctx.depth -= 1;
+            ctx.block_offset = outer_offset;
+            ctx.scroll_salt = outer_salt;
+        }
+        UiNode::Heading { level, text } => {
+            let size = match level.unwrap_or(2) {
+                1 => 20.0,
+                2 => 17.0,
+                _ => 15.0,
+            };
+            ui.label(
+                RichText::new(text)
+                    .color(TEXT)
+                    .size(size)
+                    .family(crate::fonts::bold()),
+            );
+            ui.add_space(2.0);
+        }
+        UiNode::Button { label, action } => {
+            // the click sends `action`, not the label: the user sees what
+            // goes out in their name before clicking
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(label).color(Color32::WHITE))
+                        .fill(ACCENT)
+                        .rounding(egui::Rounding::same(3.0)),
+                )
+                .on_hover_text(trf("On click: “{action}”", &[("action", action)]))
+                .clicked()
+            {
+                ctx.ui_events.push(UiEvent::Button {
+                    action: action.clone(),
+                });
+            }
+            ui.add_space(4.0);
+        }
+        UiNode::Table { columns, rows } => {
+            // plain-string cells of the ui DSL, painted by the shared table
+            // grid (same path and look as markdown tables)
+            let header: Vec<Vec<MdInline>> = columns
+                .iter()
+                .map(|c| vec![MdInline::Text(c.clone())])
+                .collect();
+            let cells: Vec<Vec<Vec<MdInline>>> = rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| vec![MdInline::Text(cell.clone())])
+                        .collect()
+                })
+                .collect();
+            let id = egui::Id::new(("tbl", msg_idx, columns.len(), rows.len()));
+            render_table_grid(ui, id, &header, &cells);
+            ui.add_space(6.0);
+        }
+        UiNode::Form { submit, fields } => {
+            egui::Frame::default()
+                .fill(CODE_BG)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    for f in fields {
+                        let key = field_key(ctx.owner, msg_idx, block, &f.name);
+                        let entry = ctx
+                            .form_values
+                            .entry(key)
+                            .or_insert_with(|| f.value.clone().unwrap_or_default());
+                        ui.horizontal(|ui| {
+                            ui.set_min_width(110.0);
+                            ui.label(RichText::new(&f.label).color(DIM).size(13.5));
+                            match f.kind.as_str() {
+                                "checkbox" => {
+                                    let mut b = entry == "true";
+                                    if ui.checkbox(&mut b, "").changed() {
+                                        *entry = b.to_string();
+                                    }
+                                }
+                                _ => {
+                                    ui.text_edit_singleline(entry);
+                                }
+                            }
+                        });
+                    }
+                    ui.add_space(4.0);
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(submit).color(Color32::WHITE))
+                                .fill(ACCENT)
+                                .rounding(egui::Rounding::same(3.0)),
+                        )
+                        .clicked()
+                    {
+                        let mut values = serde_json::Map::new();
+                        for f in fields {
+                            let key = field_key(ctx.owner, msg_idx, block, &f.name);
+                            values.insert(
+                                f.name.clone(),
+                                serde_json::Value::String(
+                                    ctx.form_values.get(&key).cloned().unwrap_or_default(),
+                                ),
+                            );
+                        }
+                        // sliders, number fields and selects of the same block
+                        // travel with the submit
+                        for (name, value) in block_inputs(ctx, msg_idx, block, &ctx.block_nodes) {
+                            values.entry(name).or_insert(value);
+                        }
+                        ctx.ui_events.push(UiEvent::Form {
+                            submit: submit.clone(),
+                            values: serde_json::Value::Object(values),
+                        });
+                    }
+                });
+            ui.add_space(6.0);
+        }
+        UiNode::BarChart { title, bars } => {
+            egui::Frame::default()
+                .fill(CODE_BG)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    if let Some(t) = title {
+                        ui.label(RichText::new(t).color(DIM).small().strong());
+                        ui.add_space(4.0);
+                    }
+                    let max = bars
+                        .iter()
+                        .map(|b| b.value)
+                        .fold(0.0_f64, f64::max)
+                        .max(1.0);
+                    let bar_area_w = (ui.available_width() - 140.0).max(40.0);
+                    for b in bars {
+                        ui.horizontal(|ui| {
+                            ui.set_min_width(120.0);
+                            ui.label(RichText::new(&b.label).color(TEXT).size(13.0));
+                            let frac = (b.value / max) as f32;
+                            let h = 14.0;
+                            let rect = egui::Rect::from_min_size(
+                                ui.cursor().min + egui::vec2(0.0, 2.0),
+                                egui::vec2(bar_area_w, h),
+                            );
+                            ui.allocate_rect(rect, egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::Rounding::same(0.0),
+                                crate::theme::RAISED,
+                            );
+                            let fill = egui::Rect::from_min_size(
+                                rect.min,
+                                egui::vec2((bar_area_w * frac).max(2.0), h),
+                            );
+                            ui.painter()
+                                .rect_filled(fill, egui::Rounding::same(0.0), ACCENT);
+                            ui.label(RichText::new(format!("{}", b.value)).color(DIM).small());
+                        });
+                    }
+                });
+            ui.add_space(6.0);
+        }
+        UiNode::Divider {} => {
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        UiNode::Columns { children } => {
+            // as many columns side by side as fit at a readable width; more
+            // children wrap into further rows (egui cannot lay out columns
+            // narrower than their spacing)
+            let per_row = columns_per_row(children.len(), ui.available_width());
+            for row in children.chunks(per_row) {
+                ui.columns(per_row, |uis| {
+                    for (i, c) in row.iter().enumerate() {
+                        render_ui_node(&mut uis[i], c, msg_idx, block, ctx);
+                    }
+                });
+            }
+            ui.add_space(4.0);
+        }
+        UiNode::Slider {
+            name,
+            label,
+            min,
+            max,
+            step,
+            value,
+        } => {
+            let key = field_key(ctx.owner, msg_idx, block, name);
+            // the bounds come from the model (or a script computing them):
+            // `clamp` panics on min > max, so they are put in order first
+            let (lo, hi) = slider_bounds(*min, *max);
+            let mut current = ctx
+                .form_values
+                .get(&key)
+                .and_then(|s| s.parse::<f64>().ok())
+                .or(*value)
+                .filter(|v| v.is_finite())
+                .unwrap_or(lo)
+                .clamp(lo, hi);
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                let mut slider = egui::Slider::new(&mut current, lo..=hi);
+                if let Some(s) = step {
+                    if *s > 0.0 {
+                        // show as many decimals as the step has: "5" for a
+                        // step of 1 instead of the pixel-speed default
+                        // "5.00"; values snap to the step anyway
+                        slider = slider.step_by(*s).fixed_decimals(step_decimals(*s));
+                    }
+                }
+                let response = ui.add(slider);
+                // An ongoing drag makes the enclosing ui-js block throttle
+                // its re-evaluations (Handoff 2.7). |=, because a later,
+                // idle slider of the same block must not clear the flag.
+                ctx.slider_dragging |= response.dragged();
+                if response.changed() {
+                    ctx.form_values.insert(key.clone(), current.to_string());
+                }
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::Number { name, label, value } => {
+            let key = field_key(ctx.owner, msg_idx, block, name);
+            let mut text = ctx
+                .form_values
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| value.map(|v| v.to_string()).unwrap_or_default());
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut text)
+                            .desired_width(90.0)
+                            .hint_text("0"),
+                    )
+                    .changed()
+                {
+                    ctx.form_values.insert(key.clone(), text.clone());
+                }
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::Toggle { name, label, value } => {
+            let key = field_key(ctx.owner, msg_idx, block, name);
+            let mut on = ctx
+                .form_values
+                .get(&key)
+                .map(|s| s == "true")
+                .or(*value)
+                .unwrap_or(false);
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                if ui
+                    .checkbox(&mut on, RichText::new(label).color(DIM).size(13.5))
+                    .changed()
+                {
+                    ctx.form_values.insert(key.clone(), on.to_string());
+                }
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::TextInput { name, label, value } => {
+            let key = field_key(ctx.owner, msg_idx, block, name);
+            let mut text = ctx
+                .form_values
+                .get(&key)
+                .cloned()
+                .or_else(|| value.clone())
+                .unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                if ui
+                    .add(egui::TextEdit::singleline(&mut text).desired_width(200.0))
+                    .changed()
+                {
+                    ctx.form_values.insert(key.clone(), text.clone());
+                }
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::Select {
+            name,
+            label,
+            options,
+            value,
+        } => {
+            let key = field_key(ctx.owner, msg_idx, block, name);
+            let current = ctx
+                .form_values
+                .get(&key)
+                .cloned()
+                .or_else(|| value.clone())
+                .unwrap_or_else(|| options.first().cloned().unwrap_or_default());
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                let mut chosen = current.clone();
+                egui::ComboBox::from_id_salt(("ui_select", msg_idx, block, name))
+                    .selected_text(chosen.clone())
+                    .show_ui(ui, |ui| {
+                        for o in options {
+                            ui.selectable_value(&mut chosen, o.clone(), o);
+                        }
+                    });
+                if chosen != current {
+                    ctx.form_values.insert(key.clone(), chosen);
+                }
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::Computed {
+            label,
+            expr,
+            decimals,
+            unit,
+        } => {
+            // the inputs of this block are the variables of the formula
+            let vars = block_vars(ctx, msg_idx, block, &ctx.block_nodes);
+            let result = crate::formula::eval(expr, &vars);
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                match result {
+                    Ok(v) => ui.label(
+                        RichText::new(format_computed(i18n::lang(), v, *decimals, unit.as_deref()))
+                            .color(ACCENT)
+                            .monospace()
+                            .size(14.0)
+                            .strong(),
+                    ),
+                    Err(e) => ui.label(RichText::new(e).color(DIM).small()),
+                };
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::LineChart {
+            title,
+            x_label,
+            y_label,
+            series,
+        } => {
+            render_line_chart(
+                ui,
+                title.as_deref(),
+                x_label.as_deref(),
+                y_label.as_deref(),
+                series,
+            );
+            ui.add_space(6.0);
+        }
+        UiNode::PieChart { title, slices } => {
+            render_pie_chart(ui, title.as_deref(), slices);
+            ui.add_space(6.0);
+        }
+        UiNode::Progress { label, value } => {
+            let frac = if value.is_nan() {
+                0.0
+            } else {
+                value.clamp(0.0, 1.0) as f32
+            };
+            ui.horizontal(|ui| {
+                ui.set_min_width(110.0);
+                ui.label(RichText::new(label).color(DIM).size(13.5));
+                let filled = crate::theme::meter_blocks(frac, 20);
+                crate::theme::pixel_meter(ui, filled, 20, 10.0);
+                ui.label(
+                    RichText::new(format!("{:.0} %", frac * 100.0))
+                        .color(DIM)
+                        .monospace()
+                        .size(12.0),
+                );
+            });
+            ui.add_space(2.0);
+        }
+        UiNode::Checklist { items } => {
+            for (i, item) in items.iter().enumerate() {
+                let key = field_key(ctx.owner, msg_idx, block, &format!("check:{i}"));
+                let mut done = ctx
+                    .form_values
+                    .get(&key)
+                    .map(|s| s == "true")
+                    .unwrap_or(item.done);
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut done, "").changed() {
+                        ctx.form_values.insert(key.clone(), done.to_string());
+                    }
+                    let text = RichText::new(&item.text).size(14.0);
+                    ui.label(if done {
+                        text.color(DIM).strikethrough()
+                    } else {
+                        text.color(TEXT)
+                    });
+                });
+            }
+            ui.add_space(4.0);
+        }
+        UiNode::Kv { rows } => {
+            egui::Grid::new(egui::Id::new(("kv", msg_idx, block, rows.len())))
+                .num_columns(2)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for row in rows {
+                        ui.label(RichText::new(&row[0]).color(DIM).size(13.0));
+                        ui.label(RichText::new(&row[1]).color(TEXT).size(13.5));
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(4.0);
+        }
+    }
+}
+
+/// Line chart: axes, up to 6 series in gradient colours, legend.
+fn render_line_chart(
+    ui: &mut egui::Ui,
+    title: Option<&str>,
+    x_label: Option<&str>,
+    y_label: Option<&str>,
+    series: &[crate::model::Series],
+) {
+    egui::Frame::default()
+        .fill(CODE_BG)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+        .inner_margin(egui::Margin::same(10.0))
+        .show(ui, |ui| {
+            if let Some(t) = title {
+                ui.label(RichText::new(t).color(DIM).small().strong());
+                ui.add_space(4.0);
+            }
+            let series = &series[..series.len().min(6)];
+            let points: Vec<&[f64; 2]> = series.iter().flat_map(|s| s.points.iter()).collect();
+            if points.is_empty() {
+                ui.label(RichText::new(tr("No data.")).color(DIM).small());
+                return;
+            }
+            let (mut x_min, mut x_max) = (f64::INFINITY, f64::NEG_INFINITY);
+            let (mut y_min, mut y_max) = (f64::INFINITY, f64::NEG_INFINITY);
+            for p in &points {
+                x_min = x_min.min(p[0]);
+                x_max = x_max.max(p[0]);
+                y_min = y_min.min(p[1]);
+                y_max = y_max.max(p[1]);
+            }
+            if x_max <= x_min {
+                x_max = x_min + 1.0;
+            }
+            if y_max <= y_min {
+                y_max = y_min + 1.0;
+            }
+            let w = ui.available_width().max(120.0);
+            let h = 140.0;
+            let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+            let plot = egui::Rect::from_min_max(
+                rect.min + egui::vec2(34.0, 6.0),
+                rect.max - egui::vec2(6.0, 18.0),
+            );
+            let painter = ui.painter();
+            // axes
+            painter.line_segment(
+                [plot.left_bottom(), plot.right_bottom()],
+                egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+            );
+            painter.line_segment(
+                [plot.left_bottom(), plot.left_top()],
+                egui::Stroke::new(1.0_f32, crate::theme::BORDER),
+            );
+            // grid lines + y labels (min / mid / max)
+            for (i, frac) in [0.0_f32, 0.5, 1.0].iter().enumerate() {
+                let y = plot.bottom() - plot.height() * frac;
+                if i > 0 {
+                    painter.line_segment(
+                        [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
+                        egui::Stroke::new(1.0_f32, crate::theme::RAISED),
+                    );
+                }
+                let value = y_min + (y_max - y_min) * *frac as f64;
+                painter.text(
+                    egui::pos2(plot.left() - 4.0, y),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("{value:.4}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.'),
+                    egui::FontId::monospace(10.0),
+                    DIM,
+                );
+            }
+            // x labels (min / max)
+            painter.text(
+                plot.left_bottom() + egui::vec2(0.0, 3.0),
+                egui::Align2::LEFT_TOP,
+                format!("{x_min:.4}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.'),
+                egui::FontId::monospace(10.0),
+                DIM,
+            );
+            painter.text(
+                plot.right_bottom() + egui::vec2(0.0, 3.0),
+                egui::Align2::RIGHT_TOP,
+                format!("{x_max:.4}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.'),
+                egui::FontId::monospace(10.0),
+                DIM,
+            );
+            let to_screen = |p: &[f64; 2]| {
+                let fx = ((p[0] - x_min) / (x_max - x_min)) as f32;
+                let fy = ((p[1] - y_min) / (y_max - y_min)) as f32;
+                egui::pos2(
+                    plot.left() + plot.width() * fx,
+                    plot.bottom() - plot.height() * fy,
+                )
+            };
+            for (i, s) in series.iter().enumerate() {
+                let color = series_color(i);
+                let pts: Vec<egui::Pos2> = s.points.iter().map(to_screen).collect();
+                for pair in pts.windows(2) {
+                    painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.8_f32, color));
+                }
+                for p in &pts {
+                    painter.rect_filled(
+                        egui::Rect::from_center_size(*p, egui::vec2(3.0, 3.0)),
+                        egui::Rounding::same(0.0),
+                        color,
+                    );
+                }
+            }
+            // legend
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                for (i, s) in series.iter().enumerate() {
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
+                    ui.label(RichText::new(&s.name).color(DIM).small());
+                    ui.add_space(6.0);
+                }
+            });
+            let mut axis = String::new();
+            if let Some(x) = x_label {
+                axis.push_str(x);
+            }
+            if let Some(y) = y_label {
+                if !axis.is_empty() {
+                    axis.push_str(" · ");
+                }
+                axis.push_str(y);
+            }
+            if !axis.is_empty() {
+                ui.label(RichText::new(axis).color(DIM).small());
+            }
+        });
+}
+
+/// Pie chart: circle segments as polygons plus a legend with percentages.
+fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::model::Bar]) {
+    egui::Frame::default()
+        .fill(CODE_BG)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER))
+        .inner_margin(egui::Margin::same(10.0))
+        .show(ui, |ui| {
+            if let Some(t) = title {
+                ui.label(RichText::new(t).color(DIM).small().strong());
+                ui.add_space(4.0);
+            }
+            let total: f64 = slices.iter().map(|s| s.value.max(0.0)).sum();
+            if total <= 0.0 {
+                ui.label(RichText::new(tr("No data.")).color(DIM).small());
+                return;
+            }
+            ui.horizontal(|ui| {
+                let size = 120.0;
+                let (rect, _resp) =
+                    ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+                let center = rect.center();
+                let radius = size / 2.0 - 2.0;
+                let painter = ui.painter();
+                let fracs: Vec<f32> = slices
+                    .iter()
+                    .map(|s| (s.value.max(0.0) / total) as f32)
+                    .collect();
+                let point = |a: f32| center + egui::vec2(a.cos(), a.sin()) * radius;
+                // Each slice is one triangle fan from the centre, without
+                // an outline and without feathering inside: a per-slice
+                // stroke grew into a spike at a thin slice's sharp centre
+                // angle, a slice over half the circle drawn as one
+                // "convex" polygon frayed at the centre, and feathered
+                // parts side by side left seams. Only the rim (a line in
+                // the slice's colour) and the separators are smoothed.
+                let mut fill = egui::Mesh::default();
+                let mut rims = Vec::new();
+                for (i, start, sweep) in pie_slices(&fracs) {
+                    let color = series_color(i);
+                    let steps = ((sweep / 0.05).ceil() as usize).max(2);
+                    let rim: Vec<egui::Pos2> = (0..=steps)
+                        .map(|k| point(start + sweep * (k as f32 / steps as f32)))
+                        .collect();
+                    let base = fill.vertices.len() as u32;
+                    fill.colored_vertex(center, color);
+                    for p in &rim {
+                        fill.colored_vertex(*p, color);
+                    }
+                    for k in 0..steps as u32 {
+                        fill.add_triangle(base, base + 1 + k, base + 2 + k);
+                    }
+                    rims.push(egui::Shape::line(rim, egui::Stroke::new(1.0_f32, color)));
+                }
+                painter.add(fill);
+                painter.extend(rims);
+                // the gaps between slices: straight radial lines, which
+                // meet cleanly in the centre
+                for a in pie_boundaries(&fracs) {
+                    painter.line_segment([center, point(a)], egui::Stroke::new(1.5_f32, CODE_BG));
+                }
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    for (i, s) in slices.iter().enumerate() {
+                        let pct = s.value.max(0.0) / total * 100.0;
+                        ui.horizontal(|ui| {
+                            let (r, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter()
+                                .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
+                            ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
+                            ui.label(
+                                RichText::new(i18n::decimal(format!("{pct:.1} %")))
+                                    .color(DIM)
+                                    .monospace()
+                                    .size(11.5),
+                            );
+                        });
+                    }
+                });
+            });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    /// Paint one agent message through the real renderer for a few frames.
+    fn paint_message(
+        text: &str,
+        scripts: &mut std::collections::HashMap<String, crate::script::ScriptTool>,
+    ) {
+        let ctx = egui::Context::default();
+        crate::fonts::install_fallback_fonts(&ctx);
+        let blocks = crate::markdown::parse(text);
+        let mut events = Vec::new();
+        let mut forms = std::collections::HashMap::new();
+        for _ in 0..2 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut rctx =
+                        super::RenderCtx::new(&mut events, &mut forms, "s1").with_scripts(scripts);
+                    super::render_blocks(ui, &blocks, 0, &mut rctx);
+                });
+            });
+        }
+    }
+
+    /// A ```ui-js fence inside a `text` node (what a tool printing its own
+    /// source produces) is shown, never run: no tool is created for it.
+    /// Before, each run made the next one until the stack overflowed.
+    #[test]
+    fn nested_ui_js_never_runs() {
+        let msg = concat!(
+            "```ui\n",
+            r#"{"type":"text","text":"\u0060\u0060\u0060ui-js\nfunction render(s){ return {type:'divider'}; }\n\u0060\u0060\u0060"}"#,
+            "\n```\n"
+        );
+        let mut scripts = std::collections::HashMap::new();
+        paint_message(msg, &mut scripts);
+        assert!(scripts.is_empty(), "the nested tool must not run");
+        // text nodes nested deeper than the limit still paint
+        let mut deep = r#"{"type":"text","text":"unten"}"#.to_string();
+        for _ in 0..8 {
+            let inner =
+                serde_json::to_string(&format!("\u{60}\u{60}\u{60}ui\n{deep}\n\u{60}\u{60}\u{60}"))
+                    .unwrap();
+            deep = format!(r#"{{"type":"text","text":{inner}}}"#);
+        }
+        paint_message(&format!("```ui\n{deep}\n```\n"), &mut scripts);
+    }
+
+    /// The full renderer with a slider whose bounds are reversed (the model
+    /// or a script computed them): it used to panic in `f64::clamp`.
+    #[test]
+    fn a_reversed_slider_paints() {
+        let msg = "```ui\n{\"type\":\"slider\",\"name\":\"n\",\"label\":\"N\",\"min\":10,\"max\":1}\n```\n";
+        paint_message(msg, &mut std::collections::HashMap::new());
+    }
+
+    /// Pie slices follow each other around the full circle, empty slices
+    /// take no room, and the separators sit exactly between slices that
+    /// have a share.
+    #[test]
+    fn pie_slices_cover_the_circle_and_separators_sit_between_them() {
+        use super::{pie_boundaries, pie_slices, PIE_START};
+        use std::f32::consts::TAU;
+        let fracs = [0.574, 0.15, 0.0, 0.088, 0.037, 0.068, 0.048, 0.035];
+        let slices = pie_slices(&fracs);
+        assert_eq!(slices.len(), 7, "no slice for an empty share");
+        assert!(slices.iter().all(|(i, _, _)| *i != 2));
+        let total: f32 = slices.iter().map(|(_, _, s)| s).sum();
+        assert!((total - TAU).abs() < 1e-3, "{total}");
+        for pair in slices.windows(2) {
+            assert!(
+                (pair[1].1 - (pair[0].1 + pair[0].2)).abs() < 1e-5,
+                "gapless"
+            );
+        }
+        assert!((slices[0].1 - PIE_START).abs() < 1e-6);
+        // one separator per slice with a share, at the slices' starts
+        let lines = pie_boundaries(&fracs);
+        assert_eq!(lines.len(), 7);
+        for (line, slice) in lines.iter().zip(&slices) {
+            assert!((line - slice.1).abs() < 1e-5);
+        }
+        // a single slice is a full disc without any separator
+        assert!(pie_boundaries(&[1.0, 0.0]).is_empty());
+        assert_eq!(pie_slices(&[1.0]).len(), 1);
+    }
+
+    #[test]
+    fn slider_bounds_are_ordered_and_finite() {
+        use super::slider_bounds;
+        assert_eq!(slider_bounds(1.0, 10.0), (1.0, 10.0));
+        // reversed bounds from a model or script used to panic in clamp
+        assert_eq!(slider_bounds(10.0, 1.0), (1.0, 10.0));
+        assert_eq!(slider_bounds(0.0, -1.0), (-1.0, 0.0));
+        assert_eq!(slider_bounds(5.0, 5.0), (5.0, 5.0));
+        let (lo, hi) = slider_bounds(f64::NAN, f64::INFINITY);
+        assert!(lo <= hi && lo.is_finite() && hi.is_finite());
+        let (lo, hi) = slider_bounds(3.0, -3.0);
+        assert_eq!(7.0_f64.clamp(lo, hi), 3.0);
+    }
+
+    #[test]
+    fn columns_wrap_when_they_do_not_fit() {
+        use super::columns_per_row;
+        assert_eq!(columns_per_row(3, 800.0), 3);
+        assert_eq!(columns_per_row(300, 800.0), 6);
+        assert_eq!(columns_per_row(4, 100.0), 1);
+        assert_eq!(columns_per_row(0, 800.0), 1);
+    }
+
+    #[test]
+    fn table_widths_keep_narrow_columns_and_share_the_rest() {
+        use super::table_widths;
+        // everything fits: natural widths (a minimum for tiny columns)
+        assert_eq!(
+            table_widths(&[100.0, 10.0], 300.0, 20.0, 48.0),
+            vec![100.0, 48.0]
+        );
+        // too wide: the short column keeps its width, the long ones share
+        let w = table_widths(&[60.0, 800.0, 800.0], 500.0, 20.0, 48.0);
+        assert_eq!(w[0], 60.0, "short column is not squeezed");
+        assert_eq!(w[1], w[2]);
+        assert!(
+            (w.iter().sum::<f32>() - (500.0 - 60.0)).abs() < 0.5,
+            "{w:?}"
+        );
+        // when even the minima do not fit, the table still never gets
+        // wider than the space: columns shrink under the minimum and wrap
+        let w = table_widths(&[900.0; 12], 300.0, 20.0, 48.0);
+        assert!(w.iter().all(|x| *x > 0.0), "{w:?}");
+        assert!(w.iter().sum::<f32>() + 20.0 * 12.0 <= 300.0, "{w:?}");
+        assert!(table_widths(&[], 300.0, 20.0, 48.0).is_empty());
+    }
+
+    #[test]
+    fn inputs_nested_in_cards_and_columns_feed_formulas() {
+        let nodes: Vec<crate::model::UiNode> = serde_json::from_str(
+            r#"[{"type":"card","title":"T","children":[
+                {"type":"slider","name":"a","label":"A","min":0,"max":10,"value":2},
+                {"type":"columns","children":[{"type":"number","name":"b","label":"B","value":3}]}]},
+               {"type":"computed","label":"S","expr":"a*b"}]"#,
+        )
+        .unwrap();
+        let mut events = Vec::new();
+        let mut values = std::collections::HashMap::new();
+        let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+        let vars = super::block_vars(&ctx, 0, 0, &nodes);
+        assert_eq!(vars.get("a"), Some(&2.0));
+        assert_eq!(vars.get("b"), Some(&3.0));
+        assert_eq!(crate::formula::eval("a*b", &vars), Ok(6.0));
+    }
+
+    use super::is_safe_link;
+    use crate::model::{parse_ui_blocks, UiEvent, UiNode};
+
+    #[test]
+    fn ui_block_parses_card() {
+        let text = "Hier ist eine Karte:\n```ui\n{\"type\":\"card\",\"title\":\"T\",\"children\":[{\"type\":\"text\",\"text\":\"Hallo\"},{\"type\":\"button\",\"label\":\"OK\",\"action\":\"ok\"}]}\n```\n";
+        let nodes = parse_ui_blocks(text);
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            crate::model::UiNode::Card { title, children } => {
+                assert_eq!(title.as_deref(), Some("T"));
+                assert_eq!(children.len(), 2);
+            }
+            _ => panic!("expected card"),
+        }
+    }
+
+    #[test]
+    fn ui_block_parses_array() {
+        let text = "```ui\n[{\"type\":\"text\",\"text\":\"a\"},{\"type\":\"divider\"}]\n```";
+        let nodes = parse_ui_blocks(text);
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn safe_link_schemes_only() {
+        assert!(is_safe_link("https://x.y"));
+        assert!(is_safe_link("HTTPS://X.Y"));
+        assert!(is_safe_link("http://x.y/path?q=1"));
+        assert!(is_safe_link("mailto:a@b"));
+        assert!(is_safe_link("  https://x.y  "));
+        assert!(!is_safe_link("javascript:alert(1)"));
+        assert!(!is_safe_link("JAVASCRIPT:alert(1)"));
+        assert!(!is_safe_link("file:///etc/passwd"));
+        assert!(!is_safe_link("data:text/html,<script>alert(1)</script>"));
+        assert!(!is_safe_link("ftp://x.y"));
+        assert!(!is_safe_link(""));
+        assert!(!is_safe_link("x.y"));
+    }
+
+    #[test]
+    fn computed_format_uses_german_decimal_comma() {
+        use crate::i18n::Lang::De;
+        assert_eq!(super::format_computed(De, 1234.5, None, None), "1.234,50");
+        assert_eq!(super::format_computed(De, 2.0, Some(0), None), "2");
+        assert_eq!(
+            super::format_computed(De, 1.23456, Some(3), Some("€")),
+            "1,235 €"
+        );
+        assert_eq!(super::format_computed(De, 7.0, Some(1), Some("  ")), "7,0");
+        // German thousands dots (HANDOFF 3.3: the separator is wanted now)
+        assert_eq!(
+            super::format_computed(De, 22645.48, None, Some("€")),
+            "22.645,48 €"
+        );
+        assert_eq!(
+            super::format_computed(De, 1234567.891, Some(2), None),
+            "1.234.567,89"
+        );
+        // values below 1000 keep their plain form, negatives get both markers
+        assert_eq!(super::format_computed(De, 999.994, Some(2), None), "999,99");
+        assert_eq!(super::format_computed(De, -1234.5, None, None), "-1.234,50");
+        assert_eq!(
+            super::format_computed(De, -5.25, Some(2), Some("€")),
+            "-5,25 €"
+        );
+    }
+
+    #[test]
+    fn computed_format_follows_the_english_ui() {
+        use crate::i18n::Lang::En;
+        assert_eq!(super::format_computed(En, 1234.5, None, None), "1,234.50");
+        assert_eq!(super::format_computed(En, 2.0, Some(0), None), "2");
+        assert_eq!(
+            super::format_computed(En, 252.4, Some(2), Some("€")),
+            "252.40 €"
+        );
+        assert_eq!(
+            super::format_computed(En, 1234567.891, Some(2), None),
+            "1,234,567.89"
+        );
+        assert_eq!(super::format_computed(En, -1234.5, None, None), "-1,234.50");
+        assert_eq!(super::format_computed(En, f64::NAN, Some(1), None), "NaN");
+    }
+
+    #[test]
+    fn slider_decimals_follow_the_step() {
+        assert_eq!(
+            super::step_decimals(1.0),
+            0,
+            "integer step shows no decimals"
+        );
+        assert_eq!(super::step_decimals(2.0), 0);
+        assert_eq!(super::step_decimals(0.5), 1);
+        assert_eq!(super::step_decimals(0.05), 2);
+        assert_eq!(super::step_decimals(0.25), 2);
+        assert_eq!(super::step_decimals(0.001), 3);
+        assert_eq!(
+            super::step_decimals(0.3333333333333333),
+            6,
+            "steps with float noise stay sensible"
+        );
+    }
+
+    #[test]
+    fn block_vars_reads_inputs_of_the_block() {
+        use crate::model::UiNode;
+        use std::collections::HashMap;
+        let nodes = vec![
+            UiNode::Slider {
+                name: "rate".into(),
+                label: "Zins".into(),
+                min: 0.0,
+                max: 10.0,
+                step: None,
+                value: Some(2.0),
+            },
+            UiNode::Number {
+                name: "years".into(),
+                label: "Jahre".into(),
+                value: Some(10.0),
+            },
+            UiNode::Select {
+                name: "kind".into(),
+                label: "Art".into(),
+                options: vec!["1".into(), "2".into()],
+                value: Some("2".into()),
+            },
+            UiNode::Select {
+                name: "word".into(),
+                label: "Wort".into(),
+                options: vec!["ja".into()],
+                value: Some("ja".into()),
+            },
+            UiNode::Text {
+                text: "kein Eingabefeld".into(),
+            },
+        ];
+        let mut events = Vec::new();
+        let mut values = HashMap::new();
+        let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+        let vars = super::block_vars(&ctx, 3, 1, &nodes);
+        assert_eq!(vars.get("rate"), Some(&2.0));
+        assert_eq!(vars.get("years"), Some(&10.0));
+        assert_eq!(vars.get("kind"), Some(&2.0), "numeric option counts");
+        assert_eq!(vars.get("word"), Some(&0.0), "non-numeric option is 0");
+        assert_eq!(vars.len(), 4);
+
+        // a stored value wins over the default
+        let mut events = Vec::new();
+        let mut values = HashMap::new();
+        values.insert(super::field_key("chat", 3, 1, "rate"), "7.5".to_string());
+        let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+        let vars = super::block_vars(&ctx, 3, 1, &nodes);
+        assert_eq!(vars.get("rate"), Some(&7.5));
+        // another block keeps its own state
+        let vars = super::block_vars(&ctx, 3, 2, &nodes);
+        assert_eq!(vars.get("rate"), Some(&2.0));
+    }
+
+    #[test]
+    fn block_inputs_are_json_values_for_the_form_submit() {
+        use crate::model::UiNode;
+        use std::collections::HashMap;
+        let nodes = vec![
+            UiNode::Slider {
+                name: "rate".into(),
+                label: "Zins".into(),
+                min: 0.0,
+                max: 10.0,
+                step: None,
+                value: Some(2.5),
+            },
+            UiNode::Select {
+                name: "kind".into(),
+                label: "Art".into(),
+                options: vec!["a".into()],
+                value: Some("a".into()),
+            },
+        ];
+        let mut events = Vec::new();
+        let mut values = HashMap::new();
+        let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+        let inputs = super::block_inputs(&ctx, 0, 0, &nodes);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].0, "rate");
+        assert_eq!(inputs[0].1, serde_json::json!(2.5));
+        assert_eq!(inputs[1].1, serde_json::json!("a"));
+    }
+
+    #[test]
+    fn keys_are_owner_scoped() {
+        // the format: "<owner>#<msg_idx>#<block>#<name>"
+        assert_eq!(super::field_key("ses-1", 2, 0, "rate"), "ses-1#2#0#rate");
+        assert_eq!(super::owner_key_prefix("ses-1"), "ses-1#");
+        // the same position in another owner is another key: one chat's
+        // slider value never surfaces in the next (Handoff 2.5)
+        assert_ne!(
+            super::field_key("ses-1", 2, 0, "rate"),
+            super::field_key("ses-2", 2, 0, "rate")
+        );
+        // an empty name yields the block's key prefix (script state reset)
+        assert_eq!(super::field_key("ses-1", 2, 0, ""), "ses-1#2#0#");
+        // script tools are owner-scoped the same way, and stay stable
+        // within one owner (same code, same position)
+        let code = "function render(s){return null}";
+        assert_ne!(
+            super::script_key("ses-1", 0, 1, code),
+            super::script_key("ses-2", 0, 1, code)
+        );
+        assert_eq!(
+            super::script_key("ses-1", 0, 1, code),
+            super::script_key("ses-1", 0, 1, code)
+        );
+        assert!(super::script_key("ses-1", 0, 1, code).starts_with("ses-1#0#1#"));
+    }
+
+    #[test]
+    fn drop_owner_entries_removes_only_that_owner() {
+        let mut values: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        values.insert(super::field_key("a", 1, 0, "x"), "1".into());
+        values.insert(super::field_key("a", 2, 1, "y"), "2".into());
+        values.insert(super::field_key("b", 1, 0, "x"), "3".into());
+        // an owner that only shares the first chars stays: the separator
+        // decides, not the raw prefix
+        values.insert("ab#1#0#x".to_string(), "4".into());
+        super::drop_owner_entries(&mut values, "a");
+        assert!(!values.contains_key(&super::field_key("a", 1, 0, "x")));
+        assert!(!values.contains_key(&super::field_key("a", 2, 1, "y")));
+        assert!(values.contains_key(&super::field_key("b", 1, 0, "x")));
+        assert!(values.contains_key("ab#1#0#x"));
+        assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn series_colors_come_from_the_theme_palettes() {
+        for i in 0..6 {
+            let c = super::series_color(i);
+            assert!(
+                crate::theme::GRADIENT.contains(&c) || crate::theme::PROJECT_PALETTE.contains(&c),
+                "series {i} uses a theme colour"
+            );
+        }
+    }
+
+    #[test]
+    fn neighbouring_series_never_use_neighbouring_gradient_steps() {
+        let series = crate::theme::CHART_SERIES;
+        // every palette colour exactly once
+        for c in crate::theme::PROJECT_PALETTE {
+            assert_eq!(series.iter().filter(|&&s| s == c).count(), 1);
+        }
+        let step = |c: egui::Color32| crate::theme::GRADIENT.iter().position(|&g| g == c);
+        for i in 0..series.len() {
+            let (a, b) = (super::series_color(i), super::series_color(i + 1));
+            assert_ne!(a, b, "series {i} and {} differ", i + 1);
+            if let (Some(x), Some(y)) = (step(a), step(b)) {
+                assert!(
+                    x.abs_diff(y) > 1,
+                    "series {i} and {} are neighbouring gradient steps",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    /// M10: a ```ui block's json parses once per content — the frame asks
+    /// again and again, the cache hands the parsed nodes back.
+    #[test]
+    fn ui_block_parse_is_cached_by_content() {
+        let code = r#"[{"type":"divider"},{"type":"text","text":"hi"}]"#;
+        let a = super::parse_ui_blocks_cached(code);
+        let b = super::parse_ui_blocks_cached(code);
+        assert!(
+            std::sync::Arc::ptr_eq(&a, &b),
+            "the same block content parses once"
+        );
+        assert!(
+            matches!(&(*a)[..], [UiNode::Divider {}, UiNode::Text { text }] if text == "hi"),
+            "the cache returns exactly what a fresh parse would"
+        );
+        assert!(!std::sync::Arc::ptr_eq(
+            &a,
+            &super::parse_ui_blocks_cached(r#"[{"type":"hr"}]"#)
+        ));
+    }
+
+    /// N16: a code block's scroll id comes from owner, message, nesting
+    /// salt and block position — never from the content, so equally long
+    /// blocks no longer share a scroll state and a streamed block keeps
+    /// its scroll position chunk by chunk.
+    #[test]
+    fn code_scroll_ids_are_content_independent() {
+        fn scroll_id(owner: &str, salt: u64) -> egui::Id {
+            let mut events = Vec::new();
+            let mut values = std::collections::HashMap::new();
+            let mut ctx = super::RenderCtx::new(&mut events, &mut values, owner);
+            ctx.scroll_salt = salt;
+            super::code_scroll_id(&ctx, 0, 1)
+        }
+        assert_eq!(scroll_id("s1", 0), scroll_id("s1", 0));
+        assert_ne!(scroll_id("s1", 0), scroll_id("s2", 0), "another owner");
+        let mut events = Vec::new();
+        let mut values = std::collections::HashMap::new();
+        let ctx = super::RenderCtx::new(&mut events, &mut values, "s1");
+        let base = super::code_scroll_id(&ctx, 0, 1);
+        assert_ne!(base, super::code_scroll_id(&ctx, 0, 2), "block position");
+        assert_ne!(base, super::code_scroll_id(&ctx, 1, 1), "another message");
+        assert_ne!(base, scroll_id("s1", 7), "nested or file-salted path");
+    }
+
+    /// M9: checklist values react locally (the click writes `check:{i}`
+    /// into the block's values) and travel with the block's next form
+    /// submit — all checkbox states as one `true`/`false` array under
+    /// `checklist`. `changed_inputs` (a ui-js tool's state) sends the
+    /// same array once the user touched any checkbox. SKILL.md does not
+    /// name a concrete shape, so this array form is the documented one.
+    #[test]
+    fn checklist_states_travel_with_the_block_s_submit() {
+        use crate::model::CheckItem;
+        use std::collections::HashMap;
+        let check = |text: &str, done: bool| CheckItem {
+            text: text.into(),
+            done,
+        };
+        let nodes = vec![
+            UiNode::Checklist {
+                items: vec![
+                    check("eins", false),
+                    check("zwei", true),
+                    check("drei", false),
+                ],
+            },
+            UiNode::Toggle {
+                name: "t".into(),
+                label: "T".into(),
+                value: Some(false),
+            },
+        ];
+
+        // untouched: the item defaults travel as one array under
+        // "checklist" with the block's form submit
+        let mut events = Vec::new();
+        let mut values = HashMap::new();
+        {
+            let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+            let inputs = super::block_inputs(&ctx, 0, 0, &nodes);
+            let (_, value) = inputs
+                .iter()
+                .find(|(n, _)| n == "checklist")
+                .expect("the checklist state is part of the block's submit");
+            assert_eq!(*value, serde_json::json!([false, true, false]));
+            assert!(
+                !super::changed_inputs(&ctx, 0, 0, &nodes)
+                    .iter()
+                    .any(|(n, _)| n == "checklist"),
+                "without a user change, no checklist entry reaches the tool state"
+            );
+        }
+
+        // a click on item 2: the checker painter stores "true" under
+        // check:2 of this block — the same rule reads it back
+        values.insert(
+            super::field_key("chat", 0, 0, "check:2"),
+            "true".to_string(),
+        );
+        let expected = serde_json::json!([false, true, true]);
+        {
+            let ctx = super::RenderCtx::new(&mut events, &mut values, "chat");
+            assert!(
+                super::block_inputs(&ctx, 0, 0, &nodes)
+                    .iter()
+                    .any(|(n, v)| n == "checklist" && *v == expected),
+                "the clicked state travels with the submit"
+            );
+            assert!(
+                super::changed_inputs(&ctx, 0, 0, &nodes)
+                    .iter()
+                    .any(|(n, v)| n == "checklist" && *v == expected),
+                "one touched checkbox sends the whole block state"
+            );
+        }
+
+        // another block's check keys never leak into this block's state,
+        // and a block without a checklist sends none
+        {
+            let mut other = HashMap::new();
+            other.insert(
+                super::field_key("chat", 0, 1, "check:0"),
+                "true".to_string(),
+            );
+            let ctx = super::RenderCtx::new(&mut events, &mut other, "chat");
+            let inputs = super::block_inputs(&ctx, 0, 0, &nodes);
+            let (_, value) = inputs
+                .iter()
+                .find(|(n, _)| n == "checklist")
+                .expect("the checklist still travels");
+            assert_eq!(
+                *value,
+                serde_json::json!([false, true, false]),
+                "the foreign block's check keys are not this block's state"
+            );
+            assert!(
+                !super::changed_inputs(&ctx, 0, 0, &nodes)
+                    .iter()
+                    .any(|(n, _)| n == "checklist"),
+                "only this block's own touched checkboxes count as changes"
+            );
+            let plain = vec![UiNode::Toggle {
+                name: "t".into(),
+                label: "T".into(),
+                value: Some(false),
+            }];
+            assert!(
+                !super::block_inputs(&ctx, 0, 0, &plain)
+                    .iter()
+                    .any(|(n, _)| n == "checklist"),
+                "a block without a checklist sends no checklist entry"
+            );
+        }
+    }
+
+    /// N17: a ```ui block nested in a text node of another ui block used
+    /// to restart the block counter at 0, colliding its field keys with
+    /// the outer block 0 of the same message — two fields "x" shared one
+    /// stored value. The outer nodes are built directly: parse_ui_blocks
+    /// (model.rs) stops at any ``` sequence inside the json, so a text
+    /// node with a fence arrives through ui-js-built nodes, not through
+    /// the wire parse; the numbering under test lives here either way.
+    /// Rendered headless with real clicks on both toggles: each keeps
+    /// its own entry. Final audit G: the nested run counts in its own
+    /// space and cannot shift the outer numbers painted after it.
+    #[test]
+    fn nested_ui_blocks_keep_their_own_field_values() {
+        use std::collections::HashMap;
+        let nested = concat!(
+            "```ui\n",
+            "[{\"type\":\"toggle\",\"name\":\"x\",\"label\":\"Innen\"}]\n",
+            "```\n"
+        );
+        let outer = vec![
+            UiNode::Card {
+                title: Some("Card".to_string()),
+                children: vec![UiNode::Text {
+                    text: nested.to_string(),
+                }],
+            },
+            UiNode::Toggle {
+                name: "x".to_string(),
+                label: "Aussen".to_string(),
+                value: Some(false),
+            },
+        ];
+        let ctx = egui::Context::default();
+        // the app installs its fonts on creation (main.rs); a bare
+        // Context cannot lay the labels out without them
+        crate::fonts::install_fallback_fonts(&ctx);
+        let mut ui_events: Vec<UiEvent> = Vec::new();
+        let mut values: HashMap<String, String> = HashMap::new();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let frame = |ctx_run: &egui::Context,
+                     events: Vec<egui::Event>,
+                     ui_events: &mut Vec<UiEvent>,
+                     values: &mut HashMap<String, String>|
+         -> Vec<egui::epaint::ClippedShape> {
+            let out = ctx_run.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut rctx = super::RenderCtx::new(ui_events, values, "s");
+                        // the numbering `render_blocks` applies to its
+                        // first ```ui block: it takes 0 and advances the
+                        // running counter before its nodes paint
+                        let block = rctx.block_offset;
+                        rctx.block_offset += 1;
+                        super::render_ui_block(ui, &outer, 0, block, &mut rctx);
+                    });
+                },
+            );
+            out.shapes
+        };
+        // settle pass: locate both toggle labels in the painted text
+        let shapes = frame(&ctx, vec![], &mut ui_events, &mut values);
+        let label_pos = |shapes: &[egui::epaint::ClippedShape], needle: &str| -> egui::Pos2 {
+            shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .find(|t| t.galley.job.text.contains(needle))
+                .map(|t| t.pos + egui::vec2(4.0, 4.0))
+                .unwrap_or_else(|| panic!("the label {needle} is painted"))
+        };
+        let click = |pos: egui::Pos2,
+                     ui_events: &mut Vec<UiEvent>,
+                     values: &mut HashMap<String, String>| {
+            let press = egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            };
+            let release = egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            };
+            frame(
+                &ctx,
+                vec![egui::Event::PointerMoved(pos)],
+                ui_events,
+                values,
+            );
+            frame(&ctx, vec![press], ui_events, values);
+            frame(&ctx, vec![release], ui_events, values);
+        };
+        let aussen = label_pos(&shapes, "Aussen");
+        let innen = label_pos(&shapes, "Innen");
+        click(aussen, &mut ui_events, &mut values);
+        assert_eq!(
+            values
+                .get(&super::field_key("s", 0, 0, "x"))
+                .map(String::as_str),
+            Some("true"),
+            "the outer toggle stored its value under its own block"
+        );
+        click(innen, &mut ui_events, &mut values);
+        // the nested block numbers in its own space (1_000_000 + step of
+        // its host block 0): it cannot collide with the outer numbers
+        assert_eq!(
+            values
+                .get(&super::field_key("s", 0, 1_000_000, "x"))
+                .map(String::as_str),
+            Some("true"),
+            "the nested toggle stored its value under its own number"
+        );
+        assert_eq!(
+            values.len(),
+            2,
+            "both fields keep their own value: {values:?}"
+        );
+    }
+
+    /// Final audit G: an earlier block's nested ```ui run once shifted
+    /// every outer block number after it, so the same later block got
+    /// different field/script keys depending on how much a SIBLING
+    /// contained — form values jumped between variants of the same
+    /// message. The offset after painting must depend on the outer
+    /// blocks alone.
+    #[test]
+    fn nested_blocks_do_not_shift_the_outer_numbering() {
+        use std::collections::HashMap;
+        let nested_text = concat!(
+            "```ui\n",
+            "[{\"type\":\"toggle\",\"name\":\"n\",\"label\":\"N\"}]\n",
+            "```\n"
+        );
+        let outer_blocks = |text: &str| {
+            vec![
+                UiNode::Card {
+                    title: Some("Card".to_string()),
+                    children: vec![UiNode::Text {
+                        text: text.to_string(),
+                    }],
+                },
+                UiNode::Toggle {
+                    name: "y".to_string(),
+                    label: "Y".to_string(),
+                    value: Some(false),
+                },
+            ]
+        };
+        let paint = |text: &str| -> usize {
+            let ctx = egui::Context::default();
+            crate::fonts::install_fallback_fonts(&ctx);
+            let mut ui_events: Vec<UiEvent> = Vec::new();
+            let mut values: HashMap<String, String> = HashMap::new();
+            let mut offset = 0;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut rctx = super::RenderCtx::new(&mut ui_events, &mut values, "s");
+                        // render_ui_block consumes its block number itself
+                        let block = rctx.block_offset;
+                        rctx.block_offset += 1;
+                        super::render_ui_block(ui, &outer_blocks(text), 0, block, &mut rctx);
+                        offset = rctx.block_offset;
+                    });
+                },
+            );
+            offset
+        };
+        let with_nested = paint(nested_text);
+        let without_nested = paint("plain text");
+        // one outer block at the top level, whatever its text nests
+        assert_eq!(
+            with_nested, without_nested,
+            "a nested ui run must not consume the outer counter"
+        );
+        assert_eq!(
+            with_nested, 1,
+            "only the outer block numbered at the top level"
+        );
+    }
+}

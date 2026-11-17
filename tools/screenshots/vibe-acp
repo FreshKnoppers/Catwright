@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Stand-in for vibe-acp in screenshot runs: answers the ACP requests the
+app sends and replays the prepared sessions of $DEMO_SCENARIO on
+session/load. No network, no model."""
+import json, os, sys
+
+sc = json.load(open(os.environ["DEMO_SCENARIO"]))
+probe = 0
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+def result(rid, res):
+    send({"jsonrpc": "2.0", "id": rid, "result": res})
+
+def update(sid, upd):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": upd}})
+
+COMMANDS = [{"name": n, "description": d} for n, d in [
+    ("compact", "Compact the conversation"), ("help", "Show help"), ("retry", "Retry")]]
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, rid, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    if rid is None:
+        continue  # notifications (session/cancel)
+    if method == "initialize":
+        result(rid, {"protocolVersion": 1,
+                     "agentCapabilities": {"loadSession": True,
+                                           "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True},
+                                           "sessionCapabilities": {"list": {}, "fork": {}, "close": {}}},
+                     "authMethods": [],
+                     "agentInfo": {"name": "@mistralai/mistral-vibe", "title": "Mistral Vibe", "version": "3.1.2"}})
+    elif method == "session/new":
+        probe += 1
+        sid = f"probe-{probe}"
+        result(rid, {"sessionId": sid, "modes": sc["probe"]["modes"], "configOptions": sc["probe"]["configOptions"],
+                     "_meta": {"workspace_trust": {"status": "trusted", "details": None}}})
+        update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": COMMANDS})
+    elif method == "session/list":
+        result(rid, {"sessions": sc["lists"].get(p.get("cwd", ""), [])})
+    elif method == "session/load":
+        s = sc["sessions"].get(p["sessionId"])
+        if s is None:
+            send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "Session not found"}})
+            continue
+        for upd in s["updates"]:
+            update(p["sessionId"], upd)
+        result(rid, {"modes": s["modes"], "configOptions": s["configOptions"],
+                     "_meta": {"workspace_trust": {"status": "trusted", "details": None}}})
+        update(p["sessionId"], {"sessionUpdate": "available_commands_update", "availableCommands": COMMANDS})
+    elif method == "session/resume":
+        result(rid, {})
+    elif method == "_account/read":
+        result(rid, sc["account"])
+    elif method == "_identity/read":
+        result(rid, sc["identity"])
+    elif method == "_loops/list":
+        result(rid, {"loops": []})
+    elif method == "_review/state":
+        result(rid, {"files": [], "scopes": []})
+    elif method == "_connectors/list":
+        result(rid, {"connectors": [], "error": None})
+    else:
+        result(rid, {})

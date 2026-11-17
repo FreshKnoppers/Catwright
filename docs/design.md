@@ -1,0 +1,132 @@
+# Catwright design: playful, pixel-ish, warm
+
+Design references were screenshots of other products (Mistral docs, the
+Vibe web app, Claude Desktop's Code mode); they live only in the local,
+git-ignored `reference/` folder. The look is warm orange/yellow with pixel
+blocks and mono labels; layout and harness features follow a classic
+agent desktop (sidebar, transcript, right panel).
+
+## Colour tokens (sampled from the references)
+
+| token | hex | use |
+|---|---|---|
+| `BG` | `#1a1a1e` | main area |
+| `SIDEBAR` | `#17171b` | sidebar / side panels |
+| `CARD` | `#101010` | cards, code blocks, tool groups |
+| `RAISED` | `#29292d` | selected row, chips, user bubble |
+| `INPUT` | `#2a2a2e` | composer |
+| `BORDER` | `#404040` | 1 px card / panel borders |
+| `BORDER_SOFT` | `#2e2e34` | quiet lines between panels, around cards |
+| `HOVER` | `#232328` | row under the pointer |
+| `TEXT` | `#ececec` | body text |
+| `MUTED` | `#b4b4ba` | secondary text that must stay comfortably readable |
+| `DIM` | `#8a8a8f` | tertiary text, mono labels |
+| `ORANGE` | `#fa500f` | primary accent: CTA buttons, active marks, logo |
+| `ORANGE_DIM` | `#ce6114` | pixel meters, numbers (context "1M", prices) |
+| `YELLOW` | `#ffd800` | highlight tag (like "TRY IN PLAYGROUND"), focus |
+| `AMBER` | `#ffaf00` | gradient step |
+| `RED` | `#e10500` | error edges, deny outlines |
+| `RED_TEXT` | `#ff6e62` | red text on dark backgrounds (contrast) |
+| `GREEN` | `#3fb950` | success, added lines, allow |
+| `DIFF_ADD_BG` / `DIFF_DEL_BG` | `#12281a` / `#301514` | diff line backgrounds |
+| `BLUE` / `PURPLE` | `#5b9cf8` / `#b07cf8` | cool accents (session modes) |
+
+Session modes run from calm to risky (`theme::mode_color`): Plan `BLUE`,
+Accept Edits `GREEN`, Smart Approve `AMBER`, Auto Approve `RED_TEXT`, custom
+Vibe profiles `PURPLE`.
+
+Pixel gradient (for pixel art / meters, left to right):
+`#e10500 #fa500f #ff8205 #ffaf00 #ffd800`.
+
+## Shape and type
+
+- Small radii: 2–4 px (cards 4, buttons 3, chips 2). No big pill shapes
+  except the composer (6 px).
+- Section labels, breadcrumbs, meter labels, model ids, token counts:
+  monospace, UPPERCASE, small (11–12 px), `DIM`, with a short leading
+  square bullet `■` in `ORANGE` for the active item (like the docs top nav).
+- Body text stays proportional (egui default + fallback fonts).
+- Thin 1 px `BORDER` lines, dashed separators are fine (draw short segments).
+
+## Pixel elements (drawn with egui painter rects, no image assets)
+
+- **Pixel meter**: row of square blocks (e.g. 10 × 10 px, 3 px gap). Filled
+  = `ORANGE_DIM`, empty = `RAISED`. Use for the context window (Kontext
+  panel: 20 blocks = 100 %), thinking level (low/medium/high = 1/2/3 of 3
+  blocks) and speed-like indicators.
+- **Pixel logo**: our OWN small pixel mark drawn from a 7×5 (or similar)
+  bitmap in `ORANGE`, e.g. a pixel "O" or a little pixel window. Do NOT copy
+  Mistral's "M" logo or their cat mascot; we only borrow the style.
+- **Project icons**: 3×3 pixel squares whose colours are derived from a hash
+  of the project path (palette = the pixel gradient + a few cool colours),
+  like the coloured project dots in picture-7.
+- **Busy indicator**: three pixel blocks pulsing through the gradient
+  instead of a round spinner.
+- **Status squares**: tool-call status as a small square: pending `DIM`
+  outline, in_progress `YELLOW`, completed `GREEN`, failed `RED`.
+
+## Type scale
+
+The UI uses an installed grotesque (Inter, Adwaita Sans, Noto Sans, Liberation
+Sans, in that order, `fonts::UI_FONT_CANDIDATES`), never bundled. egui's default
+light font is too thin at small sizes. `Small` is 12 pt (egui's default 9 pt is
+unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
+10.5 pt.
+
+## Components (`widgets.rs`, `icons.rs`)
+
+- **Icons**: 7×7 bitmaps drawn with painter rects (`icons::Icon`), 2 pt cells in
+  rows, 1 pt for chevrons. No emoji, they do not exist on every system. An icon
+  always comes with a label or a tooltip.
+- **Rows** (`nav_row`, `paint_row_bg`): 27–30 pt high, full width, HOVER on
+  hover, selected = RAISED with a 2 pt ORANGE edge. Titles end in an ellipsis,
+  never at a fixed character count.
+- **Actions appear on hover** in rows and at messages and cost no layout space
+  (`widgets::place`; `Ui::put` would move everything after the row).
+  A menu that is open keeps its row in the hover state.
+- **Buttons**: `Primary` (ORANGE) once per card, `Secondary` (RAISED), `Danger`
+  (RED outline, `RED_TEXT`).
+- **Attention cards**: a card with a 2 pt coloured top edge asks for a decision.
+- **Toasts**: the status line as a toast below the header. Info fades after six
+  seconds, errors stay until dismissed.
+
+## Layout
+
+- **Left sidebar** (resizable, Strg B folds it to an icon rail, automatic below
+  880 pt): brand, Neue Sitzung, Suchen (Strg K), Artefakte, the workspace tree
+  (the chat workspace "Allgemein" pinned on top, then the projects) with status
+  and age per session (running = moving blocks, waiting = yellow, unseen result =
+  orange; a workspace row with a waiting session carries a yellow mark, also
+  while folded), account footer with connection state and budget meter. There is
+  no Code/Chat switch: chats are sessions of "Allgemein".
+- **Session header**: workspace crumb ("Allgemein" or the project), session title as menu (rename, fork, copy
+  transcript as Markdown, delete), git branch and dirty count, fork, folder,
+  right-panel toggle.
+- **Conversation** (column max. 820 pt): user bubble right, agent text left in
+  a quiet flow, tool groups as one line, edited files always visible as cards
+  with a real line diff.
+- **Pinned above the composer** (they never scroll away): trust banner, Vibe's
+  questions, permission cards with command or diff preview (number keys answer
+  the first card while the composer is empty — only its one-shot allow/deny
+  options, numbered by their position among those; every lasting option
+  including reject-always stays behind a click, and a fresh card ignores
+  digits for its first painted frames), message queue.
+- **Composer**: grows up to 220 pt, mode and "+" left, model and thinking right;
+  `/` and `@` open keyboard-driven lists. Typing anywhere goes into it. Each
+  session keeps its own draft.
+- **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
+  Kontext, Plan, Änderungen (accept / revert), Subagents, Routinen, Konnektoren,
+  Umgebung. While it shows the plan, the conversation shows one plan line.
+- **Start screen**: cat, "Was baust du heute in [project ▾]" (in "Allgemein":
+  "Worüber möchtest du chatten? [Allgemein ▾]"), composer, recent sessions. The
+  picker chooses the workspace of the new session.
+- **Command palette** (Strg K): sessions, projects, actions, slash commands.
+
+Playful is welcome (pixel mascot, gradient blocks), but readability first:
+contrast of body text against `BG` stays high, and the pixel accents never carry
+information on their own (always with a label).
+
+## Backlog
+
+- Done: the animated pixel cat (own few-frame bitmap) runs in the subagent
+  status bar, the busy row of a turn and on the start screen.

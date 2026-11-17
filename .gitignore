@@ -1,0 +1,23 @@
+# Build output
+/app/target/
+target/
+
+# Old vendored toolchain from the generator sandbox (being removed)
+/app/vendor/
+
+# Generated screenshots
+/app/shots/
+
+# Artifacts of the generator tool (not part of the source)
+/investigation.cany/
+/capture/
+/inbox/
+/pinned/
+/feed.json
+/build-activity.log
+/craft.json
+/usage.json
+
+# Screenshots of other products used as design references: kept locally,
+# never published (third-party UIs)
+/reference/

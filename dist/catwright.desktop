@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Catwright
+GenericName=AI Agent Harness
+Comment=Native desktop harness for the Mistral Vibe agent (via ACP)
+Exec=catwright
+Icon=catwright
+Terminal=false
+Categories=Development;Chat;Utility;
+StartupWMClass=catwright

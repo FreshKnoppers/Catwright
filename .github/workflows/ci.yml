@@ -1,0 +1,45 @@
+# Format, lint and test on every push and pull request.
+# Needs no system packages: the binary loads Wayland, X11 and OpenGL at run
+# time (dlopen), and the tests run headless against recorded ACP traffic.
+# No secrets, no real Vibe: Vibe compatibility is not checked here.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked

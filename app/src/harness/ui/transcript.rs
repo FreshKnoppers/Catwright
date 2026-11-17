@@ -1,0 +1,1693 @@
+//! The conversation: user and agent messages with their hover actions,
+//! thoughts, tool groups, real line diffs, the plan and the busy row.
+
+use super::*;
+use crate::acp::protocol::{
+    PlanEntry, PlanStatus, ToolCall, ToolCallContent, ToolKind, ToolStatus,
+};
+use crate::acp::session::{
+    diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
+};
+use crate::diff::{self, LineKind, Segment};
+use crate::harness::state::{TurnDiffView, TurnDiffs};
+use crate::harness::{extras, stop_reason_note};
+use crate::i18n::{tr, trf};
+use crate::icons;
+use crate::model::UiEvent;
+use crate::render::RenderCtx;
+use crate::widgets::{line_galley, mono, paint_line};
+use egui::{pos2, Rect, Sense, Stroke};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+/// Actions from message rows, applied after the transcript is drawn.
+enum MessageOp {
+    Rewind(String),
+    Fork(String),
+    /// Vibe's `/retry` for the finished turn.
+    Retry,
+    /// Open a file path in the Artefakte preview.
+    OpenFile(String),
+    /// Load one file's diff for the turn (`_review/turnDiff`).
+    TurnDiff {
+        turn_id: String,
+        path: String,
+    },
+}
+
+pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
+    let jump = std::mem::take(&mut h.ui.scroll_to_end);
+    let jump_round =
+        h.ui.scroll_to_round
+            .take()
+            .filter(|(jsid, _)| jsid == sid)
+            .map(|(_, y)| y);
+    // every session keeps its own scroll position
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt(("transcript", sid))
+        .auto_shrink([false, false])
+        // Off for the frame of a round jump: egui (0.29) keeps a view that
+        // is stuck to the end there even after a programmatic offset and
+        // pulls it back down at the end of the frame. Without sticking that
+        // frame, egui re-evaluates "stuck" from the new offset (no longer
+        // the end), and the view stays on the round.
+        .stick_to_bottom(jump || jump_round.is_none());
+    // A jump to the end scrolls to the content's last row (below). A huge
+    // offset like f32::MAX must not be used: egui lays the frame out at
+    // that offset before clamping, and positions near 3e38 lose all
+    // precision, so the measured content height comes out wrong.
+    if let (false, Some(y)) = (jump, jump_round) {
+        area = area.vertical_scroll_offset(y);
+    }
+    let mut ops = Vec::new();
+    let mut round_tops = Vec::new();
+    let output = area.show(ui, |ui| {
+        // round tops are drawn in screen space; the scroll offset is in
+        // content space: subtract the content's top edge
+        let origin = ui.max_rect().top();
+        ui.add_space(16.0);
+        column(ui, |ui| {
+            round_tops = render_items(h, ui, sid, &mut ops);
+        });
+        for top in &mut round_tops {
+            *top -= origin;
+        }
+        // room under the last row for the navigation pills, so they never
+        // cover it (the busy row with the cat sits there)
+        ui.add_space(NAV_RESERVE);
+        if jump {
+            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+        }
+    });
+    for op in ops {
+        match op {
+            MessageOp::Rewind(message_id) => h.begin_rewind(sid, &message_id),
+            MessageOp::Fork(message_id) => h.fork_active_at(Some(message_id)),
+            MessageOp::TurnDiff { turn_id, path } => h.load_turn_diff(sid, &turn_id, &path),
+            MessageOp::Retry => h.run_command("/retry"),
+            MessageOp::OpenFile(path) => h.open_artifact(sid, &path),
+        }
+    }
+    // the pills of the NEXT frame jump to the positions this frame drew
+    let current = output.state.offset.y;
+    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+    let prev = round_jump_target(&round_tops, current, max_offset, true);
+    let next = round_jump_target(&round_tops, current, max_offset, false);
+    let to_end = max_offset - current > 160.0;
+    // one centred row: it follows the window width and shrinks to icons
+    // when the labels do not fit
+    let mut pills: Vec<(Icon, &str, NavJump)> = Vec::new();
+    if let Some(y) = prev {
+        pills.push((Icon::ChevronUp, tr("Previous round"), NavJump::Round(y)));
+    }
+    if let Some(y) = next {
+        pills.push((Icon::ArrowDown, tr("Next round"), NavJump::Round(y)));
+    }
+    if to_end {
+        pills.push((Icon::ArrowDown, tr("To the end"), NavJump::End));
+    }
+    if pills.is_empty() {
+        return;
+    }
+    let r = output.inner_rect;
+    let shown: Vec<(Icon, &str)> = pills.iter().map(|(i, l, _)| (*i, *l)).collect();
+    let clicked = widgets::floating_pills(
+        ui.ctx(),
+        "transcript_nav",
+        pos2(r.center().x, r.bottom() - 10.0),
+        (r.width() - 32.0).max(0.0),
+        &shown,
+    );
+    match clicked.map(|i| pills[i].2) {
+        Some(NavJump::Round(y)) => h.ui.scroll_to_round = Some((sid.to_string(), y)),
+        Some(NavJump::End) => h.ui.scroll_to_end = true,
+        None => {}
+    }
+}
+
+/// Space under the transcript's last row: the navigation pills (30 px,
+/// 10 px above the bottom edge) plus a gap.
+const NAV_RESERVE: f32 = 56.0;
+
+/// What a navigation pill does when clicked.
+#[derive(Clone, Copy)]
+enum NavJump {
+    /// Scroll so this content-space y is the top of the viewport.
+    Round(f32),
+    End,
+}
+
+/// Where a round-navigation jump goes: the nearest round top strictly
+/// above (`up`) or below the current scroll position, in content
+/// coordinates. The small dead zone keeps a pill from jumping to the
+/// round the viewport already shows. A top below `max_offset` can only be
+/// scrolled to `max_offset`: when that is where the view already is (the
+/// end), there is no next round to go to.
+fn round_jump_target(tops: &[f32], current: f32, max_offset: f32, up: bool) -> Option<f32> {
+    let mut best: Option<f32> = None;
+    for &t in tops {
+        let t = t.min(max_offset);
+        if up && t < current - 0.5 {
+            best = Some(best.map_or(t, |b: f32| b.max(t)));
+        } else if !up && t > current + 0.5 {
+            best = Some(best.map_or(t, |b: f32| b.min(t)));
+        }
+    }
+    best
+}
+
+fn render_items(
+    h: &mut Harness,
+    ui: &mut egui::Ui,
+    sid: &str,
+    ops: &mut Vec<MessageOp>,
+) -> Vec<f32> {
+    let compact_plan = panel_visible(h, ui.ctx());
+    // The transcript redraws every frame, so this head must not clone per
+    // frame. `review`, `review_scopes` and `turn_diffs` are independent
+    // fields of the harness: disjoint borrows replace the old deep clones,
+    // whose per-frame cost was the worst of the three (turn diffs carry
+    // whole file contents as baselines).
+    let Harness {
+        sessions,
+        ui_events,
+        form_values,
+        scripts,
+        open_groups,
+        diff_open,
+        review,
+        review_scopes,
+        turn_diffs,
+        questions,
+        turn_started,
+        retrying,
+        last_turn_secs,
+        ..
+    } = h;
+    let review: &[extras::ReviewFile] = review.get(sid).map_or(&[], Vec::as_slice);
+    let scopes: &[extras::ReviewScope] = review_scopes.get(sid).map_or(&[], Vec::as_slice);
+    let diffs: &TurnDiffs = turn_diffs.get(sid).unwrap_or(TurnDiffs::empty());
+    let has_question = questions
+        .iter()
+        .any(|q| q.session_id.as_deref() == Some(sid));
+    let Some(s) = sessions.get_mut(sid) else {
+        return Vec::new();
+    };
+    let running = s.turn != TurnState::Idle;
+    // a finished round folds to its last answer; the running turn's rounds
+    // stay open, older ones stay folded meanwhile
+    let rounds = s.folded_rounds();
+    let groups = tool_groups(&s.items);
+    let cwd = s.cwd.as_path();
+    // turnId -> round: Vibe's turn ids are the user message ids (rewind and
+    // `_rewind/to` take them), so a round is found by its own message id
+    let mut round_of: HashMap<&str, &Round> = HashMap::new();
+    for round in &rounds {
+        if let Some(id) = &round.user_message_id {
+            round_of.insert(id.as_str(), round);
+        }
+    }
+    let mut turn_ops: Vec<MessageOp> = Vec::new();
+    let mut turn_changes = TurnChanges {
+        cwd,
+        review,
+        scopes,
+        diffs,
+        round_of: &round_of,
+        ops: &mut turn_ops,
+    };
+    let mut round_tops: Vec<f32> = Vec::with_capacity(rounds.len());
+    for round in &rounds {
+        // where this round starts on screen: the round navigation jumps
+        // here (also for a folded round, whose summary row is its top)
+        round_tops.push(ui.cursor().top());
+        let key = round_key(sid, round);
+        let expanded = open_groups.contains(&key);
+        if round.shows_summary() && round_summary(ui, &s.items, round, expanded) {
+            toggle_key(open_groups, key);
+        }
+        let range = if round.collapsed && !expanded {
+            round
+                .answer
+                .map_or(round.range.end..round.range.end, |a| a..a + 1)
+        } else {
+            round.range.clone()
+        };
+        let mut ctx = ItemCtx {
+            sid,
+            running,
+            compact_plan,
+            cwd,
+            plan: &s.plan,
+            open_groups,
+            diff_open,
+            ui_events,
+            form_values,
+            scripts,
+            ops,
+        };
+        render_range(&mut ctx, ui, s, &groups, range);
+        // the files this round changed, under its user message (also under
+        // a folded round: it is the round's outcome)
+        if let Some(turn_id) = &round.user_message_id {
+            turn_changes.round_files(ui, turn_id);
+        }
+    }
+    turn_changes.unassigned_files(ui);
+    ops.append(&mut turn_ops);
+    let waiting_user = !s.permissions.is_empty() || has_question;
+    if running {
+        ui.add_space(4.0);
+        busy_row(
+            ui,
+            s,
+            turn_started.get(sid).map(|t| t.elapsed().as_secs()),
+            retrying.get(sid),
+            waiting_user,
+        );
+    } else {
+        turn_footer(ui, s, last_turn_secs.get(sid).copied(), ops);
+    }
+    round_tops
+}
+
+/// What one `render_range` pass needs besides the session view. Bundled so
+/// the per-item helpers keep short argument lists.
+struct ItemCtx<'a> {
+    sid: &'a str,
+    running: bool,
+    compact_plan: bool,
+    cwd: &'a Path,
+    plan: &'a [PlanEntry],
+    open_groups: &'a mut HashSet<String>,
+    diff_open: &'a mut HashSet<String>,
+    ui_events: &'a mut Vec<UiEvent>,
+    form_values: &'a mut HashMap<String, String>,
+    scripts: &'a mut HashMap<String, crate::script::ScriptTool>,
+    ops: &'a mut Vec<MessageOp>,
+}
+
+/// Draw `items[range]`, tool calls through their groups. Ranges start at a
+/// round start, so a tool group is never cut: `tool_groups` is computed over
+/// the whole transcript and every group lies inside one round.
+fn render_range(
+    ctx: &mut ItemCtx<'_>,
+    ui: &mut egui::Ui,
+    s: &SessionView,
+    groups: &[std::ops::Range<usize>],
+    range: std::ops::Range<usize>,
+) {
+    let mut i = range.start;
+    while i < range.end {
+        if let Some(g) = groups.iter().find(|g| g.start == i) {
+            let calls: Vec<&ToolCall> = s.items[g.clone()]
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Tool(id) => s.tool_calls.get(id),
+                    _ => None,
+                })
+                .collect();
+            tool_group(
+                ui,
+                ctx.sid,
+                g.start,
+                &calls,
+                ctx.running,
+                ctx.cwd,
+                ctx.open_groups,
+                ctx.diff_open,
+                ctx.ops,
+            );
+            i = g.end;
+            continue;
+        }
+        match &s.items[i] {
+            Item::User { text, message_id } => {
+                let images = user_message(ui, text, message_id.as_deref(), !ctx.running, ctx.ops);
+                if !images.is_empty() {
+                    attachment_rows(
+                        ui,
+                        ctx.sid,
+                        i,
+                        message_id.as_deref(),
+                        &images,
+                        ctx.open_groups,
+                    );
+                }
+            }
+            Item::Agent { text, .. } => {
+                let blocks = crate::markdown::parse_cached(text);
+                let top = ui.cursor().top();
+                let mut rctx = RenderCtx::new(ctx.ui_events, ctx.form_values, ctx.sid)
+                    .with_scripts(ctx.scripts);
+                crate::render::render_blocks(ui, &blocks, i, &mut rctx);
+                agent_actions(ui, top, text);
+            }
+            Item::Thought { text, message_id } => {
+                let streaming = ctx.running && i + 1 == s.items.len();
+                thought_row(
+                    ui,
+                    ctx.sid,
+                    i,
+                    message_id.as_deref(),
+                    text,
+                    streaming,
+                    ctx.open_groups,
+                );
+            }
+            Item::Plan => {
+                if !ctx.plan.is_empty() {
+                    inline_plan(ui, ctx.sid, ctx.plan, ctx.compact_plan, ctx.open_groups);
+                }
+            }
+            Item::Tool(_) => {} // drawn through its group above
+        }
+        i += 1;
+    }
+}
+
+/// Flip one `open_groups` entry: present means expanded.
+fn toggle_key(set: &mut HashSet<String>, key: String) {
+    if !set.remove(&key) {
+        set.insert(key);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fold-state keys: bound to content identity, not transcript position
+// ---------------------------------------------------------------------------
+
+/// Key of a tool group's fold state: the group's FIRST call id. Item
+/// indices are positions in the transcript — after a rewind a later run
+/// can occupy them with different content, and an index key would hand
+/// a stale fold state to whatever ends up there (review N2). A group
+/// without a single call cannot occur in practice; its position stays
+/// as the fallback, like `round_key` does without a message id.
+pub(crate) fn tool_group_key(owner: &str, start: usize, calls: &[&ToolCall]) -> String {
+    match calls.first() {
+        Some(call) => format!("{owner}#grp#{}", call.tool_call_id),
+        None => format!("{owner}#grp@{start}"),
+    }
+}
+
+/// Key of one thought row's fold state: the thought's message id when Vibe
+/// sent one, the item index as the fallback otherwise.
+pub(crate) fn thought_key(sid: &str, message_id: Option<&str>, index: usize) -> String {
+    match message_id {
+        Some(id) => format!("{sid}#thought#{id}"),
+        None => format!("{sid}#thought@{index}"),
+    }
+}
+
+/// Key of one attachment row's fold state: the message's id (the index as
+/// the fallback) plus the image's slot inside that message.
+pub(crate) fn attachment_key(
+    sid: &str,
+    message_id: Option<&str>,
+    index: usize,
+    n: usize,
+) -> String {
+    match message_id {
+        Some(id) => format!("{sid}#img#{id}#{n}"),
+        None => format!("{sid}#img@{index}#{n}"),
+    }
+}
+
+/// Scroll id of a tool's output box: the owning view, the tool call's id
+/// and the box's slot — never the content. A content-derived key (its
+/// length) made two equally long outputs share one scroll state, and a
+/// streamed output got a new one per chunk, jumping the box to the top
+/// (review N16).
+pub(crate) fn output_scroll_id(owner: &str, call_id: &str, slot: usize) -> egui::Id {
+    egui::Id::new((owner, "tool_output", call_id, slot))
+}
+
+/// The one line that stands for a folded round: the user message shortened
+/// plus how many tool calls it took. Clicking expands or folds it again.
+/// Returns true on click.
+fn round_summary(ui: &mut egui::Ui, items: &[Item], round: &Round, expanded: bool) -> bool {
+    let title = items
+        .get(round.range.start)
+        .and_then(|i| match i {
+            Item::User { text, .. } => {
+                let visible = crate::harness::without_image_blocks(text);
+                Some(crate::harness::without_ui_hint(&visible).trim().to_string())
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    let mut label = if title.is_empty() {
+        tr("Round").to_string()
+    } else {
+        trf("“{title}”", &[("title", &shorten(&title, 90))])
+    };
+    if round.tool_calls > 0 {
+        label.push_str(&trf(" · {n} tool calls", &[("n", &round.tool_calls)]));
+    }
+    // a quiet card (fill + 1 px edge + accent strip), so a folded round
+    // reads as something to open at first glance, not as plain text
+    ui.add_space(2.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+    let fill = if resp.hovered() {
+        theme::RAISED
+    } else {
+        theme::HOVER
+    };
+    ui.painter()
+        .rect(rect, 3.0, fill, Stroke::new(1.0_f32, theme::BORDER_SOFT));
+    ui.painter().rect_filled(
+        Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+        egui::Rounding {
+            nw: 3.0,
+            sw: 3.0,
+            ne: 0.0,
+            se: 0.0,
+        },
+        theme::ORANGE_DIM,
+    );
+    icons::paint(
+        ui.painter(),
+        Icon::Rewind,
+        pos2(rect.left() + 12.0, rect.center().y - 7.0),
+        2.0,
+        theme::DIM,
+    );
+    let color = if resp.hovered() {
+        theme::TEXT
+    } else {
+        theme::MUTED
+    };
+    let g = line_galley(ui, &label, widgets::font(13.5), color, rect.width() - 70.0);
+    let r = paint_line(ui, rect.left() + 30.0, rect.center().y, g);
+    chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), expanded);
+    ui.add_space(6.0);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if expanded {
+            tr("Fold round")
+        } else {
+            tr("Unfold round")
+        })
+        .clicked()
+}
+
+/// `text` shortened to at most `max` characters, with an ellipsis.
+fn shorten(text: &str, max: usize) -> String {
+    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= max {
+        return one_line;
+    }
+    let mut out: String = one_line.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+// ---------------------------------------------------------------------------
+// messages
+// ---------------------------------------------------------------------------
+
+/// The user's bubble, right-aligned, with copy / rewind / fork on hover.
+/// Vibe's `<image>` description blocks (what the describer made of an
+/// attached image, meant for the model) never become bubble text: they are
+/// returned for `attachment_rows` to draw as collapsible rows instead.
+fn user_message(
+    ui: &mut egui::Ui,
+    text: &str,
+    message_id: Option<&str>,
+    idle: bool,
+    ops: &mut Vec<MessageOp>,
+) -> Vec<crate::harness::ImageBlock> {
+    let raw = crate::harness::without_ui_hint(text).trim();
+    let (visible, images) = crate::harness::split_image_blocks(raw);
+    if !visible.is_empty() {
+        let font = widgets::font(14.5);
+        let max_text = (ui.available_width() * 0.82 - 24.0).clamp(80.0, 620.0);
+        let galley = ui.fonts(|f| f.layout(visible.to_string(), font, theme::TEXT, max_text));
+        let size = galley.size() + vec2(24.0, 16.0);
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), size.y), Sense::hover());
+        let bubble = Rect::from_min_size(pos2(row.right() - size.x, row.top()), size);
+        ui.painter().rect_filled(bubble, 6.0, theme::RAISED);
+        widgets::place(
+            ui,
+            bubble.shrink2(vec2(12.0, 8.0)),
+            egui::Label::new(galley).selectable(true),
+        );
+        ui.add_space(2.0);
+        if ui.rect_contains_pointer(row) {
+            // the actions sit left of the bubble, so they cost no vertical space
+            let mut x = bubble.left() - 4.0;
+            let y = bubble.top() + 1.0;
+            let mut place = |ui: &mut egui::Ui, icon: Icon, tip: &str| {
+                x -= 24.0;
+                let r = Rect::from_min_size(pos2(x, y), vec2(22.0, 22.0));
+                widgets::place(ui, r, IconButton::new(icon, tip).side(22.0)).clicked()
+            };
+            if place(ui, Icon::Copy, tr("Copy")) {
+                ui.ctx().copy_text(visible.to_string());
+            }
+            if let (Some(id), true) = (message_id, idle) {
+                if place(ui, Icon::Rewind, tr("Rewind to here")) {
+                    ops.push(MessageOp::Rewind(id.to_string()));
+                }
+                if place(ui, Icon::Fork, tr("Fork after this round")) {
+                    ops.push(MessageOp::Fork(id.to_string()));
+                }
+            }
+        }
+    }
+    images
+}
+
+/// One collapsible row per attached image: the alias as the label, Vibe's
+/// description of the picture (what the model sees) behind the chevron.
+fn attachment_rows(
+    ui: &mut egui::Ui,
+    sid: &str,
+    index: usize,
+    message_id: Option<&str>,
+    images: &[crate::harness::ImageBlock],
+    open_groups: &mut HashSet<String>,
+) {
+    for (n, img) in images.iter().enumerate() {
+        let key = attachment_key(sid, message_id, index, n);
+        let id = egui::Id::new(key.as_str());
+        let open = open_groups.contains(&key);
+        let label = trf("Image: {file}", &[("file", &img.alias)]);
+        if collapsible_row(ui, Icon::File, &label, open, theme::MUTED) {
+            toggle_key(open_groups, key);
+        }
+        if open {
+            indented(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt(id)
+                    .max_height(200.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(
+                            RichText::new(img.description.as_str())
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::MUTED),
+                        ));
+                    });
+            });
+        }
+        ui.add_space(2.0);
+    }
+}
+
+/// Copy button in the top right corner of an agent answer while hovered.
+fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str) {
+    let bottom = ui.cursor().top();
+    let right = ui.max_rect().right();
+    let body = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(right, bottom));
+    if ui.rect_contains_pointer(body) {
+        let r = Rect::from_min_size(pos2(right - 22.0, top), vec2(22.0, 22.0));
+        if widgets::place(
+            ui,
+            r,
+            IconButton::new(Icon::Copy, tr("Copy answer"))
+                .side(22.0)
+                .fill(theme::BG),
+        )
+        .clicked()
+        {
+            ui.ctx().copy_text(text.to_string());
+        }
+    }
+}
+
+fn thought_row(
+    ui: &mut egui::Ui,
+    sid: &str,
+    index: usize,
+    message_id: Option<&str>,
+    text: &str,
+    streaming: bool,
+    open_groups: &mut HashSet<String>,
+) {
+    let key = thought_key(sid, message_id, index);
+    let open = open_groups.contains(&key);
+    if collapsible_row(
+        ui,
+        Icon::Spark,
+        if streaming {
+            tr("Thinking …")
+        } else {
+            tr("Thoughts")
+        },
+        open,
+        theme::DIM,
+    ) {
+        if open {
+            open_groups.remove(&key);
+        } else {
+            open_groups.insert(key);
+        }
+    }
+    if open {
+        indented(ui, |ui| {
+            ui.label(RichText::new(text).color(theme::DIM).italics().size(13.5));
+        });
+    }
+    ui.add_space(4.0);
+}
+
+/// A quiet row with icon, label and chevron. Returns true on click.
+fn collapsible_row(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    open: bool,
+    color: egui::Color32,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, 3.0, theme::HOVER);
+    }
+    icons::paint(
+        ui.painter(),
+        icon,
+        pos2(rect.left() + 4.0, rect.center().y - 7.0),
+        2.0,
+        color,
+    );
+    let g = line_galley(ui, label, widgets::font(13.5), color, rect.width() - 50.0);
+    let r = paint_line(ui, rect.left() + 26.0, rect.center().y, g);
+    chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), open);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+}
+
+fn chevron(ui: &egui::Ui, pos: egui::Pos2, open: bool) {
+    let icon = if open {
+        Icon::ChevronDown
+    } else {
+        Icon::ChevronRight
+    };
+    icons::paint(ui.painter(), icon, pos, 1.0, theme::DIM);
+}
+
+/// Content indented under a row, with a guide line on the left.
+fn indented<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let out = egui::Frame::none()
+        .inner_margin(egui::Margin {
+            left: 14.0,
+            right: 0.0,
+            top: 2.0,
+            bottom: 2.0,
+        })
+        .show(ui, add);
+    let r = out.response.rect;
+    ui.painter().vline(
+        r.left() + 6.0,
+        r.y_range(),
+        Stroke::new(1.0_f32, theme::BORDER_SOFT),
+    );
+    out.inner
+}
+
+// ---------------------------------------------------------------------------
+// plan
+// ---------------------------------------------------------------------------
+
+/// Pixel checkbox of a plan entry.
+fn plan_check(ui: &egui::Ui, origin: egui::Pos2, status: &PlanStatus) {
+    let rect = Rect::from_min_size(origin, vec2(11.0, 11.0));
+    match status {
+        PlanStatus::Completed => {
+            ui.painter().rect_filled(rect, 0.0, theme::GREEN);
+            icons::paint(
+                ui.painter(),
+                Icon::Check,
+                origin + vec2(2.0, 2.0),
+                1.0,
+                theme::CARD,
+            );
+        }
+        PlanStatus::InProgress => {
+            ui.painter()
+                .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, theme::YELLOW));
+            ui.painter()
+                .rect_filled(rect.shrink(3.0), 0.0, theme::YELLOW);
+        }
+        _ => {
+            ui.painter()
+                .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, theme::DIM));
+        }
+    }
+}
+
+/// The plan's checklist rows (shared with the right panel).
+pub(super) fn plan_rows(ui: &mut egui::Ui, plan: &[PlanEntry], size: f32) {
+    for e in plan {
+        ui.horizontal_top(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(13.0, size + 4.0), Sense::hover());
+            plan_check(ui, rect.min + vec2(0.0, 3.0), &e.status);
+            let color = match e.status {
+                PlanStatus::Completed => theme::DIM,
+                PlanStatus::InProgress => theme::TEXT,
+                _ => theme::MUTED,
+            };
+            ui.add(egui::Label::new(RichText::new(&e.content).size(size).color(color)).wrap());
+        });
+    }
+}
+
+/// `(done, total)` of a plan.
+pub(super) fn plan_progress(plan: &[PlanEntry]) -> (usize, usize) {
+    let done = plan
+        .iter()
+        .filter(|e| e.status == PlanStatus::Completed)
+        .count();
+    (done, plan.len())
+}
+
+/// The plan's place in the conversation: the full card, or one line when
+/// the right panel already shows the checklist.
+fn inline_plan(
+    ui: &mut egui::Ui,
+    sid: &str,
+    plan: &[PlanEntry],
+    compact: bool,
+    open_groups: &mut HashSet<String>,
+) {
+    if !compact {
+        plan_card(ui, plan);
+        ui.add_space(10.0);
+        return;
+    }
+    let (done, total) = plan_progress(plan);
+    let key = format!("{sid}#plan");
+    let open = open_groups.contains(&key);
+    let label = match plan.iter().find(|e| e.status == PlanStatus::InProgress) {
+        Some(e) => format!("{} {done}/{total} · {}", tr("Plan"), e.content),
+        None => format!("{} {done}/{total}", tr("Plan")),
+    };
+    if collapsible_row(ui, Icon::List, &label, open, theme::MUTED) {
+        if open {
+            open_groups.remove(&key);
+        } else {
+            open_groups.insert(key);
+        }
+    }
+    if open {
+        indented(ui, |ui| plan_rows(ui, plan, 14.0));
+    }
+    ui.add_space(6.0);
+}
+
+fn plan_card(ui: &mut egui::Ui, plan: &[PlanEntry]) {
+    widgets::card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let (done, total) = plan_progress(plan);
+        ui.horizontal(|ui| {
+            theme::section_header(ui, "Plan", done < total);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(theme::mono_tag(&format!("{done}/{total}"), theme::DIM));
+            });
+        });
+        ui.add_space(4.0);
+        plan_rows(ui, plan, 14.0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// tools and diffs
+// ---------------------------------------------------------------------------
+
+fn kind_icon(call: &ToolCall) -> Icon {
+    match call.kind {
+        ToolKind::Read => Icon::Eye,
+        ToolKind::Edit => Icon::Pencil,
+        ToolKind::Delete => Icon::Trash,
+        ToolKind::Move => Icon::File,
+        ToolKind::Search => Icon::Search,
+        ToolKind::Execute => Icon::Terminal,
+        ToolKind::Think => Icon::Spark,
+        ToolKind::Fetch => Icon::Globe,
+        ToolKind::SwitchMode => Icon::Shield,
+        ToolKind::Other => Icon::Dots,
+    }
+}
+
+/// One file's diffs inside a tool group.
+struct DiffFile<'a> {
+    path: &'a str,
+    call_id: &'a str,
+    parts: Vec<(Option<&'a str>, &'a str)>,
+    added: usize,
+    removed: usize,
+}
+
+fn group_diffs<'a>(calls: &[&'a ToolCall]) -> Vec<DiffFile<'a>> {
+    let mut out: Vec<DiffFile<'a>> = Vec::new();
+    for call in calls {
+        if call.status == ToolStatus::Failed {
+            continue;
+        }
+        for content in &call.content {
+            let ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } = content
+            else {
+                continue;
+            };
+            let stat = diff_stat_cached(old_text.as_deref(), new_text);
+            let part = (old_text.as_deref(), new_text.as_str());
+            match out.iter_mut().find(|f| f.path == path) {
+                Some(f) => {
+                    f.parts.push(part);
+                    f.added += stat.added;
+                    f.removed += stat.removed;
+                }
+                None => out.push(DiffFile {
+                    path,
+                    call_id: &call.tool_call_id,
+                    parts: vec![part],
+                    added: stat.added,
+                    removed: stat.removed,
+                }),
+            }
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tool_group(
+    ui: &mut egui::Ui,
+    owner: &str,
+    start: usize,
+    calls: &[&ToolCall],
+    running: bool,
+    cwd: &Path,
+    open_groups: &mut HashSet<String>,
+    diff_open: &mut HashSet<String>,
+    ops: &mut Vec<MessageOp>,
+) {
+    let active = calls
+        .iter()
+        .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending));
+    let busy = running && active.is_some();
+    let failed = calls.iter().any(|c| c.status == ToolStatus::Failed);
+    let key = tool_group_key(owner, start, calls);
+    let open = open_groups.contains(&key);
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, 3.0, theme::HOVER);
+    }
+    let marker = pos2(rect.left() + 5.0, rect.center().y - 4.0);
+    if busy {
+        widgets::paint_busy(ui, marker + vec2(0.0, 2.0), 3.0);
+    } else {
+        let color = if failed { theme::RED } else { theme::GREEN };
+        ui.painter()
+            .rect_filled(Rect::from_min_size(marker, vec2(8.0, 8.0)), 0.0, color);
+    }
+    let summary = match active.filter(|_| busy) {
+        Some(c) => c.title.clone(),
+        None => tool_group_summary(calls),
+    };
+    let color = if resp.hovered() {
+        theme::TEXT
+    } else {
+        theme::MUTED
+    };
+    let g = line_galley(
+        ui,
+        &summary,
+        widgets::font(13.5),
+        color,
+        rect.width() - 60.0,
+    );
+    let r = paint_line(ui, rect.left() + 22.0, rect.center().y, g);
+    chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), open);
+    if failed {
+        ui.painter().galley(
+            pos2(rect.right() - 62.0, rect.center().y - 7.0),
+            line_galley(ui, tr("ERROR"), mono(10.5), theme::RED_TEXT, 60.0),
+            theme::RED_TEXT,
+        );
+    }
+    let clicked = resp
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked();
+    if clicked {
+        if open {
+            open_groups.remove(&key);
+        } else {
+            open_groups.insert(key.clone());
+        }
+    }
+    if open {
+        indented(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for call in calls {
+                tool_row(ui, owner, call, open_groups, ops);
+            }
+        });
+    }
+    for file in group_diffs(calls) {
+        diff_chip(ui, owner, cwd, &file, diff_open);
+    }
+    ui.add_space(8.0);
+}
+
+fn tool_row(
+    ui: &mut egui::Ui,
+    owner: &str,
+    call: &ToolCall,
+    open_groups: &mut HashSet<String>,
+    ops: &mut Vec<MessageOp>,
+) {
+    let output: Vec<&str> = call
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            ToolCallContent::Content { content } => content.as_text(),
+            _ => None,
+        })
+        .collect();
+    let key = format!("{owner}#tool#{}", call.tool_call_id);
+    let open = open_groups.contains(&key);
+    let has_output = output.iter().any(|t| !t.trim().is_empty());
+    let (rect, resp) = ui.allocate_exact_size(
+        vec2(ui.available_width(), 24.0),
+        if has_output {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    if has_output && resp.hovered() {
+        ui.painter().rect_filled(rect, 3.0, theme::HOVER);
+    }
+    let square = Rect::from_min_size(
+        pos2(rect.left() + 4.0, rect.center().y - 3.0),
+        vec2(6.0, 6.0),
+    );
+    let color = theme::status_color(&call.status);
+    if call.status == ToolStatus::Pending {
+        ui.painter()
+            .rect_stroke(square, 0.0, Stroke::new(1.0_f32, color));
+    } else {
+        ui.painter().rect_filled(square, 0.0, color);
+    }
+    icons::paint(
+        ui.painter(),
+        kind_icon(call),
+        pos2(rect.left() + 16.0, rect.center().y - 3.5),
+        1.0,
+        theme::DIM,
+    );
+    let file = call
+        .locations
+        .first()
+        .map(|l| l.path.clone())
+        .filter(|_| call.kind != ToolKind::Fetch);
+    let g = line_galley(
+        ui,
+        &call.title,
+        mono(12.5),
+        theme::MUTED,
+        rect.width() - if file.is_some() { 78.0 } else { 54.0 },
+    );
+    let r = paint_line(ui, rect.left() + 30.0, rect.center().y, g);
+    if let Some(path) = file {
+        // clickable path (Handoff Ideenliste 5): the file opens in the
+        // Artefakte preview
+        let btn = Rect::from_min_size(
+            pos2(rect.right() - 26.0, rect.center().y - 11.0),
+            vec2(22.0, 22.0),
+        );
+        if widgets::place(
+            ui,
+            btn,
+            IconButton::new(Icon::File, tr("Open file in Artifacts")).side(22.0),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+        {
+            ops.push(MessageOp::OpenFile(path));
+        }
+    }
+    if has_output {
+        chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), open);
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp.clicked() {
+            if open {
+                open_groups.remove(&key);
+            } else {
+                open_groups.insert(key);
+            }
+        }
+    }
+    if open && has_output {
+        output_box(
+            ui,
+            output_scroll_id(owner, &call.tool_call_id, 0),
+            &output.join("\n"),
+        );
+    }
+}
+
+/// A tool's text output in a scrollable mono box with a copy button.
+fn output_box(ui: &mut egui::Ui, id: egui::Id, text: &str) {
+    const MAX_LINES: usize = 400;
+    egui::Frame::none()
+        .fill(theme::CARD)
+        .rounding(egui::Rounding::same(3.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+        .outer_margin(egui::Margin {
+            left: 28.0,
+            right: 0.0,
+            top: 2.0,
+            bottom: 4.0,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(theme::mono_label(tr("Output")));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(IconButton::new(Icon::Copy, tr("Copy output")).side(20.0))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(text.to_string());
+                    }
+                });
+            });
+            let total = text.lines().count();
+            let shown: String = text.lines().take(MAX_LINES).collect::<Vec<_>>().join("\n");
+            // both directions: tool output is terminal text, so long lines
+            // keep their length and scroll instead of wrapping (cell wrap
+            // stays possible for tables, which can fit the width). The id
+            // is identity-based, so a streamed output keeps its scroll
+            // position chunk by chunk.
+            egui::ScrollArea::both()
+                .id_salt(id)
+                .max_height(260.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(shown)
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::MUTED),
+                        )
+                        .extend(),
+                    );
+                    if total > MAX_LINES {
+                        ui.label(
+                            RichText::new(trf("… {n} more lines", &[("n", &(total - MAX_LINES))]))
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::DIM),
+                        );
+                    }
+                });
+        });
+}
+
+/// One edited file: path, `+a −r`, and the diff when expanded.
+fn diff_chip(
+    ui: &mut egui::Ui,
+    owner: &str,
+    cwd: &Path,
+    file: &DiffFile,
+    diff_open: &mut HashSet<String>,
+) {
+    let key = format!("{owner}#{}::{}", file.call_id, file.path);
+    let open = diff_open.contains(&key);
+    let rel = relative_path(file.path, cwd);
+    ui.add_space(3.0);
+    egui::Frame::none()
+        .fill(theme::CARD)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let (rect, resp) =
+                ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, 4.0, theme::HOVER);
+            }
+            icons::paint(
+                ui.painter(),
+                Icon::File,
+                pos2(rect.left() + 9.0, rect.center().y - 7.0),
+                2.0,
+                theme::DIM,
+            );
+            let stats = stat_galleys(ui, file.added, file.removed);
+            let stats_w = stats.iter().map(|g| g.size().x).sum::<f32>() + 8.0;
+            let mut right = rect.right() - 26.0;
+            let g = line_galley(
+                ui,
+                &rel,
+                mono(12.5),
+                theme::TEXT,
+                right - stats_w - rect.left() - 40.0,
+            );
+            paint_line(ui, rect.left() + 28.0, rect.center().y, g);
+            for s in stats.into_iter().rev() {
+                right -= s.size().x;
+                paint_line(ui, right, rect.center().y, s);
+                right -= 6.0;
+            }
+            chevron(ui, pos2(rect.right() - 16.0, rect.center().y - 3.5), open);
+            let resp = resp
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(file.path);
+            if resp.clicked() {
+                if open {
+                    diff_open.remove(&key);
+                } else {
+                    diff_open.insert(key.clone());
+                }
+            }
+            if open {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, (old, new)) in file.parts.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(6.0);
+                    }
+                    diff_body(ui, *old, new, 400);
+                }
+                ui.add_space(4.0);
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
+// changes per turn
+// ---------------------------------------------------------------------------
+
+/// The files a turn changed, drawn under the round that turn belongs to
+/// (`_review/state` `scopes[]`). A click on a file loads its turn diff
+/// (`_review/turnDiff`) and shows it through `diff_body`. Borrows only —
+/// the transcript redraws every frame and must not copy per-frame data.
+struct TurnChanges<'a> {
+    cwd: &'a Path,
+    /// Undecided files: an unassigned path shows even when its scope is
+    /// gone, so no open change is lost from the transcript.
+    review: &'a [extras::ReviewFile],
+    scopes: &'a [extras::ReviewScope],
+    diffs: &'a TurnDiffs,
+    /// turnId -> round of the transcript on screen.
+    round_of: &'a HashMap<&'a str, &'a Round>,
+    ops: &'a mut Vec<MessageOp>,
+}
+
+impl TurnChanges<'_> {
+    /// The files of the round started by `turn_id` (nothing when Vibe
+    /// reported no changes for it).
+    fn round_files(&mut self, ui: &mut egui::Ui, turn_id: &str) {
+        let files: Vec<&str> = self
+            .scopes
+            .iter()
+            .filter(|s| s.turn_id.as_deref() == Some(turn_id))
+            .flat_map(|s| s.files.iter().map(String::as_str))
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        indented(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for path in files {
+                self.file_row(ui, Some(turn_id), path);
+            }
+        });
+    }
+
+    /// Changes Vibe cannot tie to a round on screen: a rewind cut their
+    /// round, or the session was loaded without a transcript for them.
+    /// Shown at the end of the transcript instead of being dropped.
+    fn unassigned_files(&mut self, ui: &mut egui::Ui) {
+        let mut orphans: Vec<&str> = Vec::new();
+        for scope in self.scopes {
+            let known = scope
+                .turn_id
+                .as_deref()
+                .is_some_and(|id| self.round_of.contains_key(id));
+            if known {
+                continue;
+            }
+            for path in &scope.files {
+                if !orphans.contains(&path.as_str()) {
+                    orphans.push(path);
+                }
+            }
+        }
+        // a scope-less state (older Vibe, a loaded session) still lists its
+        // open files: they stay reachable, without a round
+        for f in self.review {
+            if !orphans.contains(&f.path.as_str()) {
+                orphans.push(&f.path);
+            }
+        }
+        if orphans.is_empty() {
+            return;
+        }
+        ui.add_space(6.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+        let g = line_galley(
+            ui,
+            tr("Changes without a round"),
+            widgets::font(12.5),
+            theme::DIM,
+            rect.width(),
+        );
+        paint_line(ui, rect.left() + 4.0, rect.center().y, g);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for path in orphans {
+            self.file_row(ui, None, path);
+        }
+        ui.add_space(4.0);
+    }
+
+    /// One changed file: name, status badge, `+a −r`; a click expands the
+    /// turn diff. Without a `turn_id` (no round) the row only opens the
+    /// file's folder.
+    fn file_row(&mut self, ui: &mut egui::Ui, turn_id: Option<&str>, path: &str) {
+        let rel = relative_path(path, self.cwd);
+        let open = self.review.iter().find(|f| f.path == path);
+        let view = turn_id.and_then(|id| self.diffs.get(id, path));
+        let expanded = view.is_some_and(|v| *v != TurnDiffView::Loading);
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, 3.0, theme::HOVER);
+        }
+        let mut right = rect.right() - 22.0;
+        if let Some(TurnDiffView::Loaded(d)) = view {
+            let stat = diff_stat_cached(d.baseline.as_deref(), d.current.as_deref().unwrap_or(""));
+            for g in stat_galleys(ui, stat.added, stat.removed).into_iter().rev() {
+                right -= g.size().x;
+                paint_line(ui, right, rect.center().y, g);
+                right -= 6.0;
+            }
+        }
+        let mut x = rect.left() + 4.0;
+        if let Some(f) = open {
+            let g = line_galley(
+                ui,
+                extras::review_status_label(&f.status),
+                mono(9.5),
+                theme::AMBER,
+                80.0,
+            );
+            x = paint_line(ui, x, rect.center().y, g).right() + 8.0;
+        }
+        let g = line_galley(ui, &rel, mono(12.0), theme::TEXT, right - x - 4.0);
+        paint_line(ui, x, rect.center().y, g);
+        if turn_id.is_some() {
+            chevron(
+                ui,
+                pos2(rect.right() - 16.0, rect.center().y - 3.5),
+                expanded,
+            );
+        }
+        let resp = resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(path);
+        if resp.clicked() {
+            match turn_id {
+                Some(id) => self.ops.push(MessageOp::TurnDiff {
+                    turn_id: id.to_string(),
+                    path: path.to_string(),
+                }),
+                None => open_folder_of(path),
+            }
+        }
+        match view {
+            Some(TurnDiffView::Loading) => {
+                indented(ui, |ui| {
+                    ui.label(
+                        RichText::new(tr("Loading diff …"))
+                            .size(12.0)
+                            .color(theme::DIM),
+                    );
+                });
+            }
+            Some(TurnDiffView::Failed(note)) => {
+                indented(ui, |ui| {
+                    ui.label(RichText::new(note).size(12.0).color(theme::RED_TEXT));
+                });
+            }
+            Some(TurnDiffView::Loaded(d)) if expanded => {
+                indented(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    diff_body(
+                        ui,
+                        d.baseline.as_deref(),
+                        d.current.as_deref().unwrap_or(""),
+                        400,
+                    );
+                    ui.add_space(4.0);
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+fn stat_galleys(ui: &egui::Ui, added: usize, removed: usize) -> Vec<std::sync::Arc<egui::Galley>> {
+    let mut out = Vec::new();
+    if added > 0 || removed == 0 {
+        out.push(line_galley(
+            ui,
+            &format!("+{added}"),
+            mono(12.0),
+            theme::GREEN,
+            70.0,
+        ));
+    }
+    if removed > 0 {
+        out.push(line_galley(
+            ui,
+            &format!("−{removed}"),
+            mono(12.0),
+            theme::RED_TEXT,
+            70.0,
+        ));
+    }
+    out
+}
+
+/// The real line diff of one text pair, folded to the changed hunks.
+pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_rows: usize) {
+    let segments = diff::folded_cached(old, new);
+    let total = segments.len();
+    for seg in segments.iter().take(max_rows) {
+        match seg {
+            Segment::Skipped(n) => {
+                let n = *n;
+                let (rect, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+                let text = if n == 1 {
+                    tr("··· 1 unchanged line").to_string()
+                } else {
+                    trf("··· {n} unchanged lines", &[("n", &n)])
+                };
+                let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
+                paint_line(ui, rect.left() + 26.0, rect.center().y, g);
+            }
+            Segment::Line(line) => diff_line(ui, line.kind, &line.text),
+        }
+    }
+    if total > max_rows {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        let g = line_galley(
+            ui,
+            &trf("… {n} more lines", &[("n", &(total - max_rows))]),
+            mono(11.0),
+            theme::DIM,
+            rect.width(),
+        );
+        paint_line(ui, rect.left() + 26.0, rect.center().y, g);
+    }
+}
+
+fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
+    let (bg, sign, color) = match kind {
+        LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
+        LineKind::Removed => (Some(theme::DIFF_DEL_BG), "−", theme::TEXT),
+        LineKind::Same => (None, " ", theme::DIM),
+    };
+    let width = ui.available_width();
+    let galley = ui.fonts(|f| {
+        f.layout(
+            text.to_string(),
+            mono(12.0),
+            color,
+            (width - 34.0).max(40.0),
+        )
+    });
+    let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y.max(17.0)), Sense::hover());
+    if let Some(bg) = bg {
+        ui.painter().rect_filled(rect, 0.0, bg);
+    }
+    let sign_color = match kind {
+        LineKind::Added => theme::GREEN,
+        LineKind::Removed => theme::RED_TEXT,
+        LineKind::Same => theme::DIM,
+    };
+    let g = line_galley(ui, sign, mono(12.0), sign_color, 12.0);
+    ui.painter()
+        .galley(rect.left_top() + vec2(12.0, 0.0), g, sign_color);
+    ui.painter()
+        .galley(rect.left_top() + vec2(26.0, 0.0), galley, color);
+}
+
+// ---------------------------------------------------------------------------
+// turn state
+// ---------------------------------------------------------------------------
+
+fn busy_row(
+    ui: &mut egui::Ui,
+    s: &SessionView,
+    elapsed: Option<u64>,
+    retry: Option<&String>,
+    waiting_user: bool,
+) {
+    ui.horizontal(|ui| {
+        let time = ui.input(|i| i.time);
+        theme::pixel_cat(ui, time, !waiting_user, 2.0);
+        ui.add_space(4.0);
+        let cancelling = s.turn == TurnState::Cancelling;
+        let label = if cancelling {
+            tr("Cancelling …")
+        } else if waiting_user {
+            tr("Waiting for you")
+        } else {
+            tr("Working")
+        };
+        ui.label(RichText::new(label).size(13.5).color(theme::MUTED));
+        if let Some(secs) = elapsed {
+            ui.label(
+                RichText::new(extras::elapsed_label(secs))
+                    .monospace()
+                    .size(12.0)
+                    .color(theme::DIM),
+            );
+        }
+        if let Some(note) = retry {
+            ui.label(RichText::new(note).size(12.5).color(theme::YELLOW));
+        }
+        if !cancelling {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(theme::mono_tag(tr("Esc = Cancel"), theme::DIM));
+            });
+        }
+    });
+}
+
+/// Stop reason and duration after the turn.
+fn turn_footer(ui: &mut egui::Ui, s: &SessionView, secs: Option<u64>, ops: &mut Vec<MessageOp>) {
+    let note = s.last_stop_reason.as_ref().and_then(stop_reason_note);
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(secs) = secs {
+        parts.push(trf(
+            "Done in {time}",
+            &[("time", &extras::elapsed_label(secs))],
+        ));
+    }
+    if let Some(t) = &s.last_turn_usage {
+        parts.push(format!(
+            "↑ {} ↓ {}",
+            crate::harness::format_tokens(t.input_tokens),
+            crate::harness::format_tokens(t.output_tokens)
+        ));
+    }
+    if parts.is_empty() && note.is_none() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        if let Some(note) = note {
+            ui.label(theme::mono_tag(note, theme::AMBER));
+        }
+        if !parts.is_empty() {
+            ui.label(theme::mono_tag(&parts.join(" · "), theme::DIM));
+        }
+        // Vibe's own retry (a failed turn can be repeated without
+        // retyping the message)
+        if widgets::button(ui, tr("Try again"), widgets::ButtonKind::Secondary).clicked() {
+            ops.push(MessageOp::Retry);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::protocol::PlanPriority;
+
+    fn call(id: &str) -> ToolCall {
+        serde_json::from_value(serde_json::json!({ "toolCallId": id })).unwrap()
+    }
+
+    /// N2: fold keys bind to content identity (message/tool-call ids),
+    /// with the position only as the fallback — after a rewind a later
+    /// run occupies the old indices with different content, and an
+    /// index key would hand a stale fold state to whatever ends up
+    /// there. N16: a tool output's scroll id is content-independent,
+    /// so streamed output keeps its scroll position chunk by chunk.
+    #[test]
+    fn fold_and_scroll_keys_bind_to_identity_not_position() {
+        let t1 = call("t1");
+        let t2 = call("t2");
+        // tool group: the first call's id names the group
+        assert_eq!(tool_group_key("s", 4, &[&t1]), "s#grp#t1");
+        assert_eq!(
+            tool_group_key("s", 9, &[&t1]),
+            tool_group_key("s", 4, &[&t1]),
+            "the item index does not participate"
+        );
+        assert_ne!(
+            tool_group_key("s", 4, &[&t1]),
+            tool_group_key("s", 4, &[&t2])
+        );
+        assert_ne!(
+            tool_group_key("s", 4, &[&t1]),
+            tool_group_key("other", 4, &[&t1])
+        );
+        // a group without a single call falls back to its position
+        assert_eq!(tool_group_key("s", 4, &[]), "s#grp@4");
+        // thought: the message id wins, the position is the fallback
+        assert_eq!(thought_key("s", Some("m7"), 3), "s#thought#m7");
+        assert_eq!(thought_key("s", None, 3), "s#thought@3");
+        assert_ne!(
+            thought_key("s", Some("m7"), 3),
+            thought_key("s", Some("m8"), 3)
+        );
+        // attachments: message id and image slot
+        assert_eq!(attachment_key("s", Some("m7"), 3, 2), "s#img#m7#2");
+        assert_eq!(attachment_key("s", None, 3, 2), "s#img@3#2");
+        assert_ne!(
+            attachment_key("s", Some("m7"), 3, 2),
+            attachment_key("s", None, 3, 2)
+        );
+        // tool output scroll: never the content, but owner, call and slot
+        assert_eq!(
+            output_scroll_id("s", "t1", 0),
+            output_scroll_id("s", "t1", 0)
+        );
+        assert_ne!(
+            output_scroll_id("s", "t1", 0),
+            output_scroll_id("s", "t2", 0)
+        );
+        assert_ne!(
+            output_scroll_id("s", "t1", 0),
+            output_scroll_id("other", "t1", 0)
+        );
+        assert_ne!(
+            output_scroll_id("s", "t1", 0),
+            output_scroll_id("s", "t1", 1)
+        );
+    }
+
+    /// egui 0.29 pulls a stuck-to-the-end ScrollArea back down after a
+    /// programmatic offset unless sticking is off for that frame. This runs
+    /// the transcript's scroll setup headless: a jump up from the end must
+    /// stay, and later frames (sticking on again) must not undo it.
+    #[test]
+    fn a_round_jump_from_the_end_stays() {
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(
+                pos2(0.0, 0.0),
+                egui::vec2(400.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let frame = |jump_to: Option<f32>, rows: usize| -> f32 {
+            let mut offset = 0.0;
+            let _ = ctx.run(input(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut area = egui::ScrollArea::vertical()
+                        .id_salt("t")
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(jump_to.is_none());
+                    if let Some(y) = jump_to {
+                        area = area.vertical_scroll_offset(y);
+                    }
+                    offset = area
+                        .show(ui, |ui| {
+                            for i in 0..rows {
+                                ui.label(format!("Zeile {i}"));
+                            }
+                        })
+                        .state
+                        .offset
+                        .y;
+                });
+            });
+            offset
+        };
+        // settle at the end of a long transcript
+        let mut end = 0.0;
+        for _ in 0..3 {
+            end = frame(None, 200);
+        }
+        assert!(end > 1000.0, "stuck to the end: {end}");
+        assert_eq!(frame(Some(500.0), 200), 500.0);
+        // following frames, sticking requested again, new rows arriving
+        for _ in 0..3 {
+            assert_eq!(frame(None, 201), 500.0, "pulled back to the end");
+        }
+    }
+
+    /// Round navigation (Handoff Ideenliste 4): the jump goes to the
+    /// nearest round top above/below the current scroll position, never to
+    /// the round the viewport already shows.
+    #[test]
+    fn round_jump_target_picks_the_nearest_round() {
+        let tops = [100.0, 800.0, 1500.0, 2400.0];
+        // between rounds 1 and 2
+        let max = f32::INFINITY;
+        assert_eq!(round_jump_target(&tops, 900.0, max, true), Some(800.0));
+        assert_eq!(round_jump_target(&tops, 900.0, max, false), Some(1500.0));
+        // right on a round's top: the dead zone keeps it as "current"
+        assert_eq!(round_jump_target(&tops, 800.0, max, true), Some(100.0));
+        assert_eq!(round_jump_target(&tops, 800.0, max, false), Some(1500.0));
+        // at the very top/bottom there is nothing further
+        assert_eq!(round_jump_target(&tops, 50.0, max, true), None);
+        assert_eq!(round_jump_target(&tops, 2500.0, max, false), None);
+        assert_eq!(round_jump_target(&[], 100.0, max, true), None);
+        // at the end (offset 2000 = max): the last round starts inside the
+        // viewport, so there is no next round, and up goes to round 3
+        assert_eq!(round_jump_target(&tops, 2000.0, 2000.0, false), None);
+        assert_eq!(round_jump_target(&tops, 2000.0, 2000.0, true), Some(1500.0));
+    }
+
+    fn entry(status: PlanStatus) -> PlanEntry {
+        PlanEntry {
+            content: "x".to_string(),
+            priority: PlanPriority::High,
+            status,
+        }
+    }
+
+    #[test]
+    fn shorten_collapses_whitespace_and_cuts_long_text() {
+        assert_eq!(shorten("  Hallo\n\nWelt  ", 90), "Hallo Welt");
+        assert_eq!(shorten("abcdef", 4), "abc…");
+        assert_eq!(shorten("abcd", 4), "abcd");
+        assert_eq!(shorten("äöüß", 3), "äö…", "counts characters, not bytes");
+    }
+
+    #[test]
+    fn plan_progress_counts_completed_entries() {
+        let plan = vec![
+            entry(PlanStatus::Completed),
+            entry(PlanStatus::InProgress),
+            entry(PlanStatus::Pending),
+        ];
+        assert_eq!(plan_progress(&plan), (1, 3));
+        assert_eq!(plan_progress(&[]), (0, 0));
+    }
+}
