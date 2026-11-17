@@ -9,7 +9,7 @@ use crate::acp::session::{
     diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
 };
 use crate::diff::{self, LineKind, Segment};
-use crate::harness::state::{TurnDiffView, TurnDiffs};
+use crate::harness::state::{CommentEdit, DiffComment, TurnDiffView, TurnDiffs};
 use crate::harness::{extras, stop_reason_note};
 use crate::i18n::{tr, trf};
 use crate::icons;
@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Actions from message rows, applied after the transcript is drawn.
-enum MessageOp {
+pub(super) enum MessageOp {
     Rewind(String),
     Fork(String),
     /// Vibe's `/retry` for the finished turn.
@@ -31,6 +31,16 @@ enum MessageOp {
     /// Load one file's diff for the turn (`_review/turnDiff`).
     TurnDiff {
         turn_id: String,
+        path: String,
+    },
+    /// Start writing a comment on one diff line.
+    CommentAt {
+        key: String,
+        line: usize,
+    },
+    /// Turn all comments of one diff into a composer draft.
+    SendComments {
+        key: String,
         path: String,
     },
 }
@@ -86,6 +96,22 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             MessageOp::TurnDiff { turn_id, path } => h.load_turn_diff(sid, &turn_id, &path),
             MessageOp::Retry => h.run_command("/retry"),
             MessageOp::OpenFile(path) => h.open_preview(sid, &path),
+            MessageOp::CommentAt { key, line } => {
+                h.ui.comment_edit = Some(CommentEdit {
+                    key,
+                    line,
+                    text: String::new(),
+                });
+            }
+            MessageOp::SendComments { key, path } => {
+                let comments = h.ui.diff_comments.get(&key).cloned().unwrap_or_default();
+                if !comments.is_empty() {
+                    h.draft = comments_prompt(&path, &comments);
+                    h.ui.focus_composer = true;
+                    h.status =
+                        tr("Comments are in the input field — add to them and send.").to_string();
+                }
+            }
         }
     }
     // the pills of the NEXT frame jump to the positions this frame drew
@@ -225,6 +251,10 @@ fn render_items(
             round_of.insert(id.as_str(), round);
         }
     }
+    let comments = &mut Comments {
+        map: &mut h_ui.diff_comments,
+        edit: &mut h_ui.comment_edit,
+    };
     let mut turn_ops: Vec<MessageOp> = Vec::new();
     let mut turn_changes = TurnChanges {
         cwd,
@@ -262,6 +292,7 @@ fn render_items(
             auto_group,
             auto_output,
             diff_open,
+            comments,
             ui_events,
             form_values,
             scripts,
@@ -294,7 +325,7 @@ fn render_items(
 
 /// What one `render_range` pass needs besides the session view. Bundled so
 /// the per-item helpers keep short argument lists.
-struct ItemCtx<'a> {
+struct ItemCtx<'a, 'c> {
     sid: &'a str,
     running: bool,
     compact_plan: bool,
@@ -307,6 +338,7 @@ struct ItemCtx<'a> {
     /// Detail-level default: auto-open tool outputs while running (verbose).
     auto_output: bool,
     diff_open: &'a mut HashSet<String>,
+    comments: &'a mut Comments<'c>,
     ui_events: &'a mut Vec<UiEvent>,
     form_values: &'a mut HashMap<String, String>,
     scripts: &'a mut HashMap<String, crate::script::ScriptTool>,
@@ -315,9 +347,11 @@ struct ItemCtx<'a> {
 
 /// Draw `items[range]`, tool calls through their groups. Ranges start at a
 /// round start, so a tool group is never cut: `tool_groups` is computed over
-/// the whole transcript and every group lies inside one round.
+/// the whole transcript and every group lies inside one round. The second
+/// lifetime is the comments' inner borrow: `&mut` is invariant there, so a
+/// single lifetime would pin every field borrow to the whole loop.
 fn render_range(
-    ctx: &mut ItemCtx<'_>,
+    ctx: &mut ItemCtx<'_, '_>,
     ui: &mut egui::Ui,
     s: &SessionView,
     groups: &[std::ops::Range<usize>],
@@ -345,6 +379,7 @@ fn render_range(
                 ctx.auto_group,
                 ctx.auto_output,
                 ctx.diff_open,
+                ctx.comments,
                 ctx.ops,
             );
             i = g.end;
@@ -430,6 +465,26 @@ pub(crate) fn toggle_effective(
         closed.remove(key);
         open.insert(key.to_string());
     }
+}
+
+/// The composer draft built from a diff's comments: one line per comment
+/// with its new-side line number.
+pub(crate) fn comments_prompt(path: &str, comments: &[DiffComment]) -> String {
+    let mut out = trf(
+        "Please address these review comments on {path}:",
+        &[("path", &path)],
+    );
+    for c in comments {
+        out.push_str(&format!("\nL{}: {}", c.line, c.text));
+    }
+    out
+}
+
+/// Borrowed comment state of the transcript: the stored comments plus the
+/// comment being written.
+pub(super) struct Comments<'a> {
+    map: &'a mut HashMap<String, Vec<DiffComment>>,
+    edit: &'a mut Option<CommentEdit>,
 }
 
 // ---------------------------------------------------------------------------
@@ -946,6 +1001,7 @@ fn tool_group(
     auto_group: bool,
     auto_output: bool,
     diff_open: &mut HashSet<String>,
+    comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
 ) {
     let active = calls
@@ -1016,7 +1072,7 @@ fn tool_group(
         });
     }
     for file in group_diffs(calls) {
-        diff_chip(ui, owner, cwd, &file, diff_open, ops);
+        diff_chip(ui, owner, cwd, &file, diff_open, comments, ops);
     }
     ui.add_space(8.0);
 }
@@ -1185,6 +1241,7 @@ fn diff_chip(
     cwd: &Path,
     file: &DiffFile,
     diff_open: &mut HashSet<String>,
+    comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
 ) {
     let key = format!("{owner}#{}::{}", file.call_id, file.path);
@@ -1257,11 +1314,124 @@ fn diff_chip(
                     if i > 0 {
                         ui.add_space(6.0);
                     }
-                    diff_body(ui, *old, new, 400);
+                    diff_body(
+                        ui,
+                        *old,
+                        new,
+                        400,
+                        Some((key.as_str(), &mut *comments, &mut *ops)),
+                    );
                 }
+                comment_section(ui, &key, file.path, comments, ops);
                 ui.add_space(4.0);
             }
         });
+}
+
+/// The review comments of one open diff: the editor for the line being
+/// commented, the stored comments, and the "Send to Vibe" button that turns
+/// them into a composer draft.
+fn comment_section(
+    ui: &mut egui::Ui,
+    key: &str,
+    path: &str,
+    comments: &mut Comments,
+    ops: &mut Vec<MessageOp>,
+) {
+    let mut save = false;
+    let mut cancel = false;
+    if let Some(e) = comments.edit.as_mut() {
+        if e.key == key {
+            ui.add_space(6.0);
+            egui::Frame::none()
+                .fill(theme::RAISED)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(trf("Comment on line {n}", &[("n", &e.line.to_string())]))
+                            .color(theme::DIM)
+                            .size(12.0),
+                    );
+                    ui.add(
+                        egui::TextEdit::multiline(&mut e.text)
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY)
+                            .hint_text(tr("Your comment …")),
+                    );
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
+                            save = true;
+                        }
+                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+        }
+    }
+    if save {
+        if let Some(e) = comments.edit.take() {
+            if !e.text.trim().is_empty() {
+                comments
+                    .map
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(DiffComment {
+                        line: e.line,
+                        text: e.text.trim().to_string(),
+                    });
+            }
+        }
+    }
+    if cancel {
+        *comments.edit = None;
+    }
+    let list = comments.map.get(key).cloned().unwrap_or_default();
+    for c in &list {
+        ui.horizontal(|ui| {
+            ui.add_space(26.0);
+            ui.label(
+                RichText::new(trf(
+                    "L{line}: {text}",
+                    &[("line", &c.line.to_string()), ("text", &c.text)],
+                ))
+                .color(theme::TEXT)
+                .size(12.5),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
+                    .clicked()
+                {
+                    if let Some(v) = comments.map.get_mut(key) {
+                        v.retain(|x| x != c);
+                    }
+                }
+            });
+        });
+    }
+    if !list.is_empty() {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(26.0);
+            ui.label(
+                RichText::new(trf(
+                    "{n} comments on this file",
+                    &[("n", &list.len().to_string())],
+                ))
+                .color(theme::DIM)
+                .size(12.0),
+            );
+            if widgets::button(ui, tr("Send to Vibe"), ButtonKind::Primary).clicked() {
+                ops.push(MessageOp::SendComments {
+                    key: key.to_string(),
+                    path: path.to_string(),
+                });
+            }
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1442,6 +1612,7 @@ impl TurnChanges<'_> {
                         d.baseline.as_deref(),
                         d.current.as_deref().unwrap_or(""),
                         400,
+                        None,
                     );
                     ui.add_space(4.0);
                 });
@@ -1475,9 +1646,18 @@ fn stat_galleys(ui: &egui::Ui, added: usize, removed: usize) -> Vec<std::sync::A
 }
 
 /// The real line diff of one text pair, folded to the changed hunks.
-pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_rows: usize) {
+/// With `comment` (`key` + state + ops), every line gets a "+" gutter button
+/// that starts a review comment on its new-side line number.
+pub(super) fn diff_body(
+    ui: &mut egui::Ui,
+    old: Option<&str>,
+    new: &str,
+    max_rows: usize,
+    mut comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+) {
     let segments = diff::folded_cached(old, new);
     let total = segments.len();
+    let mut new_line = 0usize;
     for seg in segments.iter().take(max_rows) {
         match seg {
             Segment::Skipped(n) => {
@@ -1492,7 +1672,19 @@ pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_row
                 let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
                 paint_line(ui, rect.left() + 26.0, rect.center().y, g);
             }
-            Segment::Line(line) => diff_line(ui, line.kind, &line.text),
+            Segment::Line(line) => {
+                let line_no = match line.kind {
+                    LineKind::Removed => new_line.max(1),
+                    _ => {
+                        new_line += 1;
+                        new_line
+                    }
+                };
+                let gutter = comment
+                    .as_mut()
+                    .map(|(key, _state, ops)| (*key, line_no, &mut **ops));
+                diff_line(ui, line.kind, &line.text, gutter);
+            }
         }
     }
     if total > max_rows {
@@ -1508,11 +1700,23 @@ pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_row
     }
 }
 
-fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
+fn diff_line(
+    ui: &mut egui::Ui,
+    kind: LineKind,
+    text: &str,
+    gutter: Option<(&str, usize, &mut Vec<MessageOp>)>,
+) {
     let (bg, sign, color) = match kind {
         LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
         LineKind::Removed => (Some(theme::DIFF_DEL_BG), "−", theme::TEXT),
         LineKind::Same => (None, " ", theme::DIM),
+    };
+    let commentable = gutter.is_some();
+    // with a comment gutter the sign and text shift right
+    let (sign_x, text_x, text_w) = if commentable {
+        (24.0, 38.0, 48.0)
+    } else {
+        (12.0, 26.0, 34.0)
     };
     let width = ui.available_width();
     let galley = ui.fonts(|f| {
@@ -1520,7 +1724,7 @@ fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
             text.to_string(),
             mono(12.0),
             color,
-            (width - 34.0).max(40.0),
+            (width - text_w).max(40.0),
         )
     });
     let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y.max(17.0)), Sense::hover());
@@ -1534,9 +1738,32 @@ fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
     };
     let g = line_galley(ui, sign, mono(12.0), sign_color, 12.0);
     ui.painter()
-        .galley(rect.left_top() + vec2(12.0, 0.0), g, sign_color);
+        .galley(rect.left_top() + vec2(sign_x, 0.0), g, sign_color);
     ui.painter()
-        .galley(rect.left_top() + vec2(26.0, 0.0), galley, color);
+        .galley(rect.left_top() + vec2(text_x, 0.0), galley, color);
+    if let Some((key, line, ops)) = gutter {
+        let btn = Rect::from_min_size(
+            rect.left_top() + vec2(2.0, 1.0),
+            vec2(18.0, rect.height() - 2.0),
+        );
+        let id = ui.make_persistent_id(("diff_comment", key, line));
+        let resp = ui.interact(btn, id, Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(btn, 3.0, theme::HOVER);
+        }
+        let g = line_galley(ui, "+", mono(12.0), theme::MUTED, 18.0);
+        ui.painter()
+            .galley(btn.center() - g.size() / 2.0, g, theme::MUTED);
+        if resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
+            ops.push(MessageOp::CommentAt {
+                key: key.to_string(),
+                line,
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,6 +1886,25 @@ mod tests {
         super::toggle_effective(&mut open, &mut closed, "k", false);
         assert!(super::effective_open(&open, &closed, "k", false));
         assert!(closed.is_empty());
+    }
+
+    #[test]
+    fn comments_prompt_lists_every_comment_with_its_line() {
+        let comments = vec![
+            super::DiffComment {
+                line: 48,
+                text: "append ^ for outliers".to_string(),
+            },
+            super::DiffComment {
+                line: 72,
+                text: "take the CSV path from argv".to_string(),
+            },
+        ];
+        let prompt = super::comments_prompt("src/analysis.py", &comments);
+        assert!(prompt.contains("src/analysis.py"));
+        assert!(prompt.contains("L48: append ^ for outliers"));
+        assert!(prompt.contains("L72: take the CSV path from argv"));
+        assert_eq!(prompt.matches('\n').count(), 2);
     }
 
     #[test]

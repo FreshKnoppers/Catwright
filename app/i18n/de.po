@@ -1541,3 +1541,27 @@ msgstr "Dateivorschau öffnen"
 
 msgid "Close preview"
 msgstr "Vorschau schließen"
+
+msgid "Comment"
+msgstr "Kommentar"
+
+msgid "Send to Vibe"
+msgstr "An Vibe senden"
+
+msgid "Delete comment"
+msgstr "Kommentar löschen"
+
+msgid "Your comment …"
+msgstr "Dein Kommentar …"
+
+msgid "Comment on line {n}"
+msgstr "Kommentar zu Zeile {n}"
+
+msgid "{n} comments on this file"
+msgstr "{n} Kommentare zu dieser Datei"
+
+msgid "Please address these review comments on {path}:"
+msgstr "Bitte arbeite diese Review-Kommentare in {path} ein:"
+
+msgid "Comments are in the input field — add to them and send."
+msgstr "Die Kommentare liegen im Eingabefeld — ergänze sie und sende ab."

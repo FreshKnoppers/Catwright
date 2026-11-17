@@ -115,6 +115,22 @@ pub struct PaletteState {
     pub scroll_to_selected: bool,
 }
 
+/// One review comment on a diff line (line number on the new side of the
+/// diff).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffComment {
+    pub line: usize,
+    pub text: String,
+}
+
+/// A comment being written for one diff (`key` = the diff chip's key).
+#[derive(Debug, Clone)]
+pub struct CommentEdit {
+    pub key: String,
+    pub line: usize,
+    pub text: String,
+}
+
 /// The "Neue Routine" form of a session.
 #[derive(Debug, Clone)]
 pub struct LoopForm {
@@ -171,6 +187,10 @@ pub struct UiState {
     pub closed_groups: HashSet<String>,
     /// The file preview pane beside the transcript (`None`: closed).
     pub preview: Option<PreviewState>,
+    /// Review comments on diffs, keyed by the diff chip's key.
+    pub diff_comments: HashMap<String, Vec<DiffComment>>,
+    /// The comment currently being written.
+    pub comment_edit: Option<CommentEdit>,
     /// Projects whose session lists are folded in the sidebar.
     pub collapsed_projects: HashSet<PathBuf>,
     /// Projects showing all sessions instead of the newest few.
@@ -215,6 +235,8 @@ impl Default for UiState {
             transcript_detail: "standard".to_string(),
             closed_groups: HashSet::new(),
             preview: None,
+            diff_comments: HashMap::new(),
+            comment_edit: None,
             collapsed_projects: HashSet::new(),
             expanded_projects: HashSet::new(),
             panel_sections: HashMap::new(),
