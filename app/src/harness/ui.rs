@@ -42,10 +42,12 @@ pub enum HarnessAction {
     OpenAccount,
 }
 
-/// Is the right panel on screen in this frame?
+/// Is the right panel on screen in this frame? The file preview pane takes
+/// its place while it is open.
 fn panel_visible(h: &Harness, ctx: &egui::Context) -> bool {
     h.active.is_some()
         && !h.artifacts_open
+        && h.ui.preview.is_none()
         && !h.ui.panel_closed
         && ctx.screen_rect().width() >= PANEL_MIN_WINDOW
 }
@@ -85,7 +87,9 @@ pub fn show(h: &mut Harness, ctx: &egui::Context) -> HarnessAction {
     swap_draft(h);
     shortcuts(h, ctx, &mut action);
     sidebar::show(h, ctx, &mut action);
-    if panel_visible(h, ctx) {
+    if h.ui.preview.is_some() && !h.artifacts_open && h.active.is_some() {
+        artifacts::preview_panel(h, ctx);
+    } else if panel_visible(h, ctx) {
         panel::show(h, ctx);
     }
     egui::CentralPanel::default()

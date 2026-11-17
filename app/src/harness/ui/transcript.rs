@@ -85,7 +85,7 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             MessageOp::Fork(message_id) => h.fork_active_at(Some(message_id)),
             MessageOp::TurnDiff { turn_id, path } => h.load_turn_diff(sid, &turn_id, &path),
             MessageOp::Retry => h.run_command("/retry"),
-            MessageOp::OpenFile(path) => h.open_artifact(sid, &path),
+            MessageOp::OpenFile(path) => h.open_preview(sid, &path),
         }
     }
     // the pills of the NEXT frame jump to the positions this frame drew
@@ -1016,7 +1016,7 @@ fn tool_group(
         });
     }
     for file in group_diffs(calls) {
-        diff_chip(ui, owner, cwd, &file, diff_open);
+        diff_chip(ui, owner, cwd, &file, diff_open, ops);
     }
     ui.add_space(8.0);
 }
@@ -1094,7 +1094,7 @@ fn tool_row(
         if widgets::place(
             ui,
             btn,
-            IconButton::new(Icon::File, tr("Open file in Artifacts")).side(22.0),
+            IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
@@ -1178,12 +1178,14 @@ fn output_box(ui: &mut egui::Ui, id: egui::Id, text: &str) {
 }
 
 /// One edited file: path, `+a −r`, and the diff when expanded.
+#[allow(clippy::too_many_arguments)]
 fn diff_chip(
     ui: &mut egui::Ui,
     owner: &str,
     cwd: &Path,
     file: &DiffFile,
     diff_open: &mut HashSet<String>,
+    ops: &mut Vec<MessageOp>,
 ) {
     let key = format!("{owner}#{}::{}", file.call_id, file.path);
     let open = diff_open.contains(&key);
@@ -1209,7 +1211,22 @@ fn diff_chip(
             );
             let stats = stat_galleys(ui, file.added, file.removed);
             let stats_w = stats.iter().map(|g| g.size().x).sum::<f32>() + 8.0;
-            let mut right = rect.right() - 26.0;
+            // the preview button sits between the stats and the chevron
+            let prev_btn = Rect::from_min_size(
+                pos2(rect.right() - 48.0, rect.center().y - 11.0),
+                vec2(22.0, 22.0),
+            );
+            if widgets::place(
+                ui,
+                prev_btn,
+                IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+            {
+                ops.push(MessageOp::OpenFile(file.path.to_string()));
+            }
+            let mut right = rect.right() - 74.0;
             let g = line_galley(
                 ui,
                 &rel,
@@ -1346,7 +1363,22 @@ impl TurnChanges<'_> {
         if resp.hovered() {
             ui.painter().rect_filled(rect, 3.0, theme::HOVER);
         }
-        let mut right = rect.right() - 22.0;
+        // the preview button sits left of the stats / chevron
+        let prev_btn = Rect::from_min_size(
+            pos2(rect.right() - 44.0, rect.center().y - 11.0),
+            vec2(22.0, 22.0),
+        );
+        if widgets::place(
+            ui,
+            prev_btn,
+            IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+        {
+            self.ops.push(MessageOp::OpenFile(path.to_string()));
+        }
+        let mut right = rect.right() - 70.0;
         if let Some(TurnDiffView::Loaded(d)) = view {
             let stat = diff_stat_cached(d.baseline.as_deref(), d.current.as_deref().unwrap_or(""));
             for g in stat_galleys(ui, stat.added, stat.removed).into_iter().rev() {

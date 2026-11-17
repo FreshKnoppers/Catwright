@@ -4036,22 +4036,21 @@ fn create_worktree_adds_the_copy_as_its_own_workspace() {
 }
 
 #[test]
-fn open_artifact_resolves_relative_paths_against_the_session() {
+fn open_preview_resolves_relative_paths_against_the_session() {
     let dir = std::env::temp_dir();
     let (mut h, _agent) = setup(vec![dir.clone()], "ask");
     h.sessions
         .insert("s1".to_string(), SessionView::new("s1", dir.clone()));
-    h.open_artifact("s1", "src/main.rs");
+    h.open_preview("s1", "src/main.rs");
     assert_eq!(
-        h.artifact_selected.as_deref(),
+        h.ui.preview.as_ref().map(|p| p.path.as_str()),
         Some(dir.join("src/main.rs").to_string_lossy().as_ref()),
         "a relative path joins the session's workspace"
     );
-    assert!(h.artifacts_open);
     let abs = dir.join("abs.txt");
-    h.open_artifact("s1", abs.to_string_lossy().as_ref());
+    h.open_preview("s1", abs.to_string_lossy().as_ref());
     assert_eq!(
-        h.artifact_selected.as_deref(),
+        h.ui.preview.as_ref().map(|p| p.path.as_str()),
         Some(abs.to_string_lossy().as_ref())
     );
 }

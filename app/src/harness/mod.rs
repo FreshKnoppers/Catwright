@@ -26,7 +26,7 @@ use extras::{
     TrustInfo,
 };
 use serde_json::{json, Value};
-use state::{QueuedPrompt, TurnDiffView, TurnDiffs, UiState};
+use state::{PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs, UiState};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -1158,17 +1158,20 @@ impl Harness {
         }
     }
 
-    /// Open `path` in the Artefakte preview (a clicked path in a tool row).
-    /// Relative paths resolve against the session's workspace.
-    pub fn open_artifact(&mut self, sid: &str, path: &str) {
+    /// Open `path` in the preview pane beside the transcript (a clicked
+    /// path in a tool row, diff chip or changes row). Relative paths
+    /// resolve against the session's workspace.
+    pub fn open_preview(&mut self, sid: &str, path: &str) {
         let resolved = if Path::new(path).is_absolute() {
             Some(PathBuf::from(path))
         } else {
             self.sessions.get(sid).map(|v| v.cwd.join(path))
         };
         if let Some(p) = resolved {
-            self.artifact_selected = Some(p.to_string_lossy().into_owned());
-            self.artifacts_open = true;
+            self.ui.preview = Some(PreviewState {
+                path: p.to_string_lossy().into_owned(),
+                width: 380.0,
+            });
         }
     }
 

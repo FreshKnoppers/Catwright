@@ -148,6 +148,15 @@ pub struct Toast {
     pub since: Option<Instant>,
 }
 
+/// The preview pane beside the transcript. While it is open it replaces the
+/// right work panel.
+#[derive(Debug, Clone)]
+pub struct PreviewState {
+    pub path: String,
+    /// Panel width in points; the user can resize it.
+    pub width: f32,
+}
+
 /// Transient state of the harness UI.
 pub struct UiState {
     /// Persisted through the settings.
@@ -160,6 +169,8 @@ pub struct UiState {
     /// Collapsible keys the user closed explicitly; an auto-open default
     /// (the detail level) never overrides them.
     pub closed_groups: HashSet<String>,
+    /// The file preview pane beside the transcript (`None`: closed).
+    pub preview: Option<PreviewState>,
     /// Projects whose session lists are folded in the sidebar.
     pub collapsed_projects: HashSet<PathBuf>,
     /// Projects showing all sessions instead of the newest few.
@@ -203,6 +214,7 @@ impl Default for UiState {
             panel_closed: false,
             transcript_detail: "standard".to_string(),
             closed_groups: HashSet::new(),
+            preview: None,
             collapsed_projects: HashSet::new(),
             expanded_projects: HashSet::new(),
             panel_sections: HashMap::new(),

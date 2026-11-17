@@ -130,7 +130,54 @@ fn file_row(
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-fn preview(ui: &mut egui::Ui, path: &str) {
+/// The preview pane on the right of the transcript: one file's preview in a
+/// resizable panel. While it is open the right work panel stays hidden.
+pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
+    let Some(p) = h.ui.preview.clone() else {
+        return;
+    };
+    let mut close = false;
+    let out = egui::SidePanel::right("harness_preview")
+        .resizable(true)
+        .default_width(p.width)
+        .width_range(220.0..=640.0)
+        .frame(
+            egui::Frame::none()
+                .fill(theme::SIDEBAR)
+                .inner_margin(egui::Margin::symmetric(10.0, 12.0)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(artifacts::file_name(&p.path))
+                            .color(theme::TEXT)
+                            .size(13.5),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&p.path);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(IconButton::new(Icon::Close, tr("Close preview")).side(22.0))
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            preview(ui, &p.path);
+        });
+    if let Some(p) = h.ui.preview.as_mut() {
+        p.width = out.response.rect.width();
+    }
+    if close {
+        h.ui.preview = None;
+    }
+}
+
+pub(super) fn preview(ui: &mut egui::Ui, path: &str) {
     let kind = artifacts::kind_of(path);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])

@@ -1535,3 +1535,9 @@ msgstr "Detailliert"
 
 msgid "Verbose"
 msgstr "Ausführlich"
+
+msgid "Open file preview"
+msgstr "Dateivorschau öffnen"
+
+msgid "Close preview"
+msgstr "Vorschau schließen"
