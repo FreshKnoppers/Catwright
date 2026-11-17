@@ -1517,3 +1517,21 @@ msgstr "… {count} ältere Transkript-Einträge werden nicht angezeigt"
 
 msgid "The config folder could not be used: {path}"
 msgstr "Der Konfigurationsordner konnte nicht verwendet werden: {path}"
+
+msgid "Transcript detail while Vibe works"
+msgstr "Transkript-Detailgrad während Vibe arbeitet"
+
+msgid "How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."
+msgstr "Wie offen Tool-Aufrufe und Gedanken während eines Laufs sind. Änderungen und Freigaben bleiben auf jeder Stufe sichtbar."
+
+msgid "Compact"
+msgstr "Kompakt"
+
+msgid "Standard"
+msgstr "Standard"
+
+msgid "Detailed"
+msgstr "Detailliert"
+
+msgid "Verbose"
+msgstr "Ausführlich"

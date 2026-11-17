@@ -182,8 +182,10 @@ fn render_items(
         turn_started,
         retrying,
         last_turn_secs,
+        ui: h_ui,
         ..
     } = h;
+    let detail = h_ui.transcript_detail.clone();
     let review: &[extras::ReviewFile] = review.get(sid).map_or(&[], Vec::as_slice);
     let scopes: &[extras::ReviewScope] = review_scopes.get(sid).map_or(&[], Vec::as_slice);
     let diffs: &TurnDiffs = turn_diffs.get(sid).unwrap_or(TurnDiffs::empty());
@@ -194,6 +196,9 @@ fn render_items(
         return Vec::new();
     };
     let running = s.turn != TurnState::Idle;
+    // the detail level's auto-open defaults for a running turn
+    let auto_group = running && matches!(detail.as_str(), "detailed" | "verbose");
+    let auto_output = running && detail == "verbose";
     // retention hint (audit N1): the oldest items left the view's memory
     // once the transcript outgrew its bound; Vibe keeps the real history
     if s.trimmed_front > 0 {
@@ -253,6 +258,9 @@ fn render_items(
             cwd,
             plan: &s.plan,
             open_groups,
+            closed_groups: &mut h_ui.closed_groups,
+            auto_group,
+            auto_output,
             diff_open,
             ui_events,
             form_values,
@@ -293,6 +301,11 @@ struct ItemCtx<'a> {
     cwd: &'a Path,
     plan: &'a [PlanEntry],
     open_groups: &'a mut HashSet<String>,
+    closed_groups: &'a mut HashSet<String>,
+    /// Detail-level default: auto-open tool groups and thoughts while running.
+    auto_group: bool,
+    /// Detail-level default: auto-open tool outputs while running (verbose).
+    auto_output: bool,
     diff_open: &'a mut HashSet<String>,
     ui_events: &'a mut Vec<UiEvent>,
     form_values: &'a mut HashMap<String, String>,
@@ -328,6 +341,9 @@ fn render_range(
                 ctx.running,
                 ctx.cwd,
                 ctx.open_groups,
+                ctx.closed_groups,
+                ctx.auto_group,
+                ctx.auto_output,
                 ctx.diff_open,
                 ctx.ops,
             );
@@ -366,6 +382,8 @@ fn render_range(
                     text,
                     streaming,
                     ctx.open_groups,
+                    ctx.closed_groups,
+                    ctx.auto_group,
                 );
             }
             Item::Plan => {
@@ -383,6 +401,34 @@ fn render_range(
 fn toggle_key(set: &mut HashSet<String>, key: String) {
     if !set.remove(&key) {
         set.insert(key);
+    }
+}
+
+/// Effective open state of a collapsible row: an explicit open wins, then an
+/// explicit close, then the detail level's default for a running turn.
+pub(crate) fn effective_open(
+    open: &HashSet<String>,
+    closed: &HashSet<String>,
+    key: &str,
+    auto: bool,
+) -> bool {
+    open.contains(key) || (auto && !closed.contains(key))
+}
+
+/// Toggle a row that may be auto-open: closing records the key in `closed`
+/// so the auto default stops re-opening it, opening clears that record.
+pub(crate) fn toggle_effective(
+    open: &mut HashSet<String>,
+    closed: &mut HashSet<String>,
+    key: &str,
+    currently_open: bool,
+) {
+    if currently_open {
+        open.remove(key);
+        closed.insert(key.to_string());
+    } else {
+        closed.remove(key);
+        open.insert(key.to_string());
     }
 }
 
@@ -629,6 +675,7 @@ fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn thought_row(
     ui: &mut egui::Ui,
     sid: &str,
@@ -637,9 +684,11 @@ fn thought_row(
     text: &str,
     streaming: bool,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto: bool,
 ) {
     let key = thought_key(sid, message_id, index);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto);
     if collapsible_row(
         ui,
         Icon::Spark,
@@ -651,11 +700,7 @@ fn thought_row(
         open,
         theme::DIM,
     ) {
-        if open {
-            open_groups.remove(&key);
-        } else {
-            open_groups.insert(key);
-        }
+        toggle_effective(open_groups, closed_groups, &key, open);
     }
     if open {
         indented(ui, |ui| {
@@ -897,6 +942,9 @@ fn tool_group(
     running: bool,
     cwd: &Path,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto_group: bool,
+    auto_output: bool,
     diff_open: &mut HashSet<String>,
     ops: &mut Vec<MessageOp>,
 ) {
@@ -906,7 +954,7 @@ fn tool_group(
     let busy = running && active.is_some();
     let failed = calls.iter().any(|c| c.status == ToolStatus::Failed);
     let key = tool_group_key(owner, start, calls);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto_group);
 
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
     if resp.hovered() {
@@ -949,17 +997,21 @@ fn tool_group(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked();
     if clicked {
-        if open {
-            open_groups.remove(&key);
-        } else {
-            open_groups.insert(key.clone());
-        }
+        toggle_effective(open_groups, closed_groups, &key, open);
     }
     if open {
         indented(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             for call in calls {
-                tool_row(ui, owner, call, open_groups, ops);
+                tool_row(
+                    ui,
+                    owner,
+                    call,
+                    open_groups,
+                    closed_groups,
+                    auto_output,
+                    ops,
+                );
             }
         });
     }
@@ -969,11 +1021,14 @@ fn tool_group(
     ui.add_space(8.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tool_row(
     ui: &mut egui::Ui,
     owner: &str,
     call: &ToolCall,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto_output: bool,
     ops: &mut Vec<MessageOp>,
 ) {
     let output: Vec<&str> = call
@@ -985,7 +1040,7 @@ fn tool_row(
         })
         .collect();
     let key = format!("{owner}#tool#{}", call.tool_call_id);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto_output);
     let has_output = output.iter().any(|t| !t.trim().is_empty());
     let (rect, resp) = ui.allocate_exact_size(
         vec2(ui.available_width(), 24.0),
@@ -1051,11 +1106,7 @@ fn tool_row(
         chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), open);
         let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         if resp.clicked() {
-            if open {
-                open_groups.remove(&key);
-            } else {
-                open_groups.insert(key);
-            }
+            toggle_effective(open_groups, closed_groups, &key, open);
         }
     }
     if open && has_output {
@@ -1549,6 +1600,35 @@ mod tests {
     /// index key would hand a stale fold state to whatever ends up
     /// there. N16: a tool output's scroll id is content-independent,
     /// so streamed output keeps its scroll position chunk by chunk.
+    #[test]
+    fn effective_open_prefers_explicit_over_auto() {
+        let mut open = HashSet::new();
+        let mut closed = HashSet::new();
+        // auto default opens the row
+        assert!(super::effective_open(&open, &closed, "k", true));
+        // no auto default: closed
+        assert!(!super::effective_open(&open, &closed, "k", false));
+        // an explicit close beats the auto default
+        closed.insert("k".to_string());
+        assert!(!super::effective_open(&open, &closed, "k", true));
+        // an explicit open beats an explicit close
+        open.insert("k".to_string());
+        assert!(super::effective_open(&open, &closed, "k", false));
+    }
+
+    #[test]
+    fn toggle_effective_records_the_override() {
+        let mut open = HashSet::new();
+        let mut closed = HashSet::new();
+        // close an auto-opened row: recorded in closed, gone from open
+        super::toggle_effective(&mut open, &mut closed, "k", true);
+        assert!(!super::effective_open(&open, &closed, "k", true));
+        // re-open: the close record is cleared again
+        super::toggle_effective(&mut open, &mut closed, "k", false);
+        assert!(super::effective_open(&open, &closed, "k", false));
+        assert!(closed.is_empty());
+    }
+
     #[test]
     fn fold_and_scroll_keys_bind_to_identity_not_position() {
         let t1 = call("t1");

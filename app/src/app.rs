@@ -73,6 +73,7 @@ impl App {
         harness.thinking_by_model = settings.vibe_thinking_by_model.clone();
         harness.ui.sidebar_collapsed = settings.sidebar_collapsed;
         harness.ui.panel_closed = settings.panel_closed;
+        harness.ui.transcript_detail = settings.transcript_detail.clone();
         harness.auto_account = settings.auto_account;
         harness.pinned = settings.pinned_sessions.iter().cloned().collect();
         // claimed in every case: an instance that could not read the
@@ -133,9 +134,14 @@ impl App {
     fn sync_layout(&mut self) {
         let collapsed = self.harness.ui.sidebar_collapsed;
         let panel = self.harness.ui.panel_closed;
-        if collapsed != self.settings.sidebar_collapsed || panel != self.settings.panel_closed {
+        let detail = self.harness.ui.transcript_detail.clone();
+        if collapsed != self.settings.sidebar_collapsed
+            || panel != self.settings.panel_closed
+            || detail != self.settings.transcript_detail
+        {
             self.settings.sidebar_collapsed = collapsed;
             self.settings.panel_closed = panel;
+            self.settings.transcript_detail = detail;
             self.autosave();
         }
     }

@@ -154,6 +154,12 @@ pub struct UiState {
     pub sidebar_collapsed: bool,
     /// The right panel is closed. Persisted through the settings.
     pub panel_closed: bool,
+    /// How open tool groups and thoughts are while a turn runs. Persisted
+    /// through the settings.
+    pub transcript_detail: String,
+    /// Collapsible keys the user closed explicitly; an auto-open default
+    /// (the detail level) never overrides them.
+    pub closed_groups: HashSet<String>,
     /// Projects whose session lists are folded in the sidebar.
     pub collapsed_projects: HashSet<PathBuf>,
     /// Projects showing all sessions instead of the newest few.
@@ -195,6 +201,8 @@ impl Default for UiState {
         Self {
             sidebar_collapsed: false,
             panel_closed: false,
+            transcript_detail: "standard".to_string(),
+            closed_groups: HashSet::new(),
             collapsed_projects: HashSet::new(),
             expanded_projects: HashSet::new(),
             panel_sections: HashMap::new(),
