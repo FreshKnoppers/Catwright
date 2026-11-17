@@ -28,6 +28,7 @@ use extras::{
 use serde_json::{json, Value};
 use state::{QueuedPrompt, TurnDiffView, TurnDiffs, UiState};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -41,6 +42,9 @@ const STABLE_AFTER: Duration = Duration::from_secs(60);
 /// reconnect schedule starts (review M6 — a living but mute `vibe-acp`
 /// used to leave `Conn::Starting` forever, with no exit ever arriving).
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many pages of one `session/list` the harness asks for before it
+/// ends the chain itself (audit N2: the cursor chain is the agent's word).
+const MAX_LIST_PAGES: u32 = 200;
 
 /// Connection state to the `vibe-acp` child process.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +136,11 @@ pub struct Harness {
     /// workspace); follows the session the user opens.
     pub current_project: Option<PathBuf>,
     pub listed: HashMap<PathBuf, Vec<SessionInfo>>,
+    /// Pages of `session/list` seen per workspace: a broken agent that
+    /// always answers with a fresh cursor must not page the harness
+    /// forever (audit N2). A first page (a request without a cursor)
+    /// resets its workspace's counter.
+    list_pages: HashMap<PathBuf, u32>,
     /// Prompt waiting for session/new to finish: (cwd, blocks).
     queued: Option<(PathBuf, Vec<PromptBlock>)>,
     /// Prompt held back until `set_mode` answered for this session:
@@ -285,6 +294,7 @@ impl Harness {
             current_project,
             projects,
             listed: HashMap::new(),
+            list_pages: HashMap::new(),
             queued: None,
             pending_mode_prompt: None,
             sent_prompts: HashMap::new(),
@@ -516,14 +526,40 @@ impl Harness {
                 } else {
                     self.listed.insert(p.clone(), result.sessions);
                 }
-                // Vibe pages `session/list` (nextCursor): fetch the rest
+                // Vibe pages `session/list` (nextCursor): fetch the rest —
+                // but the harness drives the loop, so it also ends it: an
+                // agent that keeps answering with a fresh cursor never
+                // pages its caller past this budget (audit N2). A page
+                // answered without a request cursor is a fresh start, and
+                // those two chains cannot share the count.
+                let pages = match cursor.as_ref() {
+                    None => {
+                        self.list_pages.insert(p.clone(), 1);
+                        1
+                    }
+                    Some(_) => {
+                        let n = self.list_pages.entry(p.clone()).or_insert(0);
+                        *n += 1;
+                        *n
+                    }
+                };
                 if let Some(cursor) = result.next_cursor {
-                    let res = self
-                        .client
-                        .as_ref()
-                        .map(|c| c.list_sessions_page(Some(&p), Some(&cursor)));
-                    if let Some(Err(e)) = res {
-                        self.status = e;
+                    if pages >= MAX_LIST_PAGES {
+                        self.status = trf(
+                            "The session list of {dir} stopped paging after {pages} pages.",
+                            &[
+                                ("dir", &p.to_string_lossy()),
+                                ("pages", &MAX_LIST_PAGES.to_string()),
+                            ],
+                        );
+                    } else {
+                        let res = self
+                            .client
+                            .as_ref()
+                            .map(|c| c.list_sessions_page(Some(&p), Some(&cursor)));
+                        if let Some(Err(e)) = res {
+                            self.status = e;
+                        }
                     }
                 }
                 // until the user picks a workspace, new sessions start where
@@ -3073,6 +3109,9 @@ pub const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 5 * 1024 * 1024;
 /// Read a PNG attachment for an `image` block: the file must exist, end
 /// in `.png` and stay within [`MAX_IMAGE_ATTACHMENT_BYTES`] — anything
 /// else returns None and goes out as a `resource_link` instead.
+/// One open, and the read bounded through that same handle: whatever
+/// happens to the path between the size check and the read (the file
+/// grows, is swapped by a rename), the allocation stays capped.
 fn read_png(path: &Path) -> Option<Vec<u8>> {
     if !path
         .extension()
@@ -3081,11 +3120,31 @@ fn read_png(path: &Path) -> Option<Vec<u8>> {
     {
         return None;
     }
+    // The path's type decides before the open (final audit B guards the
+    // same class for the previews): a FIFO or device named `*.png`, or a
+    // symlink to one, must not block the open on the UI thread. Only a
+    // regular file within the cap proceeds.
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_IMAGE_ATTACHMENT_BYTES {
         return None;
     }
-    std::fs::read(path).ok()
+    // One open, and the read bounded through that same handle: whatever
+    // happens to the path between the check and the read (the file grows,
+    // is swapped by a rename), the allocation stays capped.
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    let read = file
+        .take(MAX_IMAGE_ATTACHMENT_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if read as u64 > MAX_IMAGE_ATTACHMENT_BYTES {
+        return None;
+    }
+    Some(bytes)
 }
 
 /// Standard base64 (RFC 4648, with padding), no crate: the only use in

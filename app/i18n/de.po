@@ -1496,3 +1496,24 @@ msgstr "Der Skill „catwright-ui“ bringt Vibe bei, Tabellen, Diagramme, Formu
 
 msgid "{path} — the working folder of sessions without a project."
 msgstr "{path} — der Arbeitsordner der Sitzungen ohne Projekt."
+
+msgid "The config folder could not be created: {error}"
+msgstr "Der Konfigurationsordner konnte nicht erstellt werden: {error}"
+
+msgid "The config folder could not be read: {error}"
+msgstr "Der Konfigurationsordner konnte nicht gelesen werden: {error}"
+
+msgid "The config folder could not be made private: {error}"
+msgstr "Der Konfigurationsordner konnte nicht privat gesetzt werden: {error}"
+
+msgid "The agent sent a line longer than {bytes} bytes; it was skipped."
+msgstr "Der Agent sendete eine Zeile mit über {bytes} Bytes; sie wurde übersprungen."
+
+msgid "The session list of {dir} stopped paging after {pages} pages."
+msgstr "Die Sitzungsliste von {dir} wurde nach {pages} Seiten gestoppt."
+
+msgid "… {count} older transcript items are not shown"
+msgstr "… {count} ältere Transkript-Einträge werden nicht angezeigt"
+
+msgid "The config folder could not be used: {path}"
+msgstr "Der Konfigurationsordner konnte nicht verwendet werden: {path}"

@@ -734,51 +734,191 @@ fn drain_stderr(mut reader: ChildStderr, tail: Arc<Mutex<Vec<u8>>>) {
     }
 }
 
-fn reader_loop<R: BufRead + Send + 'static>(reader: R, shared: Arc<Shared>, waker: Option<Waker>) {
-    let mut lines = reader.lines();
-    // Some(Err) and None both end the loop (EOF or read error)
-    while let Some(Ok(line)) = lines.next() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Some(ev) = handle_line(&line, &shared) {
-            if shared.tx.send(ev).is_err() {
-                return; // receiver dropped
+fn reader_loop<R: BufRead + Send + 'static>(
+    mut reader: R,
+    shared: Arc<Shared>,
+    waker: Option<Waker>,
+) {
+    // A line beyond the budget is skipped, not read into memory; a real
+    // read error and EOF both end the loop. Invalid UTF-8 does not end
+    // anything: `lines()` used to hand it out as a read error behind
+    // `Some(Err(..))`, ending the session view as a clean exit over one
+    // stray byte; now the lossy text simply reaches the parser.
+    loop {
+        match next_wire_line(&mut reader, MAX_WIRE_LINE_BYTES) {
+            Ok(WireLine::Line(line)) if line.trim().is_empty() => continue,
+            Ok(WireLine::Line(line)) => {
+                if let Some(ev) = handle_line(&line, &shared) {
+                    if shared.tx.send(ev).is_err() {
+                        return; // receiver dropped
+                    }
+                    if let Some(w) = &waker {
+                        w();
+                    }
+                }
             }
-            if let Some(w) = &waker {
-                w();
+            Ok(WireLine::TooLong) => {
+                let ev = AcpEvent::ProtocolError(trf(
+                    "The agent sent a line longer than {bytes} bytes; it was skipped.",
+                    &[("bytes", &MAX_WIRE_LINE_BYTES.to_string())],
+                ));
+                if shared.tx.send(ev).is_err() {
+                    return;
+                }
+                if let Some(w) = &waker {
+                    w();
+                }
             }
+            Ok(WireLine::Eof) | Err(_) => break,
         }
     }
     // stdout EOF: give the child a moment to exit, then report Exited with
     // the stderr tail. Never block in wait() while holding the child mutex:
     // a child that closed stdout but keeps running would otherwise deadlock
     // shutdown()/Drop on the UI thread.
-    let code = wait_after_eof(&shared.child, Duration::from_secs(3));
-    if let Some(h) = shared.stderr_handle.lock().unwrap().take() {
-        let _ = h.join();
+    let exit = wait_after_eof(&shared.child, EOF_WAIT);
+    // Only an ended child's stderr drain thread finishes on its own; a
+    // still-running one keeps stderr open, and joining it would park this
+    // thread forever — the harness would never hear Exited (A1.4). The
+    // transport is gone either way: report what there is, the drain
+    // thread dies with the process, its last chunk unobserved.
+    if matches!(exit, ExitPoll::Ended(_)) {
+        if let Some(h) = shared.stderr_handle.lock().unwrap().take() {
+            let _ = h.join();
+        }
     }
     let stderr_tail = String::from_utf8_lossy(&shared.stderr_tail.lock().unwrap()).into_owned();
+    let code = match exit {
+        ExitPoll::Ended(code) => code,
+        ExitPoll::StillRunning => None,
+    };
     let _ = shared.tx.send(AcpEvent::Exited { code, stderr_tail });
     if let Some(w) = &waker {
         w();
     }
 }
 
-/// Poll the child for up to `timeout` (lock released between polls). A
-/// child that is still running afterwards is left for shutdown()/Drop.
-fn wait_after_eof(child: &Mutex<Option<Child>>, timeout: Duration) -> Option<i32> {
-    let deadline = Instant::now() + timeout;
+/// How large one agent line may be before it is skipped instead of read.
+/// Wire answers — a big `session/load` replay, `_review/turnDiff`
+/// results, image blocks — fit many times over; beyond this the peer is
+/// broken or hostile, and the reader must not starve the machine on it.
+const MAX_WIRE_LINE_BYTES: usize = 64 * 1024 * 1024;
+
+/// How long after stdout EOF the child may take to exit before Exited is
+/// reported from a still-running (stdout-abandoned) child.
+const EOF_WAIT: Duration = Duration::from_secs(3);
+
+/// One line of the agent's stdout, as the reader hands it on.
+#[derive(Debug, PartialEq)]
+enum WireLine {
+    /// A complete line (or the last before EOF), newline and a preceding
+    /// \r stripped, UTF-8 made lossy. Never empty-checked here.
+    Line(String),
+    /// A line blew the budget: everything up to its newline was skipped.
+    TooLong,
+    /// The stream ended before any newline and nothing had accumulated.
+    Eof,
+}
+
+/// Read one line bounded by `budget`: bytes beyond the budget are skipped
+/// until the line's newline (reported as [`WireLine::TooLong`]), so a peer
+/// writing one endless line cannot grow the buffer without limit. The
+/// newline-less rest at EOF is the last line.
+fn next_wire_line<R: BufRead>(reader: &mut R, budget: usize) -> std::io::Result<WireLine> {
+    let mut line: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let mut discarding = false;
     loop {
-        let status = child.lock().unwrap().as_mut()?.try_wait();
-        match status {
-            Ok(Some(s)) => return s.code(),
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+        // EINTR is a hiccup, not the end: `read_line` inside `lines()`
+        // retried interrupted calls; the wire reader must too, or one
+        // stray signal would present a dead session as a clean exit.
+        let buf = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if buf.is_empty() {
+            // EOF: no newline seen. A discarded line never completed, so
+            // it owns nothing of what is left to say — that is the end.
+            return Ok(if discarding || line.is_empty() {
+                WireLine::Eof
+            } else {
+                WireLine::Line(lossy_line(&line))
+            });
+        }
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(at) => {
+                // the completed line would grow past the budget (or the
+                // rest of a discarded one ends here): skip it, read on
+                let over = discarding || line.len() + at > budget;
+                if !over {
+                    line.extend_from_slice(&buf[..at]);
+                }
+                reader.consume(at + 1);
+                return Ok(if over {
+                    WireLine::TooLong
+                } else {
+                    WireLine::Line(lossy_line(&line))
+                });
             }
-            _ => return None,
+            None => {
+                let n = buf.len();
+                if discarding {
+                    reader.consume(n);
+                } else if line.len() + n <= budget {
+                    line.extend_from_slice(buf);
+                    reader.consume(n);
+                } else {
+                    // fill to the budget for the honest skip message, then
+                    // drop the buffer — the rest of the line is unread
+                    let keep = budget - line.len();
+                    reader.consume(keep);
+                    discarding = true;
+                    line.clear();
+                    line.shrink_to_fit();
+                }
+            }
         }
     }
+}
+
+/// The wire line without its newline (and a preceding `\r`, as
+/// `BufRead::lines` stripped both), invalid UTF-8 read lossily: the
+/// parser judges the JSON, not the bytes.
+fn lossy_line(bytes: &[u8]) -> String {
+    let mut line = bytes;
+    if line.last() == Some(&b'\r') {
+        line = &line[..line.len() - 1];
+    }
+    String::from_utf8_lossy(line).into_owned()
+}
+
+/// Poll the child for up to `timeout` (lock released between polls). A
+/// child that is still running afterwards is left for shutdown()/Drop;
+/// `Ended` is the exited one (the code is None when a signal killed it).
+fn wait_after_eof(child: &Mutex<Option<Child>>, timeout: Duration) -> ExitPoll {
+    let deadline = Instant::now() + timeout;
+    loop {
+        // no child at all (stream tests): the report goes out at once
+        let mut guard = child.lock().unwrap();
+        let Some(live) = guard.as_mut() else {
+            return ExitPoll::Ended(None);
+        };
+        match live.try_wait() {
+            Ok(Some(s)) => return ExitPoll::Ended(s.code()),
+            Ok(None) if Instant::now() < deadline => {
+                drop(guard);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => return ExitPoll::StillRunning,
+        }
+    }
+}
+
+/// What `wait_after_eof` found: an ended child's exit code (None for a
+/// signal), or a child that closed stdout but lives on.
+enum ExitPoll {
+    Ended(Option<i32>),
+    StillRunning,
 }
 
 /// Handle one non-empty line; returns the event to deliver (if any).
@@ -1510,5 +1650,100 @@ mod tests {
             client.initialize().is_err(),
             "sending after shutdown must fail"
         );
+    }
+
+    #[test]
+    fn wire_lines_strip_crlf_and_read_lossy_utf8() {
+        let mut r = std::io::Cursor::new(b"{\"id\":1}\r\n\xff kein json\nlast".to_vec());
+        // \r\n is stripped like BufRead::lines did
+        assert_eq!(
+            next_wire_line(&mut r, 1024).unwrap(),
+            WireLine::Line("{\"id\":1}".into())
+        );
+        // invalid UTF-8 arrives as a lossy line, not as the end of the agent
+        let second = match next_wire_line(&mut r, 1024).unwrap() {
+            WireLine::Line(l) => l,
+            other => panic!("expected a line, got {other:?}"),
+        };
+        assert!(second.contains("kein json"));
+        assert!(second.contains('�'));
+        // the rest without a newline is the last line, then EOF
+        assert_eq!(
+            next_wire_line(&mut r, 1024).unwrap(),
+            WireLine::Line("last".into())
+        );
+        assert_eq!(next_wire_line(&mut r, 1024).unwrap(), WireLine::Eof);
+    }
+
+    #[test]
+    fn wire_line_over_the_budget_is_skipped_not_read() {
+        let mut r = std::io::Cursor::new(b"0123456789ABCDEF\nnext\n".to_vec());
+        // a line past the budget is dropped whole; the stream continues
+        assert_eq!(next_wire_line(&mut r, 8).unwrap(), WireLine::TooLong);
+        assert_eq!(
+            next_wire_line(&mut r, 8).unwrap(),
+            WireLine::Line("next".into())
+        );
+        assert_eq!(next_wire_line(&mut r, 8).unwrap(), WireLine::Eof);
+        // exactly at the budget is still a line
+        let mut r = std::io::Cursor::new(b"01234567\n".to_vec());
+        assert_eq!(
+            next_wire_line(&mut r, 8).unwrap(),
+            WireLine::Line("01234567".into())
+        );
+        // a line that blows the budget only at EOF counts as the end:
+        // it never completed
+        let mut r = std::io::Cursor::new(b"0123456789ABCDEF".to_vec());
+        assert_eq!(next_wire_line(&mut r, 8).unwrap(), WireLine::Eof);
+    }
+
+    #[test]
+    fn wire_line_accumulates_across_tiny_reads() {
+        let mut r = std::io::Cursor::new(b"ab\ncd".to_vec());
+        let mut piecewise = std::io::BufReader::with_capacity(1, &mut r);
+        assert_eq!(
+            next_wire_line(&mut piecewise, 100).unwrap(),
+            WireLine::Line("ab".into())
+        );
+        assert_eq!(
+            next_wire_line(&mut piecewise, 100).unwrap(),
+            WireLine::Line("cd".into())
+        );
+        assert_eq!(next_wire_line(&mut piecewise, 100).unwrap(), WireLine::Eof);
+    }
+
+    /// The reader thread survives invalid UTF-8 (one stray byte no longer
+    /// ends the session as a clean exit) and still parses what follows.
+    #[test]
+    fn reader_loop_survives_invalid_utf8_and_reports_exit() {
+        let (tx, rx) = mpsc::channel::<AcpEvent>();
+        let shared = Shared {
+            tx,
+            writer_slot: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            stderr_tail: Arc::new(Mutex::new(Vec::new())),
+            stderr_handle: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
+        };
+        let junk_then_real = b"\xff\xfe\xfd garbage\n\
+            {\"jsonrpc\":\"2.0\",\"method\":\"_session/retrying\",\"params\":{\"sessionId\":\"s\",\"category\":\"rate_limited\",\"detail\":\"429\"}}\n"
+            .to_vec();
+        // rx stays ours throughout: the events land while we hold it
+        reader_loop(std::io::Cursor::new(junk_then_real), Arc::new(shared), None);
+        // the junk line is reported as a protocol error, not as the end
+        match rx.try_recv() {
+            Ok(AcpEvent::ProtocolError(msg)) => assert!(msg.contains("not valid JSON")),
+            other => panic!("expected a protocol error for the junk line, got {other:?}"),
+        }
+        // and the session lives on: the next line parses
+        match rx.try_recv() {
+            Ok(AcpEvent::Retrying { category, .. }) => assert_eq!(category, "rate_limited"),
+            other => panic!("expected Retrying after invalid UTF-8, got {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(AcpEvent::Exited { code, .. }) => assert_eq!(code, None),
+            other => panic!("expected Exited, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "nothing follows the report");
     }
 }

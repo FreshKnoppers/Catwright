@@ -4,7 +4,7 @@
 //! files; the app itself holds no secrets (Vibe uses its own keyring
 //! login). Nothing is ever logged.
 
-use crate::i18n::trf;
+use crate::i18n::{tr, trf};
 use std::path::{Path, PathBuf};
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -25,7 +25,7 @@ pub fn chat_workspace_dir() -> Option<PathBuf> {
 /// the final path, even when the old file had a looser one.
 fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -37,18 +37,19 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
         Some(n) => n.to_string_lossy().into_owned(),
         None => "data".into(),
     };
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(mode)
-            .open(&tmp)?;
-        // `mode()` applies only when the file is created (and through the
-        // umask), so a leftover temp file would keep its old mode. Forcing
-        // the mode here makes it unconditional on the renamed target.
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+    let mut temp_used: Option<PathBuf> = None;
+    let written: std::io::Result<()> = (|| {
+        // `create_new` (O_EXCL) refuses every pre-existing name, so a
+        // planted symlink at a predictable temp name can never be opened
+        // and written through; on a collision the next number wins.
+        let (mut f, tmp) = open_fresh_temp(dir, &name, mode)?;
+        temp_used = Some(tmp.clone());
+        // `mode()` applies to the create only (and through the umask), so
+        // the mode here is forced through the OPEN HANDLE: that the temp
+        // file is fresh already rules a planted symlink out, and chmod by
+        // handle can also not be redirected if the name were swapped
+        // between the create and here.
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
         f.write_all(contents.as_bytes())?;
         f.flush()?;
         f.sync_all()?;
@@ -71,9 +72,103 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> std::io::Result<()> {
     })();
     if written.is_err() {
         // Whatever went wrong, no half-written temp file may linger.
-        let _ = std::fs::remove_file(&tmp);
+        if let Some(tmp) = temp_used {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
     written
+}
+
+/// Open a fresh temp file for the atomic writer: `.{name}.{pid}[.n].tmp`,
+/// never an existing name. A thousand collisions mean a thousand leftovers
+/// of the same pid — implausible, and reported as the next AlreadyExists.
+fn open_fresh_temp(dir: &Path, name: &str, mode: u32) -> std::io::Result<(std::fs::File, PathBuf)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let pid = std::process::id();
+    for n in 0..1000u32 {
+        let candidate = if n == 0 {
+            dir.join(format!(".{name}.{pid}.tmp"))
+        } else {
+            dir.join(format!(".{name}.{pid}.{n}.tmp"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((f, candidate)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no fresh temp name",
+    ))
+}
+
+/// The app's config folder is the user's business alone: besides the
+/// settings it carries the chat workspace with the agent's files and
+/// full worktree checkouts of the user's projects. So it is created
+/// 0700 from the start, and a pre-existing one with loose group/other
+/// access bits is tightened once. Idempotent, and parents keep their
+/// own modes — `~/.config` is not ours.
+pub fn ensure_config_dir_private() -> Result<(), String> {
+    let Some(dir) = config_dir() else {
+        return Err(tr("no config folder").to_string());
+    };
+    ensure_private_dir(&dir)
+}
+
+fn ensure_private_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            trf(
+                "The config folder could not be created: {error}",
+                &[("error", &e)],
+            )
+        })?;
+    }
+    // mkdir's mode goes through the umask, but 0700 has no group/other
+    // bit the umask could need to clear, so the fresh dir is exactly 0700.
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = std::fs::metadata(dir).map_err(|e| {
+                trf(
+                    "The config folder could not be read: {error}",
+                    &[("error", &e)],
+                )
+            })?;
+            if !meta.is_dir() {
+                // a file (or worse) sits where the folder belongs: say
+                // where, so the user can move it aside
+                return Err(trf(
+                    "The config folder could not be used: {path}",
+                    &[("path", &dir.to_string_lossy())],
+                ));
+            }
+            // Only the access bits decide: a setgid or sticky flag says
+            // nothing about who may look inside, and stays as it is.
+            if meta.mode() & 0o077 != 0 {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(
+                    |e| {
+                        trf(
+                            "The config folder could not be made private: {error}",
+                            &[("error", &e)],
+                        )
+                    },
+                )?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(trf(
+            "The config folder could not be created: {error}",
+            &[("error", &e)],
+        )),
+    }
 }
 
 /// Write a secret-bearing file atomically and private, mode 0600.
@@ -741,6 +836,71 @@ mod tests {
         assert_eq!(names, ["secret.json"]);
         // the guard restores the write bit so the cleanup can remove the tree
         drop(_restore);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The temp file is only ever a name we created ourselves: a symlink
+    /// planted at the predicted `.NAME.PID.tmp` name is not opened and
+    /// not written through — the writer moves on to the next number, the
+    /// victim stays untouched (audit: symlink follow-through).
+    #[test]
+    fn write_atomic_never_opens_a_planted_symlink_at_the_temp_name() {
+        let base = tmp_base("tmp-symlink");
+        let dir = base.join("data");
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = base.join("victim.txt");
+        std::fs::write(&victim, "unversehrt\n").unwrap();
+        let target = dir.join("settings.json");
+        let planted = dir.join(format!(".settings.json.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &planted).unwrap();
+        save_settings_at(&target, &Settings::default()).unwrap();
+        // the victim was neither truncated nor written through, and the
+        // final file is a regular one with the settings' content
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unversehrt\n");
+        assert!(!target.is_symlink());
+        assert!(
+            serde_json::from_str::<Settings>(&std::fs::read_to_string(&target).unwrap()).is_ok()
+        );
+        // the planted symlink was left alone (its name was not taken over)
+        assert!(planted.is_symlink());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The config folder is private from its first creation on, a loose one
+    /// is tightened once, and a file in its place is reported, not fixed.
+    #[test]
+    fn ensure_private_dir_creates_0700_tightens_and_reports_a_non_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = tmp_base("private-dir");
+        let dir = base.join("cfg");
+        std::fs::create_dir_all(&base).unwrap();
+        // fresh creation lands at 0700 regardless of the umask
+        ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        // loosened to group/other access: tightened again, once
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        // idempotent: a second call changes nothing
+        ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        // a regular file in the place of the folder is an error
+        let file = base.join("occupied");
+        std::fs::write(&file, "x").unwrap();
+        assert!(ensure_private_dir(&file).is_err());
+        // the parent of the folder keeps its own mode: only the leaf is ours
+        let parent_mode = std::fs::metadata(&base).unwrap().permissions().mode() & 0o777;
+        let fresh_parent = base.join("deep/er");
+        ensure_private_dir(&fresh_parent.join("cfg")).unwrap();
+        let parent_mode2 = std::fs::metadata(&fresh_parent)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent_mode2, parent_mode, "parents keep their mode");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

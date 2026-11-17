@@ -396,15 +396,48 @@ impl ToolCall {
         if let Some(locations) = &upd.locations {
             self.locations = locations.clone();
         }
-        if upd.raw_input.is_some() {
-            self.raw_input = upd.raw_input.clone();
+        // serde maps json `null` to None, so `is_some` is presence; the
+        // takeover itself caps the value's size (see bounded_raw)
+        if let Some(raw) = &upd.raw_input {
+            self.raw_input = Some(bounded_raw(raw));
         }
-        if upd.raw_output.is_some() {
-            self.raw_output = upd.raw_output.clone();
+        if let Some(raw) = &upd.raw_output {
+            self.raw_output = Some(bounded_raw(raw));
         }
         if upd.meta.is_some() {
             self.meta = upd.meta.clone();
         }
+    }
+
+    /// A copy whose raw input/output obey the retention bound: the first
+    /// takeover goes through this cap too, not only updates of an entry.
+    pub fn bounded_clone(&self) -> ToolCall {
+        ToolCall {
+            raw_input: self.raw_input.as_ref().map(bounded_raw),
+            raw_output: self.raw_output.as_ref().map(bounded_raw),
+            tool_call_id: self.tool_call_id.clone(),
+            title: self.title.clone(),
+            kind: self.kind.clone(),
+            status: self.status.clone(),
+            content: self.content.clone(),
+            locations: self.locations.clone(),
+            meta: self.meta.clone(),
+        }
+    }
+}
+
+/// How large a retained tool raw value may be (audit N1): raws are display
+/// data for the cards, and a child streaming giant payloads through a
+/// single tool call must not grow its entry freely.
+const MAX_TOOL_RAW_BYTES: usize = 256 * 1024;
+
+/// A raw value within the bound is taken as is; a larger one becomes a
+/// short marker object that says so. The marker keeps the JSON shape the
+/// cards render, with the content gone.
+fn bounded_raw(v: &Value) -> Value {
+    match serde_json::to_string(v) {
+        Ok(s) if s.len() <= MAX_TOOL_RAW_BYTES => v.clone(),
+        _ => json!({"trimmed": true, "reason": "larger than the retention bound"}),
     }
 }
 
@@ -1232,5 +1265,42 @@ mod tests {
             permission_outcome(None),
             json!({"outcome": {"outcome": "cancelled"}})
         );
+    }
+
+    /// The retention bound of raw values (audit N1): only oversized raws
+    /// become the marker object; in-bound and absent ones are untouched.
+    #[test]
+    fn oversized_raw_values_become_markers() {
+        let huge = "x".repeat(MAX_TOOL_RAW_BYTES + 1);
+        let mut tc = ToolCall {
+            tool_call_id: "t1".to_string(),
+            title: "T".to_string(),
+            kind: ToolKind::Other,
+            status: ToolStatus::Completed,
+            content: Vec::new(),
+            locations: Vec::new(),
+            raw_input: None,
+            raw_output: None,
+            meta: None,
+        };
+        // an update's oversized output is capped by the marker object
+        let upd: ToolCallUpdate =
+            serde_json::from_value(json!({"toolCallId": "t1", "rawOutput": {"blob": huge}}))
+                .unwrap();
+        tc.apply(&upd);
+        assert_eq!(
+            tc.raw_output,
+            Some(json!({"trimmed": true, "reason": "larger than the retention bound"}))
+        );
+        // the first takeover is capped too: an oversized input through the
+        // bounded copy comes back as the same marker
+        tc.raw_input = Some(json!({"blob": huge}));
+        let bounded = tc.bounded_clone();
+        assert_eq!(bounded.raw_input, tc.raw_output);
+        // an in-bound raw is kept as is, an absent one stays absent
+        tc.raw_input = Some(json!({"small": 1}));
+        let kept = tc.bounded_clone();
+        assert_eq!(kept.raw_input, Some(json!({"small": 1})));
+        assert_eq!(kept.raw_output, tc.raw_output);
     }
 }

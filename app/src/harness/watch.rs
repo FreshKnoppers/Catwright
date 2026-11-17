@@ -132,6 +132,20 @@ impl Watcher {
 /// Meant for a background thread; never call it on the UI thread.
 pub(crate) fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut child = Command::new("git")
+        // The repository's own config must not run code on our calls.
+        // Overridden here, on the command line (which beats .git/config):
+        // `core.fsmonitor` — executable at scan time (verified against
+        // git 2.56: `worktree add` calls it even under
+        // `--no-optional-locks`) — and the hook directory, so a
+        // `worktree add` cannot run the repo's post-checkout hook
+        // (verified: `/dev/null` suppresses it). Not covered by this:
+        // smudge/clean filters on checkout, which a working tree needs
+        // to work — those stay the repo's own, and their .gitattributes
+        // are the same privilege as the files they live in.
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -210,6 +224,14 @@ pub(crate) fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
 
 fn git_output_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     let mut child = Command::new("git")
+        // see run_git: repo config must not execute on the scans —
+        // `core.fsmonitor` runs on `ls-files`/`status` despite
+        // `--no-optional-locks` (verified against git 2.56). Not covered
+        // here: `status` may run the repo's clean filter on worktree
+        // files whose index entry looks racy-clean — that filter is part
+        // of how the worktree reports itself, so the lookup lets it.
+        .arg("-c")
+        .arg("core.fsmonitor=false")
         .arg("-C")
         .arg(dir)
         // never touch the repository's index: the agent's own git commands

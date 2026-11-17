@@ -9,6 +9,10 @@
 //!   catwright                                   start the GUI
 //!   catwright --project <dir> [--session <id>]  add/select a project, load a session
 //!   catwright --project <dir> --prompt <text>   start with this message (new session, or the loaded one)
+//!   catwright --project <dir> --prompt -         same, but the message is read from stdin
+//!                                                (`--prompt <text>` stays in `ps` for the
+//!                                                life of the process; stdin and the
+//!                                                CATWRIGHT_PROMPT env var do not)
 //!   catwright --settings [tab]                  open the settings (allgemein|vibe|konto|kuerzel|datenschutz)
 //!   catwright --screenshot out.png [--frames N] render N frames (default 120), save PNG, exit
 //!   catwright --lang en|de                      UI language for this run (not saved)
@@ -35,6 +39,7 @@ mod syntax;
 mod theme;
 mod widgets;
 
+use std::io::Read;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -109,6 +114,30 @@ fn parse_cli(args: &[String]) -> Cli {
     cli
 }
 
+/// The startup prompt once the CLI is parsed. `--prompt -` reads the
+/// message from stdin (a trailing newline goes away with `echo |`;
+/// empty input gives no prompt), a plain `--prompt <text>` is taken as
+/// is, and without either the CATWRIGHT_PROMPT env var is honoured
+/// (empty counts as unset; main removes it after reading, so no child
+/// inherits it). The env var hides the message where argv cannot:
+/// procfs lets anyone read `cmdline`, while `environ` is owner-only.
+fn prompt_from(arg: Option<String>, env: Option<String>, stdin: &mut impl Read) -> Option<String> {
+    match arg {
+        Some(mark) if mark == "-" => {
+            let mut text = String::new();
+            match stdin.read_to_string(&mut text) {
+                Ok(_) if text.trim().is_empty() => None,
+                Ok(_) => Some(text.trim_end().to_string()),
+                Err(e) => {
+                    eprintln!("the prompt could not be read from stdin: {e}");
+                    None
+                }
+            }
+        }
+        arg => arg.or_else(|| env.filter(|e| !e.is_empty())),
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     // internal ui-js evaluation worker (see src/script.rs): one JSON
@@ -134,7 +163,18 @@ fn main() -> eframe::Result<()> {
     let screenshot = cli.screenshot;
     let settings = cli.settings;
     let frames = cli.frames;
-    let prompt = cli.prompt;
+    // `-` means stdin; a literal `--prompt <text>` beats the env var,
+    // and only without either does CATWRIGHT_PROMPT speak (see prompt_from)
+    let prompt = prompt_from(
+        cli.prompt,
+        std::env::var("CATWRIGHT_PROMPT").ok(),
+        &mut std::io::stdin(),
+    );
+    // A prompt variable only protects while it is gone after reading:
+    // every child (the agent, its tools, git) inherits the environment.
+    // No threads exist yet (the worker branch returned above), so the
+    // removal is race-free.
+    std::env::remove_var("CATWRIGHT_PROMPT");
     let lang = cli.lang;
     let open = cli.project.map(|p| (p, cli.session));
     eframe::run_native(
@@ -231,5 +271,69 @@ mod tests {
             Some("Mach das")
         );
         assert_eq!(cli(&["--prompt"]).prompt, None);
+    }
+
+    #[test]
+    fn prompt_stdin_is_read_from_the_stream_and_empty_gives_none() {
+        // `-` reads the message from stdin: the text never enters argv,
+        // and the newline that `echo |` appends goes away with it
+        assert_eq!(
+            prompt_from(
+                cli(&["--prompt", "-"]).prompt,
+                None,
+                &mut std::io::Cursor::new(b"Eine Frage\n".to_vec())
+            )
+            .as_deref(),
+            Some("Eine Frage")
+        );
+        // inner newlines stay: it is a message, not a line
+        assert_eq!(
+            prompt_from(
+                cli(&["--prompt", "-"]).prompt,
+                None,
+                &mut std::io::Cursor::new(b"Zeile 1\nZeile 2\n\n".to_vec())
+            )
+            .as_deref(),
+            Some("Zeile 1\nZeile 2")
+        );
+        // empty stdin (or only whitespace) is no prompt, not an empty one
+        assert_eq!(
+            prompt_from(
+                cli(&["--prompt", "-"]).prompt,
+                None,
+                &mut std::io::Cursor::new(Vec::new())
+            ),
+            None
+        );
+        assert_eq!(
+            prompt_from(
+                cli(&["--prompt", "-"]).prompt,
+                None,
+                &mut std::io::Cursor::new(b" \n".to_vec())
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn prompt_env_var_is_the_fallback_and_empty_counts_as_unset() {
+        assert_eq!(
+            prompt_from(None, Some("Aus dem Env".into()), &mut std::io::empty()).as_deref(),
+            Some("Aus dem Env")
+        );
+        assert_eq!(
+            prompt_from(None, Some(String::new()), &mut std::io::empty()),
+            None
+        );
+        // an explicit argument beats the env var
+        assert_eq!(
+            prompt_from(
+                Some("Arg gewinnt".into()),
+                Some("Env".into()),
+                &mut std::io::empty()
+            )
+            .as_deref(),
+            Some("Arg gewinnt")
+        );
     }
 }

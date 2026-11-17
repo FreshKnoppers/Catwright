@@ -194,6 +194,19 @@ fn render_items(
         return Vec::new();
     };
     let running = s.turn != TurnState::Idle;
+    // retention hint (audit N1): the oldest items left the view's memory
+    // once the transcript outgrew its bound; Vibe keeps the real history
+    if s.trimmed_front > 0 {
+        ui.label(
+            RichText::new(trf(
+                "… {count} older transcript items are not shown",
+                &[("count", &s.trimmed_front.to_string())],
+            ))
+            .color(theme::DIM)
+            .italics()
+            .size(13.5),
+        );
+    }
     // a finished round folds to its last answer; the running turn's rounds
     // stay open, older ones stay folded meanwhile
     let rounds = s.folded_rounds();

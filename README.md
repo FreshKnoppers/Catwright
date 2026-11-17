@@ -105,9 +105,16 @@ Command line:
 ```sh
 catwright --project ~/my/project                 # open a project
 catwright --project ~/my/project --prompt "Hello"
+catwright --project ~/my/project --prompt -      # first message read from stdin
+CATWRIGHT_PROMPT="Hello" catwright --project ~/my/project
 catwright --settings                             # open the settings
 catwright --lang de                              # UI language for this run only
 ```
+
+`--prompt <text>` sits in the process arguments, which other local users
+can read via `ps` for as long as Catwright runs. Prefer `--prompt -`
+(reads the message from stdin) or the `CATWRIGHT_PROMPT` environment
+variable on shared machines; both stay unreadable to others.
 
 ## Development
 

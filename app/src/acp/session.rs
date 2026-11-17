@@ -180,6 +180,11 @@ pub struct SessionView {
     /// (`begin_turn`): what it added lies at or after it. `None` without a
     /// turn in this run (a loaded history), or once a rewind cut it away.
     pub turn_start: Option<usize>,
+    /// How many of the oldest transcript items the retention bound dropped
+    /// ([`Self::trim_front`], audit N1). The transcript shows the count as
+    /// its first line; the authoritative history stays with Vibe, a
+    /// rewind restores from there.
+    pub trimmed_front: u32,
 }
 
 impl SessionView {
@@ -284,6 +289,7 @@ impl SessionView {
             cancelled_tools: HashSet::new(),
             turn: TurnState::Idle,
             turn_start: None,
+            trimmed_front: 0,
         }
     }
 
@@ -318,6 +324,7 @@ impl SessionView {
         self.permission_frames.clear();
         self.cancelled_tools.clear();
         self.turn_start = None;
+        self.trimmed_front = 0;
     }
 
     pub fn apply_update(&mut self, update: &SessionUpdate) {
@@ -328,8 +335,9 @@ impl SessionView {
             SessionUpdate::ToolCall(tc) => {
                 let id = tc.tool_call_id.clone();
                 // Replay/duplicate: replace the entry, no second Item::Tool.
+                // The bounded copy caps the raws' size (audit N1).
                 let is_new = !self.tool_calls.contains_key(&id);
-                self.tool_calls.insert(id.clone(), tc.clone());
+                self.tool_calls.insert(id.clone(), tc.bounded_clone());
                 if is_new {
                     self.items.push(Item::Tool(id));
                 }
@@ -339,7 +347,7 @@ impl SessionView {
                 match self.tool_calls.get_mut(&id) {
                     Some(tc) => tc.apply(u),
                     None => {
-                        let tc = tool_call_from_update(u);
+                        let tc = tool_call_from_update(u).bounded_clone();
                         self.tool_calls.insert(id.clone(), tc);
                         self.items.push(Item::Tool(id));
                     }
@@ -388,6 +396,50 @@ impl SessionView {
             }
             SessionUpdate::Unknown => {}
         }
+        self.trim_front();
+    }
+
+    /// Retention bound of one session's transcript (audit N1): the child
+    /// drives every byte of it, and its memory needs a bound. This one
+    /// counts ITEMS: past this many the oldest leave (the raw payloads
+    /// of each tool call are bounded separately, in `ToolCall`). What
+    /// it does not bound: the text of a single item — chunks of one
+    /// message id merge into one growing item — and a tool's `content`
+    /// list. Two thousand remaining items keep whole days of normal
+    /// work, and a trim only ever removes display memory — Vibe keeps
+    /// the authoritative history, a rewind restores from there.
+    const MAX_RETAINED_ITEMS: usize = 4_000;
+    /// How many items survive a trim.
+    const RETAINED_KEEP_ITEMS: usize = 2_000;
+
+    /// Drop the oldest items once the transcript outgrew the retention
+    /// bound. The same forgetting rules as `cut_items` apply (tools still
+    /// referenced stay, plan entries without their item go), `turn_start`
+    /// shifts with the items, and the count feeds the transcript's hint.
+    /// One visible cost: the folding keys of pre-trim rounds change, so
+    /// their fold state resets — once, when the trim happened.
+    fn trim_front(&mut self) {
+        if self.items.len() <= Self::MAX_RETAINED_ITEMS {
+            return;
+        }
+        let remove = self.items.len() - Self::RETAINED_KEEP_ITEMS;
+        self.items.drain(..remove);
+        self.trimmed_front = self.trimmed_front.saturating_add(remove as u32);
+        let keep: std::collections::HashSet<&String> = self
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Tool(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        self.tool_calls.retain(|k, _| keep.contains(k));
+        self.cancelled_tools
+            .retain(|id| self.tool_calls.contains_key(id));
+        if !self.items.iter().any(|i| matches!(i, Item::Plan)) {
+            self.plan.clear();
+        }
+        self.turn_start = self.turn_start.map(|s| s.saturating_sub(remove));
     }
 
     /// The conversation as Markdown (for "Verlauf kopieren"): user and agent
@@ -2271,5 +2323,45 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(tool_group_summary(&[&spawn, &spawn2]), "Starts 2 subagents");
+    }
+
+    /// The retention bound (audit N1): past it the oldest items leave,
+    /// tools that went with them are forgotten like `cut_items` forgets,
+    /// the turn index shifts with the items, and the dropped count adds
+    /// up for the transcript hint.
+    #[test]
+    fn retention_trims_the_oldest_items_and_shifts_bookkeeping() {
+        let mut v = SessionView::new("s", "/w");
+        v.items.push(Item::Tool("dropped".to_string()));
+        for i in 0..4_500 {
+            v.items.push(user(&format!("m{i}"), "Frage"));
+        }
+        v.items.push(Item::Tool("kept".to_string()));
+        v.tool_calls.insert(
+            "dropped".to_string(),
+            serde_json::from_value(json!({"toolCallId": "dropped"})).unwrap(),
+        );
+        v.tool_calls.insert(
+            "kept".to_string(),
+            serde_json::from_value(json!({"toolCallId": "kept"})).unwrap(),
+        );
+        v.cancelled_tools.insert("dropped".to_string());
+        v.turn_start = Some(3_000);
+        v.trim_front();
+        // 4502 items: 2502 leave, the last 2000 stay
+        assert_eq!(v.items.len(), 2_000);
+        assert_eq!(v.trimmed_front, 2_502);
+        assert!(!v.tool_calls.contains_key("dropped"));
+        assert!(!v.cancelled_tools.contains("dropped"));
+        assert!(v.tool_calls.contains_key("kept"));
+        assert_eq!(v.turn_start, Some(498));
+        // under the bound nothing happens, the count stays where it was
+        v.items.clear();
+        v.trim_front();
+        assert_eq!(v.trimmed_front, 2_502);
+        // a `session/load` resets hint and count with the transcript
+        v.trimmed_front = 7;
+        v.reset_items();
+        assert_eq!(v.trimmed_front, 0);
     }
 }

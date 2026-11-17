@@ -32,6 +32,11 @@ impl App {
         prompt: Option<String>,
         lang: Option<crate::i18n::Lang>,
     ) -> Self {
+        // Everything under the config folder — settings, the chat
+        // workspace with the agent's files, worktree checkouts — is the
+        // user's business alone: the folder is 0700 before anything lands
+        // in it. A failure does not stop the app; it is said, not hidden.
+        let privacy_error = store::ensure_config_dir_private().err();
         let (settings, settings_error) = match store::load_settings() {
             Ok(s) => (s, None),
             Err(msg) => {
@@ -74,6 +79,8 @@ impl App {
         // settings must not overwrite another instance's file either
         let owns_settings = store::claim_settings();
         if let Some(msg) = settings_error {
+            harness.status = msg;
+        } else if let Some(msg) = privacy_error {
             harness.status = msg;
         } else if !owns_settings && screenshot_path.is_none() {
             // two windows would overwrite each other's settings.json
