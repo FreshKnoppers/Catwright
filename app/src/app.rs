@@ -76,6 +76,7 @@ impl App {
         harness.ui.transcript_detail = settings.transcript_detail.clone();
         harness.auto_account = settings.auto_account;
         harness.pinned = settings.pinned_sessions.iter().cloned().collect();
+        harness.archived = settings.archived_sessions.iter().cloned().collect();
         // claimed in every case: an instance that could not read the
         // settings must not overwrite another instance's file either
         let owns_settings = store::claim_settings();
@@ -150,8 +151,11 @@ impl App {
     fn sync_pinned(&mut self) {
         let mut current: Vec<String> = self.harness.pinned.iter().cloned().collect();
         current.sort();
-        if current != self.settings.pinned_sessions {
+        let mut archived: Vec<String> = self.harness.archived.iter().cloned().collect();
+        archived.sort();
+        if current != self.settings.pinned_sessions || archived != self.settings.archived_sessions {
             self.settings.pinned_sessions = current;
+            self.settings.archived_sessions = archived;
             self.autosave();
         }
     }

@@ -26,7 +26,9 @@ use extras::{
     TrustInfo,
 };
 use serde_json::{json, Value};
-use state::{PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs, UiState};
+use state::{
+    ActivityEvent, ActivityKind, PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs, UiState,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -256,6 +258,11 @@ pub struct Harness {
     pub retrying: HashMap<String, String>,
     /// Sessions that finished a turn while another one was on screen.
     pub unseen: HashSet<String>,
+    /// The activity feed across all sessions (bounded).
+    pub activity: Vec<ActivityEvent>,
+    /// Archived session ids (persisted through the settings): hidden from
+    /// the sidebar's session lists, shown in their own group.
+    pub archived: HashSet<String>,
     /// Slash commands last reported by any session (for the start screen).
     pub known_commands: Vec<AvailableCommand>,
 }
@@ -348,6 +355,8 @@ impl Harness {
             last_turn_secs: HashMap::new(),
             retrying: HashMap::new(),
             unseen: HashSet::new(),
+            activity: Vec::new(),
+            archived: HashSet::new(),
             known_commands: Vec::new(),
         }
     }
@@ -743,7 +752,16 @@ impl Harness {
             }
             AcpEvent::QuestionAsked { request_id, params } => {
                 match extras::parse_question(request_id.clone(), &params) {
-                    Some(q) => self.questions.push(q),
+                    Some(q) => {
+                        let sid = q.session_id.clone().unwrap_or_default();
+                        self.push_activity(
+                            ActivityKind::Waiting,
+                            &sid,
+                            tr("Vibe asks a question").to_string(),
+                            Some(request_id.clone()),
+                        );
+                        self.questions.push(q);
+                    }
                     None => {
                         // not renderable as a form: an honest "declined"
                         // instead of leaving the turn hanging
@@ -767,8 +785,15 @@ impl Harness {
                 request_id,
                 request,
             } => {
+                let sid = request.session_id.clone();
+                let text = request
+                    .tool_call
+                    .title
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| tr("Permission request").to_string());
                 if let Some(v) = self.sessions.get_mut(&request.session_id) {
-                    v.add_permission(request_id, request);
+                    v.add_permission(request_id.clone(), request);
                 } else {
                     // Handoff 2.2: never silently drop. The turn blocks
                     // until an answer arrives, and the answer goes over the
@@ -777,7 +802,7 @@ impl Harness {
                     // card in the active view (harness::ui), together with
                     // its raw session id.
                     self.orphan_permissions.push(PendingPermission {
-                        request_id,
+                        request_id: request_id.clone(),
                         request,
                     });
                     self.status = tr(
@@ -785,6 +810,7 @@ impl Harness {
                     )
                     .to_string();
                 }
+                self.push_activity(ActivityKind::Waiting, &sid, text, Some(request_id));
             }
             AcpEvent::PromptFinished { session_id, result } => {
                 // the turn is over: no text to restore for it anymore
@@ -796,6 +822,12 @@ impl Harness {
                 }
                 if self.active.as_deref() != Some(session_id.as_str()) {
                     self.unseen.insert(session_id.clone());
+                }
+                if result.stop_reason != StopReason::Cancelled {
+                    let text = stop_reason_note(&result.stop_reason)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| tr("Turn finished").to_string());
+                    self.push_activity(ActivityKind::Finished, &session_id, text, None);
                 }
                 let mut cwd = None;
                 if let Some(v) = self.sessions.get_mut(&session_id) {
@@ -944,6 +976,12 @@ impl Harness {
                 }
                 match &request {
                     RequestKind::Prompt { session_id } => {
+                        self.push_activity(
+                            ActivityKind::Failed,
+                            session_id,
+                            error.message.clone(),
+                            None,
+                        );
                         self.turn_started.remove(session_id);
                         self.retrying.remove(session_id);
                         // The request is dead, so the turn is over — the
@@ -1421,6 +1459,7 @@ impl Harness {
     /// state.
     pub fn open_session(&mut self, cwd: PathBuf, session_id: &str) {
         self.artifacts_open = false;
+        self.ui.activity_open = false;
         self.unseen.remove(session_id);
         self.ui.focus_composer = true;
         if !self.sessions.contains_key(session_id) {
@@ -1651,6 +1690,7 @@ impl Harness {
         self.active = None;
         self.open_on_ready = None;
         self.artifacts_open = false;
+        self.ui.activity_open = false;
         self.ui.focus_composer = true;
     }
 
@@ -1699,12 +1739,77 @@ impl Harness {
     /// and clickable in the sidebar.
     pub fn sidebar_rows(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
         let list = self.listed.get(dir).cloned().unwrap_or_default();
+        let list: Vec<SessionInfo> = list
+            .into_iter()
+            .filter(|s| !self.archived.contains(&s.session_id))
+            .collect();
         let active = self
             .active
             .as_deref()
             .and_then(|sid| self.sessions.get(sid))
-            .filter(|v| v.cwd == dir);
+            .filter(|v| v.cwd == dir)
+            .filter(|v| !self.archived.contains(&v.session_id));
         sidebar_entries(&list, active, default_title, &self.pinned)
+    }
+
+    /// The archived sessions of one workspace, for the sidebar's own group.
+    pub fn sidebar_rows_archived(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
+        let list = self.listed.get(dir).cloned().unwrap_or_default();
+        let list: Vec<SessionInfo> = list
+            .into_iter()
+            .filter(|s| self.archived.contains(&s.session_id))
+            .collect();
+        sidebar_entries(&list, None, default_title, &self.pinned)
+    }
+
+    /// Mark a session unread (its dot shows in the sidebar until opened).
+    pub fn mark_unread(&mut self, session_id: &str) {
+        self.unseen.insert(session_id.to_string());
+    }
+
+    /// Archive a session locally: it leaves the sidebar's session list and
+    /// appears in the workspace's "Archived" group. Persisted through the
+    /// settings by the app.
+    pub fn archive_session(&mut self, session_id: &str) {
+        self.archived.insert(session_id.to_string());
+        self.unseen.remove(session_id);
+    }
+
+    pub fn unarchive_session(&mut self, session_id: &str) {
+        self.archived.remove(session_id);
+    }
+
+    /// Append one entry to the activity feed (bounded to the newest 100).
+    pub fn push_activity(
+        &mut self,
+        kind: ActivityKind,
+        sid: &str,
+        text: String,
+        request_id: Option<Value>,
+    ) {
+        const MAX: usize = 100;
+        let (cwd, title) = match self.sessions.get(sid) {
+            Some(v) => (v.cwd.clone(), v.title.clone().unwrap_or_default()),
+            None => self
+                .listed
+                .values()
+                .flatten()
+                .find(|s| s.session_id == sid)
+                .map(|s| (PathBuf::from(&s.cwd), s.title.clone().unwrap_or_default()))
+                .unwrap_or_default(),
+        };
+        self.activity.push(ActivityEvent {
+            kind,
+            sid: sid.to_string(),
+            cwd,
+            title,
+            text,
+            request_id,
+            at: extras::now_epoch(),
+        });
+        if self.activity.len() > MAX {
+            self.activity.drain(..self.activity.len() - MAX);
+        }
     }
 
     /// Use `dir` (created if missing) as the chat workspace "Allgemein". It

@@ -4099,6 +4099,60 @@ fn sidebar_entries_sort_by_updated_at() {
     assert_eq!(rows[2].session_id, "none");
 }
 
+#[test]
+fn permission_request_lands_in_the_activity_feed_as_waiting() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    let ev = h.activity.last().expect("an activity entry");
+    assert_eq!(ev.kind, ActivityKind::Waiting);
+    assert_eq!(ev.sid, "s1");
+    assert_eq!(ev.request_id, Some(json!(0)), "the feed can answer it");
+}
+
+#[test]
+fn activity_feed_is_bounded_to_the_newest_100() {
+    let (mut h, _agent) = setup(vec![], "ask");
+    for i in 0..120 {
+        h.push_activity(ActivityKind::Finished, "s", format!("t{i}"), None);
+    }
+    assert_eq!(h.activity.len(), 100);
+    assert_eq!(h.activity[0].text, "t20", "the oldest entries are dropped");
+}
+
+#[test]
+fn archived_sessions_leave_the_list_and_get_their_own_group() {
+    let dir = std::env::temp_dir();
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    h.listed.insert(
+        dir.clone(),
+        vec![
+            serde_json::from_value(json!({"sessionId": "a", "cwd": dir.to_string_lossy()}))
+                .unwrap(),
+            serde_json::from_value(json!({"sessionId": "b", "cwd": dir.to_string_lossy()}))
+                .unwrap(),
+        ],
+    );
+    h.archive_session("a");
+    let rows = h.sidebar_rows(&dir, "New session");
+    let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+    assert_eq!(ids, ["b"], "archived sessions leave the list");
+    let archived = h.sidebar_rows_archived(&dir, "New session");
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].session_id, "a");
+    h.unarchive_session("a");
+    assert_eq!(h.sidebar_rows(&dir, "New session").len(), 2);
+    // archiving clears the unread mark
+    h.mark_unread("b");
+    assert_eq!(h.session_state("b"), SessionState::Unseen);
+    h.archive_session("b");
+    assert_eq!(h.session_state("b"), SessionState::Idle);
+}
+
 /// `session/fork`: the request carries the source id, the new view
 /// shows the source transcript and becomes active.
 #[test]

@@ -4,6 +4,7 @@
 //! real ACP events folded into `Harness` (harness/mod.rs); UI strings are
 //! German.
 
+mod activity;
 mod artifacts;
 mod cards;
 mod composer;
@@ -47,6 +48,7 @@ pub enum HarnessAction {
 fn panel_visible(h: &Harness, ctx: &egui::Context) -> bool {
     h.active.is_some()
         && !h.artifacts_open
+        && !h.ui.activity_open
         && h.ui.preview.is_none()
         && !h.ui.panel_closed
         && ctx.screen_rect().width() >= PANEL_MIN_WINDOW
@@ -97,6 +99,10 @@ pub fn show(h: &mut Harness, ctx: &egui::Context) -> HarnessAction {
         .show(ctx, |ui| {
             if h.artifacts_open {
                 artifacts::view(h, ui);
+                return;
+            }
+            if h.ui.activity_open {
+                activity::view(h, ui);
                 return;
             }
             match h.active.clone().filter(|s| h.sessions.contains_key(s)) {
@@ -180,7 +186,7 @@ fn shortcuts(h: &mut Harness, ctx: &egui::Context, action: &mut HarnessAction) {
                 .iter()
                 .any(|e| matches!(e, egui::Event::Text(t) if !t.trim().is_empty()))
     });
-    if typing && !h.artifacts_open && ctx.memory(|m| m.focused().is_none()) {
+    if typing && !h.artifacts_open && !h.ui.activity_open && ctx.memory(|m| m.focused().is_none()) {
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("harness_composer")));
     }
     if pressed(Key::N) {

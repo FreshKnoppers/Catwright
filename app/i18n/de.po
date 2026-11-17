@@ -1565,3 +1565,39 @@ msgstr "Bitte arbeite diese Review-Kommentare in {path} ein:"
 
 msgid "Comments are in the input field — add to them and send."
 msgstr "Die Kommentare liegen im Eingabefeld — ergänze sie und sende ab."
+
+msgid "Activity"
+msgstr "Aktivität"
+
+msgid "Nothing yet — finished and waiting turns land here."
+msgstr "Noch nichts — beendete und wartende Läufe landen hier."
+
+msgid "Finished"
+msgstr "Fertig"
+
+msgid "Open"
+msgstr "Öffnen"
+
+msgid "Mark as unread"
+msgstr "Als ungelesen markieren"
+
+msgid "Archive"
+msgstr "Archivieren"
+
+msgid "Unarchive"
+msgstr "Wiederherstellen"
+
+msgid "Archived ({n})"
+msgstr "Archiviert ({n})"
+
+msgid "Vibe asks a question"
+msgstr "Vibe stellt eine Frage"
+
+msgid "Permission request"
+msgstr "Freigabe-Anfrage"
+
+msgid "Turn finished"
+msgstr "Lauf beendet"
+
+msgid "Session"
+msgstr "Sitzung"
