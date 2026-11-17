@@ -74,16 +74,27 @@ pub const CHART_SERIES: [Color32; 9] = [
     PROJECT_PALETTE[2], // orange
 ];
 
-/// Our own pixel mark: a little pixel window. `#` = filled, `.` = empty.
-pub const LOGO: [&str; 7] = [
-    ".#######.",
-    "#########",
-    "#.......#",
-    "#.##....#",
-    "#.......#",
-    "#.####..#",
-    ".#######.",
+/// Our own pixel mark: a little pixel window with two yellow eyes on a red
+/// sill. `o` = ORANGE, `y` = YELLOW, `r` = RED, `.` = empty. The app icons
+/// (`assets/icon.png`, `dist/icons/`) are rendered from this bitmap by
+/// `tools/icons/render.py`.
+pub const LOGO: [&str; 5] = [
+    "ooooooooo",
+    "o.......o",
+    "o.y...y.o",
+    "o.......o",
+    "rrrrrrrrr",
 ];
+
+/// Colour of one `LOGO` cell; `None` for an empty one.
+pub fn logo_color(cell: char) -> Option<Color32> {
+    match cell {
+        'o' => Some(ORANGE),
+        'y' => Some(YELLOW),
+        'r' => Some(RED),
+        _ => None,
+    }
+}
 
 /// Install the dark pixel theme on the context: colours, the type scale
 /// (egui's default `Small` of 9 pt is unreadable) and the spacing.
@@ -241,7 +252,7 @@ pub fn pixel_meter(ui: &mut egui::Ui, filled: usize, total: usize, block: f32) -
     response
 }
 
-/// The pixel logo, one GRADIENT colour per row (top = red, bottom = yellow).
+/// The pixel logo in its own colours (see `LOGO`).
 pub fn pixel_logo(ui: &mut egui::Ui, pixel: f32) -> egui::Response {
     let cols = LOGO[0].chars().count() as f32;
     let rows = LOGO.len() as f32;
@@ -249,9 +260,8 @@ pub fn pixel_logo(ui: &mut egui::Ui, pixel: f32) -> egui::Response {
         ui.allocate_exact_size(egui::vec2(cols * pixel, rows * pixel), egui::Sense::hover());
     let painter = ui.painter();
     for (row, line) in LOGO.iter().enumerate() {
-        let color = GRADIENT[row * 4 / 6];
         for (col, c) in line.chars().enumerate() {
-            if c == '#' {
+            if let Some(color) = logo_color(c) {
                 let pos = egui::pos2(
                     rect.left() + col as f32 * pixel,
                     rect.top() + row as f32 * pixel,
@@ -598,11 +608,20 @@ mod tests {
 
     #[test]
     fn logo_bitmap_shape() {
-        assert_eq!(LOGO.len(), 7);
+        assert_eq!(LOGO.len(), 5);
         for row in LOGO {
             assert_eq!(row.chars().count(), LOGO[0].chars().count());
-            assert!(row.chars().all(|c| c == '#' || c == '.'));
+            // every cell is empty or has a colour: no unknown letters
+            assert!(row.chars().all(|c| c == '.' || logo_color(c).is_some()));
         }
+        // all three colours appear, and the mark is closed on both sides
+        for c in ['o', 'y', 'r'] {
+            assert!(LOGO.iter().any(|row| row.contains(c)), "{c} is used");
+        }
+        assert!(LOGO
+            .iter()
+            .all(|row| !row.starts_with('.') && !row.ends_with('.')));
+        assert_eq!(logo_color('.'), None);
     }
 
     #[test]
