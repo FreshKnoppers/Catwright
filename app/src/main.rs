@@ -15,6 +15,9 @@
 //!                                                CATWRIGHT_PROMPT env var do not)
 //!   catwright --settings [tab]                  open the settings (allgemein|vibe|konto|kuerzel|datenschutz)
 //!   catwright --screenshot out.png [--frames N] render N frames (default 120), save PNG, exit
+//!   catwright --screenshot out.png --headless   same without a window or display server: the
+//!                                                frame is rasterized on the CPU (softrender.rs),
+//!                                                1360 × 860 points, or `--size WxH`
 //!   catwright --lang en|de                      UI language for this run (not saved)
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
@@ -34,6 +37,7 @@ mod memo;
 mod model;
 mod render;
 mod script;
+mod softrender;
 mod store;
 mod syntax;
 mod theme;
@@ -44,6 +48,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
+/// Window size at start, and the default `--headless` screenshot size.
+const HEADLESS_SIZE: (u32, u32) = (1360, 860);
+
 struct Cli {
     screenshot: Option<PathBuf>,
     settings: Option<String>,
@@ -53,6 +60,11 @@ struct Cli {
     /// `--lang`: UI language for this run only (screenshots, testing).
     lang: Option<i18n::Lang>,
     frames: u32,
+    /// `--headless`: render the screenshot without a window (softrender).
+    headless: bool,
+    /// `--size WxH`: headless screenshot size in points (default: the
+    /// window's 1360x860).
+    size: (u32, u32),
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -64,6 +76,8 @@ fn parse_cli(args: &[String]) -> Cli {
         prompt: None,
         lang: None,
         frames: 120,
+        headless: false,
+        size: HEADLESS_SIZE,
     };
     let mut i = 0;
     while i < args.len() {
@@ -88,8 +102,20 @@ fn parse_cli(args: &[String]) -> Cli {
                 cli.prompt = Some(args[i + 1].clone());
                 i += 2;
             }
+            "--headless" => {
+                cli.headless = true;
+                i += 1;
+            }
             "--lang" if i + 1 < args.len() => {
                 cli.lang = i18n::Lang::from_code(&args[i + 1]);
+                i += 2;
+            }
+            "--size" if i + 1 < args.len() => {
+                cli.size = args[i + 1]
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    .filter(|(w, h)| *w > 0 && *h > 0)
+                    .unwrap_or(HEADLESS_SIZE);
                 i += 2;
             }
             // Code and Chat are one view now: the old `--mode code|chat`
@@ -177,6 +203,25 @@ fn main() -> eframe::Result<()> {
     std::env::remove_var("CATWRIGHT_PROMPT");
     let lang = cli.lang;
     let open = cli.project.map(|p| (p, cli.session));
+    if cli.headless {
+        // no window: the same App, driven frame by frame and rasterized on
+        // the CPU, so screenshots work without X11/Wayland or a GPU
+        if screenshot.is_none() {
+            eprintln!("--headless needs --screenshot <png>");
+            std::process::exit(2);
+        }
+        let app = app::App::new(screenshot, settings, frames, open, prompt, lang);
+        match app.run_headless([cli.size.0, cli.size.1]) {
+            Ok(path) => {
+                eprintln!("screenshot saved to {}", path.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("screenshot failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     eframe::run_native(
         "Catwright",
         options,
@@ -190,8 +235,8 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// The window and taskbar icon: `assets/icon.png`, the pixel window mark
-/// of `theme::LOGO`, 128 × 128, generated from `LOGO` and `GRADIENT`.
+/// The window and taskbar icon: `assets/icon.png`, 128 × 128, the pixel
+/// mark of `theme::LOGO` on a dark tile, rendered by `tools/icons/render.py`.
 fn load_icon() -> egui::IconData {
     let bytes = include_bytes!("../assets/icon.png");
     let rgba = image::load_from_memory(bytes)
@@ -230,6 +275,41 @@ mod tests {
     }
 
     #[test]
+    fn the_bundled_window_icon_shows_the_logo_bitmap() {
+        // tools/icons/render.py draws theme::LOGO with whole-pixel cells;
+        // find the mark by its colours and compare it cell by cell, so a
+        // changed LOGO without re-rendered icons fails here
+        let icon = load_icon();
+        let w = icon.width as usize;
+        let px = |x: usize, y: usize| {
+            let i = (y * w + x) * 4;
+            egui::Color32::from_rgb(icon.rgba[i], icon.rgba[i + 1], icon.rgba[i + 2])
+        };
+        let colors: Vec<egui::Color32> = "oyr".chars().filter_map(theme::logo_color).collect();
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+        for y in 0..icon.height as usize {
+            for x in 0..w {
+                if colors.contains(&px(x, y)) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        let (cols, rows) = (theme::LOGO[0].chars().count(), theme::LOGO.len());
+        assert!(x1 > x0 && y1 > y0, "the icon contains the mark");
+        let cell = (x1 - x0 + 1) / cols;
+        assert_eq!((x1 - x0 + 1, y1 - y0 + 1), (cell * cols, cell * rows));
+        for (r, line) in theme::LOGO.iter().enumerate() {
+            for (c, ch) in line.chars().enumerate() {
+                let got = px(x0 + c * cell + cell / 2, y0 + r * cell + cell / 2);
+                match theme::logo_color(ch) {
+                    Some(want) => assert_eq!(got, want, "cell {r},{c}"),
+                    None => assert!(!colors.contains(&got), "cell {r},{c} is empty"),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn old_mode_arg_is_skipped_with_its_value() {
         // Code and Chat are one view now: `--mode code|chat` from old
         // scripts neither fails nor swallows the arguments after it
@@ -245,6 +325,18 @@ mod tests {
         let c = cli(&["--mode"]);
         assert_eq!(c.frames, 120);
         assert_eq!(c.project, None);
+    }
+
+    #[test]
+    fn headless_flag_parses_and_defaults_off() {
+        assert!(!cli(&["--screenshot", "/tmp/x.png"]).headless);
+        let c = cli(&["--screenshot", "/tmp/x.png", "--headless", "--frames", "9"]);
+        assert!(c.headless);
+        assert_eq!(c.frames, 9, "the flag takes no value");
+        assert_eq!(
+            c.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/x.png"))
+        );
     }
 
     #[test]

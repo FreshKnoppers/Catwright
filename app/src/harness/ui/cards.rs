@@ -372,7 +372,13 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.y = 0.0;
-                                    transcript::diff_body(ui, old_text.as_deref(), new_text, 200);
+                                    transcript::diff_body(
+                                        ui,
+                                        old_text.as_deref(),
+                                        new_text,
+                                        200,
+                                        None,
+                                    );
                                 });
                         }
                     }

@@ -24,6 +24,9 @@ enum Op {
     Rename(String, PathBuf, String),
     Delete(String, PathBuf, String),
     TogglePin(String),
+    MarkUnread(String),
+    Archive(String),
+    Unarchive(String),
     Remove(PathBuf),
     AddProject,
 }
@@ -86,7 +89,7 @@ fn brand_row(h: &mut Harness, ui: &mut egui::Ui) {
 }
 
 fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
-    let on_start = h.active.is_none() && !h.artifacts_open;
+    let on_start = h.active.is_none() && !h.artifacts_open && !h.ui.activity_open;
     if widgets::nav_row(
         ui,
         Icon::Plus,
@@ -101,8 +104,35 @@ fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
     if widgets::nav_row(ui, Icon::Search, tr("Search"), Some(tr("Ctrl K")), false).clicked() {
         h.ui.palette = Some(Default::default());
     }
+    // the activity feed with its unseen badge
+    let unseen_events = h.activity.len().saturating_sub(h.ui.activity_seen);
+    let resp = widgets::nav_row(ui, Icon::List, tr("Activity"), None, h.ui.activity_open);
+    if unseen_events > 0 {
+        let label = unseen_events.min(99).to_string();
+        let g = line_galley(ui, &label, mono(10.0), theme::SIDEBAR, 30.0);
+        let w = (g.size().x + 10.0).max(18.0);
+        let badge = Rect::from_min_size(
+            pos2(resp.rect.right() - w - 6.0, resp.rect.center().y - 8.0),
+            vec2(w, 16.0),
+        );
+        ui.painter().rect_filled(badge, 2.0, theme::ORANGE);
+        ui.painter().galley(
+            pos2(
+                badge.center().x - g.size().x / 2.0,
+                badge.center().y - g.size().y / 2.0,
+            ),
+            g,
+            theme::SIDEBAR,
+        );
+    }
+    if resp.clicked() {
+        h.ui.activity_open = true;
+        h.artifacts_open = false;
+        h.ui.activity_seen = h.activity.len();
+    }
     if widgets::nav_row(ui, Icon::Artifacts, tr("Artifacts"), None, h.artifacts_open).clicked() {
         h.artifacts_open = true;
+        h.ui.activity_open = false;
     }
 }
 
@@ -156,7 +186,11 @@ fn workspace_list(h: &mut Harness, ui: &mut egui::Ui) {
 /// One workspace row and, unless folded, its newest sessions below it.
 fn workspace_tree(h: &mut Harness, ui: &mut egui::Ui, p: &Path, ops: &mut Vec<Op>) {
     let rows = h.sidebar_rows(p, tr("New session"));
-    project_row(h, ui, p, rows.len(), ops);
+    let unseen = rows
+        .iter()
+        .filter(|e| h.session_state(&e.session_id) == SessionState::Unseen)
+        .count();
+    project_row(h, ui, p, rows.len(), unseen, ops);
     if h.ui.collapsed_projects.contains(p) {
         return;
     }
@@ -177,6 +211,19 @@ fn workspace_tree(h: &mut Harness, ui: &mut egui::Ui, p: &Path, ops: &mut Vec<Op
         };
         if more_row(ui, &label) {
             ops.push(Op::ToggleAll(p.to_path_buf()));
+        }
+    }
+    // archived sessions of this workspace, folded behind their own row
+    let archived = h.sidebar_rows_archived(p, tr("New session"));
+    if !archived.is_empty() {
+        let label = trf("Archived ({n})", &[("n", &archived.len().to_string())]);
+        if more_row(ui, &label) && !h.ui.archived_expanded.remove(p) {
+            h.ui.archived_expanded.insert(p.to_path_buf());
+        }
+        if h.ui.archived_expanded.contains(p) {
+            for entry in &archived {
+                session_row(h, ui, p, entry, 20.0, ops);
+            }
         }
     }
 }
@@ -202,7 +249,14 @@ fn empty_projects(ui: &mut egui::Ui, ops: &mut Vec<Op>) {
 
 /// A workspace row: chevron, icon, name and the session count (or the
 /// actions while hovered). The chat workspace has no "remove" action.
-fn project_row(h: &mut Harness, ui: &mut egui::Ui, p: &Path, count: usize, ops: &mut Vec<Op>) {
+fn project_row(
+    h: &mut Harness,
+    ui: &mut egui::Ui,
+    p: &Path,
+    count: usize,
+    unseen: usize,
+    ops: &mut Vec<Op>,
+) {
     let key = p.to_string_lossy().into_owned();
     let general = h.is_chat_dir(p);
     let waiting = h.workspace_waiting(p);
@@ -278,6 +332,19 @@ fn project_row(h: &mut Harness, ui: &mut egui::Ui, p: &Path, count: usize, ops: 
             }
         });
     } else {
+        // unseen finished turns: an accent counter, also while folded
+        if unseen > 0 {
+            let g = line_galley(
+                ui,
+                &unseen.min(99).to_string(),
+                mono(11.0),
+                theme::ORANGE,
+                40.0,
+            );
+            right -= g.size().x + 2.0;
+            paint_line(ui, right, rect.center().y, g);
+            right -= 4.0;
+        }
         if count > 0 {
             let g = line_galley(ui, &count.to_string(), mono(11.0), theme::DIM, 40.0);
             right -= g.size().x + 2.0;
@@ -375,6 +442,25 @@ fn session_row(
             );
             x += 12.0;
         }
+        SessionState::Failed => {
+            ui.painter().rect_filled(
+                Rect::from_min_size(pos2(x, rect.center().y - 3.0), vec2(6.0, 6.0)),
+                0.0,
+                theme::RED,
+            );
+            x += 12.0;
+        }
+    }
+    // a session with routines gets a small clock
+    if h.loops.get(sid).is_some_and(|l| !l.is_empty()) {
+        icons::paint(
+            ui.painter(),
+            Icon::Clock,
+            pos2(x, rect.center().y - 3.5),
+            1.0,
+            theme::DIM,
+        );
+        x += 14.0;
     }
     let mut right = rect.right() - 6.0;
     if hovered {
@@ -387,7 +473,14 @@ fn session_row(
         );
         widgets::toggle_popup(ui, &more_resp, menu_id);
         widgets::popup_menu(ui, menu_id, &more_resp, false, 190.0, |ui| {
-            session_menu(ui, cwd, entry, h.pinned.contains(sid), ops);
+            session_menu(
+                ui,
+                cwd,
+                entry,
+                h.pinned.contains(sid),
+                h.archived.contains(sid),
+                ops,
+            );
         });
     } else if h.pinned.contains(sid) {
         // a pinned row keeps its marker even without hovering
@@ -403,13 +496,14 @@ fn session_row(
         let age = match state {
             SessionState::Waiting => Some(tr("WAITING").to_string()),
             SessionState::Running => Some(tr("RUNNING").to_string()),
+            SessionState::Failed => Some(tr("FAILED").to_string()),
             _ => updated.and_then(|u| extras::relative_time(u, extras::now_epoch())),
         };
         if let Some(age) = age {
-            let color = if state == SessionState::Waiting {
-                theme::YELLOW
-            } else {
-                theme::DIM
+            let color = match state {
+                SessionState::Waiting => theme::YELLOW,
+                SessionState::Failed => theme::RED_TEXT,
+                _ => theme::DIM,
             };
             let g = line_galley(ui, &age, mono(10.5), color, 60.0);
             right -= g.size().x;
@@ -431,7 +525,14 @@ fn session_row(
     resp.context_menu(|ui| {
         ui.set_min_width(190.0);
         ui.spacing_mut().item_spacing.y = 0.0;
-        session_menu(ui, cwd, entry, h.pinned.contains(sid), ops);
+        session_menu(
+            ui,
+            cwd,
+            entry,
+            h.pinned.contains(sid),
+            h.archived.contains(sid),
+            ops,
+        );
     });
 }
 
@@ -440,6 +541,7 @@ fn session_menu(
     cwd: &Path,
     entry: &SidebarEntry,
     pinned: bool,
+    archived: bool,
     ops: &mut Vec<Op>,
 ) {
     if widgets::menu_row(
@@ -459,6 +561,22 @@ fn session_menu(
             cwd.to_path_buf(),
             entry.title.clone(),
         ));
+        widgets::close_popup(ui);
+        ui.close_menu();
+    }
+    if !archived && widgets::menu_row(ui, Some(Icon::Eye), tr("Mark as unread"), None, false) {
+        ops.push(Op::MarkUnread(entry.session_id.clone()));
+        widgets::close_popup(ui);
+        ui.close_menu();
+    }
+    if archived {
+        if widgets::menu_row(ui, Some(Icon::Rewind), tr("Unarchive"), None, false) {
+            ops.push(Op::Unarchive(entry.session_id.clone()));
+            widgets::close_popup(ui);
+            ui.close_menu();
+        }
+    } else if widgets::menu_row(ui, Some(Icon::Artifacts), tr("Archive"), None, false) {
+        ops.push(Op::Archive(entry.session_id.clone()));
         widgets::close_popup(ui);
         ui.close_menu();
     }
@@ -526,6 +644,9 @@ fn apply_ops(h: &mut Harness, ops: Vec<Op>) {
                 });
             }
             Op::TogglePin(session_id) => h.toggle_pinned(&session_id),
+            Op::MarkUnread(session_id) => h.mark_unread(&session_id),
+            Op::Archive(session_id) => h.archive_session(&session_id),
+            Op::Unarchive(session_id) => h.unarchive_session(&session_id),
             Op::Remove(p) => h.remove_confirm = Some(p),
             Op::AddProject => {
                 h.folder_picker = Some(dialogs::FolderPicker::new(picker_start(h)));

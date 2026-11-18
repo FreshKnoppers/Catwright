@@ -298,6 +298,40 @@ impl App {
                 }
             },
         );
+        setting_row(
+            ui,
+            tr("Transcript detail while Vibe works"),
+            tr("How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."),
+            |ui| {
+                const LEVELS: [(&str, &str); 4] = [
+                    ("compact", "Compact"),
+                    ("standard", "Standard"),
+                    ("detailed", "Detailed"),
+                    ("verbose", "Verbose"),
+                ];
+                let current = self.settings.transcript_detail.clone();
+                let mut chosen = None;
+                egui::ComboBox::from_id_salt("settings_transcript_detail")
+                    .selected_text(
+                        LEVELS
+                            .iter()
+                            .find(|(id, _)| *id == current)
+                            .map(|(_, label)| tr(label))
+                            .unwrap_or_else(|| current.as_str()),
+                    )
+                    .show_ui(ui, |ui| {
+                        for (id, label) in &LEVELS {
+                            if ui.selectable_label(*id == current, tr(label)).clicked() {
+                                chosen = Some(id.to_string());
+                            }
+                        }
+                    });
+                if let Some(id) = chosen {
+                    self.settings.transcript_detail = id.clone();
+                    self.harness.ui.transcript_detail = id;
+                }
+            },
+        );
         section(ui, tr("Config folder"));
         ui.horizontal(|ui| {
             if let Some(dir) = store::config_dir() {

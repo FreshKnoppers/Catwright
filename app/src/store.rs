@@ -222,6 +222,13 @@ pub struct Settings {
     /// Pinned session ids: they sort to the top of their workspace's list.
     #[serde(default)]
     pub pinned_sessions: Vec<String>,
+    /// How open tool groups and thoughts are while a turn runs:
+    /// "compact" | "standard" | "detailed" | "verbose".
+    #[serde(default = "default_transcript_detail")]
+    pub transcript_detail: String,
+    /// Archived session ids: hidden from the sidebar's session lists.
+    #[serde(default)]
+    pub archived_sessions: Vec<String>,
     /// UI language code (`"en"`, `"de"`). `None` until the user picked one:
     /// the first start then asks, with English preselected.
     #[serde(default)]
@@ -230,6 +237,10 @@ pub struct Settings {
 
 fn default_session_mode() -> String {
     "ask".into()
+}
+
+fn default_transcript_detail() -> String {
+    "standard".into()
 }
 
 /// `panel_closed` was `[code, chat]` while Code and Chat were two views.
@@ -263,6 +274,8 @@ impl Default for Settings {
             panel_closed: false,
             auto_account: false,
             pinned_sessions: Vec::new(),
+            transcript_detail: default_transcript_detail(),
+            archived_sessions: Vec::new(),
             language: None,
         }
     }

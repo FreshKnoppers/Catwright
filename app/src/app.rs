@@ -73,8 +73,10 @@ impl App {
         harness.thinking_by_model = settings.vibe_thinking_by_model.clone();
         harness.ui.sidebar_collapsed = settings.sidebar_collapsed;
         harness.ui.panel_closed = settings.panel_closed;
+        harness.ui.transcript_detail = settings.transcript_detail.clone();
         harness.auto_account = settings.auto_account;
         harness.pinned = settings.pinned_sessions.iter().cloned().collect();
+        harness.archived = settings.archived_sessions.iter().cloned().collect();
         // claimed in every case: an instance that could not read the
         // settings must not overwrite another instance's file either
         let owns_settings = store::claim_settings();
@@ -133,9 +135,14 @@ impl App {
     fn sync_layout(&mut self) {
         let collapsed = self.harness.ui.sidebar_collapsed;
         let panel = self.harness.ui.panel_closed;
-        if collapsed != self.settings.sidebar_collapsed || panel != self.settings.panel_closed {
+        let detail = self.harness.ui.transcript_detail.clone();
+        if collapsed != self.settings.sidebar_collapsed
+            || panel != self.settings.panel_closed
+            || detail != self.settings.transcript_detail
+        {
             self.settings.sidebar_collapsed = collapsed;
             self.settings.panel_closed = panel;
+            self.settings.transcript_detail = detail;
             self.autosave();
         }
     }
@@ -144,8 +151,11 @@ impl App {
     fn sync_pinned(&mut self) {
         let mut current: Vec<String> = self.harness.pinned.iter().cloned().collect();
         current.sort();
-        if current != self.settings.pinned_sessions {
+        let mut archived: Vec<String> = self.harness.archived.iter().cloned().collect();
+        archived.sort();
+        if current != self.settings.pinned_sessions || archived != self.settings.archived_sessions {
             self.settings.pinned_sessions = current;
+            self.settings.archived_sessions = archived;
             self.autosave();
         }
     }
@@ -183,6 +193,33 @@ impl App {
     }
 }
 
+impl App {
+    /// One UI frame. Shared by the eframe window and the headless renderer
+    /// (`softrender`, used by `--screenshot --headless`).
+    pub(crate) fn frame(&mut self, ctx: &egui::Context) {
+        self.harness.ensure_started(ctx);
+        self.harness.poll();
+        self.harness.ui.settings_open = self.settings_open;
+        match crate::harness::ui::show(&mut self.harness, ctx) {
+            HarnessAction::None => {}
+            HarnessAction::OpenSettings => self.settings_open = true,
+            HarnessAction::OpenAccount => {
+                self.settings_open = true;
+                self.settings_nav = SettingsNav::Konto;
+            }
+        }
+        self.sync_projects();
+        self.sync_pinned();
+        self.sync_vibe_choices();
+        self.sync_layout();
+        self.settings_window(ctx);
+        self.language_window(ctx);
+        // harness dialogs (folder picker, project-remove confirm) on top of
+        // everything, also while the settings modal is open
+        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // screenshot mode: render ~120 frames, capture, save, exit
@@ -213,30 +250,61 @@ impl eframe::App for App {
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
-
-        self.harness.ensure_started(ctx);
-        self.harness.poll();
-        self.harness.ui.settings_open = self.settings_open;
-        match crate::harness::ui::show(&mut self.harness, ctx) {
-            HarnessAction::None => {}
-            HarnessAction::OpenSettings => self.settings_open = true,
-            HarnessAction::OpenAccount => {
-                self.settings_open = true;
-                self.settings_nav = SettingsNav::Konto;
-            }
-        }
-        self.sync_projects();
-        self.sync_pinned();
-        self.sync_vibe_choices();
-        self.sync_layout();
-        self.settings_window(ctx);
-        self.language_window(ctx);
-        // harness dialogs (folder picker, project-remove confirm) on top of
-        // everything, also while the settings modal is open
-        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
+        self.frame(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_on_exit();
+    }
+}
+
+impl App {
+    /// `--screenshot <png> --headless`: run the app without a window and
+    /// without a display server, `frames` frames of `size` points at 60 fps,
+    /// then rasterize the last one on the CPU (`softrender`) and save it.
+    pub fn run_headless(mut self, size: [u32; 2]) -> Result<std::path::PathBuf, String> {
+        let path = self
+            .screenshot_path
+            .clone()
+            .ok_or_else(|| "--headless needs --screenshot <png>".to_string())?;
+        let frames = self.frames_left.max(1);
+        let ctx = egui::Context::default();
+        crate::fonts::install_fallback_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let mut textures = crate::softrender::Textures::default();
+        let start = std::time::Instant::now();
+        let screen =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
+        for i in 0..frames {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(start.elapsed().as_secs_f64()),
+                focused: true,
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| self.frame(ctx));
+            textures.set(&out.textures_delta);
+            if i + 1 == frames {
+                let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+                let px = |v: u32| (v as f32 * out.pixels_per_point).round() as usize;
+                let img = crate::softrender::rasterize(
+                    &prims,
+                    &textures,
+                    out.pixels_per_point,
+                    [px(size[0]), px(size[1])],
+                    crate::theme::BG,
+                );
+                img.save(&path).map_err(|e| e.to_string())?;
+            }
+            textures.free(&out.textures_delta);
+            // the agent answers on its own threads; give it real time
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        Ok(path)
+    }
+
+    /// Saves the settings when the window closes.
+    fn save_on_exit(&mut self) {
         // A failed exit save must not be silent either, but by now no
         // toast or modal can be shown any more. Only metadata goes to
         // stderr (the error itself, never file contents), and the save
@@ -285,6 +353,25 @@ mod tests {
             frames_left: 0,
             harness: crate::harness::Harness::new(Vec::new(), "ask".to_string()),
             language_prompt: false,
+        }
+    }
+
+    /// Headless frame of the app shell with the settings modal open
+    /// (softrender, AGENTS.md "Seeing the UI"); writes a PNG when
+    /// CATWRIGHT_SHOT_DIR is set.
+    #[test]
+    fn headless_app_frame_renders_the_settings_modal() {
+        let mut app = test_app();
+        app.settings_open = true;
+        let img = crate::softrender::render_ui([1360, 860], 3, |ctx| app.frame(ctx));
+        let bg = crate::theme::BG;
+        assert!(
+            img.pixels().any(|p| p.0[..3] != [bg.r(), bg.g(), bg.b()]),
+            "something was painted"
+        );
+        if let Ok(dir) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            let p = std::path::Path::new(&dir).join("07-settings.png");
+            img.save(&p).unwrap();
         }
     }
 

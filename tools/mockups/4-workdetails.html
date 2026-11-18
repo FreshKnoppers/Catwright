@@ -1,0 +1,95 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><script src="common.js"></script>
+<style>
+iframe { position: absolute; inset: 0; width: 1360px; height: 860px; border: 0; }
+.dimmer { position: absolute; inset: 0; background: rgba(0,0,0,.62); }
+.modal { position: absolute; left: 190px; top: 46px; width: 980px; height: 768px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 20px 60px rgba(0,0,0,.6); display: flex; flex-direction: column; }
+.mhead { height: 44px; display: flex; align-items: center; padding: 0 14px 0 18px; border-bottom: 1px solid var(--border-soft); font-weight: 700; }
+.mhead .sp { flex: 1; }
+.mbody { flex: 1; display: flex; min-height: 0; }
+.mnav { width: 210px; border-right: 1px solid var(--border-soft); padding: 10px 0; background: var(--sidebar); }
+.mnav div { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 14px; margin: 0 8px; font-size: 14px; border-radius: 2px; color: var(--muted); }
+.mnav div.on { background: var(--raised); color: var(--text); box-shadow: inset 2px 0 var(--orange); }
+.mcont { flex: 1; padding: 18px 24px; overflow: hidden; }
+.mcont h2 { font-size: 18px; margin-bottom: 14px; }
+.srow { display: flex; align-items: center; gap: 20px; padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.srow .l { flex: 1; } .srow .l .hh { font-size: 14px; } .srow .l .hp { font-size: 12.5px; color: var(--dim); }
+.combo { background: var(--input); border: 1px solid var(--border); border-radius: 3px; padding: 4px 10px; font-size: 13.5px; display: flex; align-items: center; gap: 10px; min-width: 170px; justify-content: space-between; }
+.sec { margin: 18px 0 6px; }
+.new { background: var(--yellow); color: #111; font: 700 10px var(--mono); padding: 1px 5px; border-radius: 2px; margin-left: 8px; vertical-align: 1px; }
+.opts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0 14px; }
+.opt { border: 1px solid var(--border); border-radius: 4px; padding: 9px 10px 10px; background: var(--card); }
+.opt.on { border-color: var(--orange); box-shadow: inset 0 2px var(--orange); }
+.opt .ot { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
+.opt .od { font-size: 12px; color: var(--dim); line-height: 1.35; min-height: 32px; }
+.radio { width: 10px; height: 10px; border: 1px solid var(--dim); display: block; }
+.opt.on .radio { background: var(--orange); border-color: var(--orange); }
+.mini { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.mini i { display: block; height: 5px; background: var(--raised); border-radius: 1px; }
+.mini i.o { background: var(--orange-dim); width: 30%; }
+.mini i.y { background: #6b5a1a; }
+.mini i.g { background: #1f4a2a; }
+.pv { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+.pvc { border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg); padding: 10px 12px; }
+.pvc .label { margin-bottom: 8px; display: block; }
+.busyline { display: flex; align-items: center; gap: 9px; background: var(--card); border: 1px solid var(--border-soft); border-left: 2px solid var(--yellow); border-radius: 3px; padding: 7px 10px; font-size: 13.5px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.tc { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 3px 0; white-space: nowrap; overflow: hidden; }
+.sq { width: 8px; height: 8px; display: block; flex: none; }
+.thought { font-size: 13px; color: var(--dim); font-style: italic; border-left: 2px solid var(--border); padding-left: 8px; margin: 2px 0 6px; }
+.mfoot { height: 40px; border-top: 1px solid var(--border-soft); display: flex; align-items: center; padding: 0 18px; font-size: 12.5px; color: var(--dim); }
+</style></head><body>
+<iframe src="1-preview.html?clean"></iframe>
+<div class="dimmer"></div>
+<div class="modal">
+  <div class="mhead">Settings<span class="sp"></span><span data-i="close" data-c="#b4b4ba"></span></div>
+  <div class="mbody">
+    <div class="mnav">
+      <div class="on"><span data-i="gear" data-c="#fa500f"></span>General</div>
+      <div><span data-i="star" data-c="#b4b4ba"></span>Vibe</div>
+      <div><span data-i="user" data-c="#b4b4ba"></span>Account &amp; plan</div>
+      <div><span data-i="dots" data-c="#b4b4ba"></span>Keyboard shortcuts</div>
+      <div><span data-i="shield" data-c="#b4b4ba"></span>Privacy</div>
+    </div>
+    <div class="mcont">
+      <h2>General</h2>
+      <div class="srow"><div class="l"><div class="hh">Language</div><div class="hp">Language of the app. Vibe answers in the language you write in.</div></div><span class="combo">English<span data-i="down" data-c="#8a8a8f" data-s="1"></span></span></div>
+      <div class="srow"><div class="l"><div class="hh">Default mode of new sessions</div><div class="hp">How much Vibe may do without asking.</div></div><span class="combo"><span style="display:flex;gap:6px;align-items:center"><span data-i="shield" data-c="#3fb950"></span>Accept Edits</span><span data-i="down" data-c="#8a8a8f" data-s="1"></span></span></div>
+
+      <div class="sec"><span class="label">Work details</span><span class="new">NEW</span></div>
+      <div class="hp dim" style="font-size:12.5px">How much of Vibe's work the transcript shows. Edited files, questions and permissions always stay visible.</div>
+      <div class="opts">
+        <div class="opt on"><div class="ot"><i class="radio"></i>Compact</div><div class="od">One line per turn while it runs, open on click.</div>
+          <div class="mini"><i style="width:80%"></i><i class="o" style="width:55%"></i><i style="width:95%"></i><i style="width:70%"></i></div></div>
+        <div class="opt"><div class="ot"><i class="radio"></i>Standard</div><div class="od">Tool groups as one line each. Today's default.</div>
+          <div class="mini"><i style="width:80%"></i><i class="o"></i><i class="o" style="width:40%"></i><i style="width:90%"></i></div></div>
+        <div class="opt"><div class="ot"><i class="radio"></i>Detailed</div><div class="od">Every tool call and its result, groups open.</div>
+          <div class="mini"><i class="o" style="width:45%"></i><i class="g" style="width:85%"></i><i class="o" style="width:40%"></i><i class="g" style="width:70%"></i></div></div>
+        <div class="opt"><div class="ot"><i class="radio"></i>Verbose</div><div class="od">Also thoughts and full tool output.</div>
+          <div class="mini"><i class="y" style="width:90%"></i><i class="o" style="width:45%"></i><i class="g" style="width:85%"></i><i class="y" style="width:75%"></i></div></div>
+      </div>
+
+      <span class="label" style="display:block;margin-bottom:6px">Preview · the same running turn</span>
+      <div class="pv">
+        <div class="pvc" style="border-color:var(--orange)"><span class="label" style="color:var(--text)">■ Compact</span>
+          <p style="font-size:13.5px;margin-bottom:8px">I'll add the outlier filter and check it against the existing tests.</p>
+          <div class="busyline"><span data-busy></span>Working · 4 tool calls · <code>unittest</code><span style="margin-left:auto" class="mono dim">0:42</span></div>
+          <div class="pcard" style="margin-top:8px;padding:7px 10px;display:flex;gap:8px;align-items:center;font-size:13px"><span data-i="file" data-c="#b4b4ba" data-s="1.5"></span><span class="mono">analysis.py</span><span class="mono" style="color:var(--green);font-size:12px">+12</span><span class="mono" style="color:var(--red-text);font-size:12px">−1</span><span style="margin-left:auto" data-i="right" data-c="#8a8a8f" data-s="1"></span></div>
+        </div>
+        <div class="pvc"><span class="label">Detailed</span>
+          <p style="font-size:13.5px;margin-bottom:6px">I'll add the outlier filter and check it against the existing tests.</p>
+          <div class="tc"><i class="sq" style="background:var(--green)"></i>Read <code>analysis.py</code><span class="mono dim" style="margin-left:auto;font-size:11px">0.1 s</span></div>
+          <div class="tc"><i class="sq" style="background:var(--green)"></i>Grep <code>load_readings</code> · 3 matches<span class="mono dim" style="margin-left:auto;font-size:11px">0.2 s</span></div>
+          <div class="tc"><i class="sq" style="background:var(--green)"></i>Edit <code>analysis.py</code> <span class="mono" style="color:var(--green);font-size:12px">+12</span> <span class="mono" style="color:var(--red-text);font-size:12px">−1</span><span class="mono dim" style="margin-left:auto;font-size:11px">0.1 s</span></div>
+          <div class="diff" style="background:var(--card);border:1px solid var(--border-soft);border-radius:3px;margin:2px 0 4px;padding:2px 0">
+            <div class="dl add"><span class="n">31</span><span class="s">+</span><span class="c"><span class="kw">def</span> <span class="fn">drop_outliers</span>(rows, limit=<span class="str">40.0</span>):</span></div>
+            <div class="dl add"><span class="n">32</span><span class="s">+</span><span class="c">    <span class="kw">return</span> [r <span class="kw">for</span> r <span class="kw">in</span> rows <span class="kw">if</span> r.temp &lt;= limit]</span></div>
+          </div>
+          <div class="tc"><i class="sq" style="background:var(--yellow)"></i>Bash <code>python -m unittest -v</code><span class="mono dim" style="margin-left:auto;font-size:11px">running</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="mfoot">Changes are saved automatically.</div>
+</div>
+<div class="note r" style="left:auto;right:1180px;top:430px;max-width:170px;right:auto;left:12px"><b>3</b>Detailtiefe des Transkripts als eine Einstellung (Idee aus DSH „Work details“).</div>
+<div class="mocktag" style="left:auto;right:12px;bottom:10px;color:#9a9aa0;background:#000;padding:2px 6px">MOCKUP · not implemented</div>
+</body></html>
