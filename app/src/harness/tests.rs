@@ -3263,6 +3263,26 @@ fn session_closed_drops_the_view() {
 }
 
 #[test]
+fn dropped_files_attach_deduplicated_like_the_plus_picker() {
+    let dir = std::env::temp_dir().join(format!("cw-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    let a = dir.join("a.png");
+    let b = dir.join("notes.txt");
+    std::fs::write(&a, "x").unwrap();
+    std::fs::write(&b, "x").unwrap();
+    // a drop may list several files, a repeated path attaches only once
+    crate::harness::ui::composer::attach_dropped(&mut h, vec![a.clone(), b.clone(), a.clone()]);
+    assert_eq!(h.attachments, vec![a.clone(), b.clone()]);
+    // and they go out on send exactly like picker attachments
+    let blocks = prompt_blocks("hi", &h.attachments, false);
+    assert_eq!(blocks.len(), 3, "text first, then both files as links");
+    assert!(matches!(blocks[1], PromptBlock::ResourceLink { .. }));
+    assert!(matches!(blocks[2], PromptBlock::ResourceLink { .. }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn prompt_blocks_text_and_resource_links() {
     let f = std::env::temp_dir().join(format!("harness-pb-{}.txt", std::process::id()));
     std::fs::write(&f, "x").unwrap();
@@ -5323,6 +5343,29 @@ fn feature_screenshots() {
         "Updated `analysis.py` — see analysis.py for the table; `missing.py` is not here.",
     )));
     shot(&mut h, "07-file-chips");
+    // drag-over hint on the composer (hovered files injected into the input)
+    {
+        let h = &mut h;
+        let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+            ctx.input_mut(|i| {
+                i.raw.hovered_files.push(egui::HoveredFile {
+                    path: Some(std::path::PathBuf::from("/tmp/demo.png")),
+                    mime: "image/png".to_string(),
+                });
+            });
+            let _ = crate::harness::ui::show(h, ctx);
+        });
+        assert!(img.pixels().any(|p| p.0[..3]
+            != [
+                crate::theme::BG.r(),
+                crate::theme::BG.g(),
+                crate::theme::BG.b()
+            ]));
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            img.save(std::path::Path::new(&out).join("08-drop-hint.png"))
+                .unwrap();
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

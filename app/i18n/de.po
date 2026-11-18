@@ -306,6 +306,9 @@ msgstr "Anhang entfernen"
 msgid "Attach a file (or type @)"
 msgstr "Datei anhängen (oder @ tippen)"
 
+msgid "Drop to attach"
+msgstr "Loslassen zum Anhängen"
+
 msgid "Stop (Esc)"
 msgstr "Stopp (Esc)"
 
