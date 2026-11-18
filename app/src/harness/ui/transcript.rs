@@ -516,9 +516,21 @@ fn render_range(
             Item::Agent { text, .. } => {
                 let blocks = crate::markdown::parse_cached(text);
                 let top = ui.cursor().top();
-                let mut rctx = RenderCtx::new(ctx.ui_events, ctx.form_values, ctx.sid)
-                    .with_scripts(ctx.scripts);
-                crate::render::render_blocks(ui, &blocks, i, &mut rctx);
+                // path-like words naming a file of the session's workspace
+                // render as chips; a click opens the preview pane
+                let mut chip_opens: Vec<String> = Vec::new();
+                {
+                    let mut rctx = RenderCtx::new(ctx.ui_events, ctx.form_values, ctx.sid)
+                        .with_scripts(ctx.scripts);
+                    rctx.file_chips = Some(crate::render::FileChips {
+                        cwd: ctx.cwd,
+                        open: &mut chip_opens,
+                    });
+                    crate::render::render_blocks(ui, &blocks, i, &mut rctx);
+                }
+                for p in chip_opens {
+                    ctx.ops.push(MessageOp::OpenFile(p));
+                }
                 agent_actions(ui, top, text);
             }
             Item::Thought { text, message_id } => {

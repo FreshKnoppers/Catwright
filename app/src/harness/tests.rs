@@ -5315,6 +5315,14 @@ fn feature_screenshots() {
         h.ui.transcript_detail = level.to_string();
         shot(&mut h, &format!("05-detail-{level}"));
     }
+    // file chips: an agent answer naming files of the workspace (and one
+    // that does not exist, which stays plain text)
+    h.ui.transcript_detail = "standard".to_string();
+    h.handle_event(update(agent_chunk(
+        "a2",
+        "Updated `analysis.py` — see analysis.py for the table; `missing.py` is not here.",
+    )));
+    shot(&mut h, "07-file-chips");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
