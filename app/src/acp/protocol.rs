@@ -375,6 +375,13 @@ pub struct ToolCall {
     pub raw_output: Option<Value>,
     #[serde(rename = "_meta", default)]
     pub meta: Option<Value>,
+    /// Client-side arrival of the first update for this call (epoch
+    /// seconds) — not from the wire; basis of the per-round duration view.
+    #[serde(skip)]
+    pub first_seen: u64,
+    /// Client-side arrival of the last update (epoch seconds).
+    #[serde(skip)]
+    pub last_update: u64,
 }
 
 impl ToolCall {
@@ -422,7 +429,19 @@ impl ToolCall {
             content: self.content.clone(),
             locations: self.locations.clone(),
             meta: self.meta.clone(),
+            first_seen: self.first_seen,
+            last_update: self.last_update,
         }
+    }
+
+    /// Client-side duration in seconds: last update minus first arrival; a
+    /// call that is not finished measures up to `now`.
+    pub fn duration_secs(&self, now: u64) -> u64 {
+        let end = match self.status {
+            ToolStatus::Completed | ToolStatus::Failed => self.last_update,
+            _ => now,
+        };
+        end.saturating_sub(self.first_seen)
     }
 }
 
@@ -1159,6 +1178,8 @@ mod tests {
             raw_input: None,
             raw_output: None,
             meta: None,
+            first_seen: 0,
+            last_update: 0,
         };
         // only status present: everything else stays
         let upd: ToolCallUpdate =
@@ -1282,6 +1303,8 @@ mod tests {
             raw_input: None,
             raw_output: None,
             meta: None,
+            first_seen: 0,
+            last_update: 0,
         };
         // an update's oversized output is capped by the marker object
         let upd: ToolCallUpdate =

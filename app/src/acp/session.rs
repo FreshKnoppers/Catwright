@@ -187,6 +187,14 @@ pub struct SessionView {
     pub trimmed_front: u32,
 }
 
+/// Epoch seconds now (client-side timestamp for update arrivals).
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 impl SessionView {
     /// A fork of this session under a new id: the transcript stays, the
     /// turn is idle, pending permissions belong to the source and do
@@ -337,17 +345,33 @@ impl SessionView {
                 // Replay/duplicate: replace the entry, no second Item::Tool.
                 // The bounded copy caps the raws' size (audit N1).
                 let is_new = !self.tool_calls.contains_key(&id);
-                self.tool_calls.insert(id.clone(), tc.bounded_clone());
+                let now = now_epoch_secs();
+                let mut tc = tc.bounded_clone();
+                // client-side arrival timestamps (per-round duration view)
+                if tc.first_seen == 0 {
+                    tc.first_seen = now;
+                }
+                tc.last_update = now;
+                self.tool_calls.insert(id.clone(), tc);
                 if is_new {
                     self.items.push(Item::Tool(id));
                 }
             }
             SessionUpdate::ToolCallUpdate(u) => {
                 let id = u.tool_call_id.clone();
+                let now = now_epoch_secs();
                 match self.tool_calls.get_mut(&id) {
-                    Some(tc) => tc.apply(u),
+                    Some(tc) => {
+                        tc.apply(u);
+                        if tc.first_seen == 0 {
+                            tc.first_seen = now;
+                        }
+                        tc.last_update = now;
+                    }
                     None => {
-                        let tc = tool_call_from_update(u).bounded_clone();
+                        let mut tc = tool_call_from_update(u).bounded_clone();
+                        tc.first_seen = now;
+                        tc.last_update = now;
                         self.tool_calls.insert(id.clone(), tc);
                         self.items.push(Item::Tool(id));
                     }
@@ -759,6 +783,8 @@ fn tool_call_from_update(u: &ToolCallUpdate) -> ToolCall {
         raw_input: u.raw_input.clone(),
         raw_output: u.raw_output.clone(),
         meta: u.meta.clone(),
+        first_seen: 0,
+        last_update: 0,
     }
 }
 

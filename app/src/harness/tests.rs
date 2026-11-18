@@ -5345,6 +5345,14 @@ fn feature_screenshots() {
         "Updated `analysis.py` — see analysis.py for the table; `missing.py` is not here.",
     )));
     shot(&mut h, "07-file-chips");
+    // a folded round with its detail panel open (tool calls, status, duration)
+    {
+        let rounds = h.sessions["s1"].folded_rounds();
+        let rk = crate::acp::session::round_key("s1", &rounds[0]);
+        h.open_groups.insert(format!("detail::{rk}"));
+        shot(&mut h, "12-round-detail");
+        h.open_groups.remove(&format!("detail::{rk}"));
+    }
     // drag-over hint on the composer (hovered files injected into the input)
     {
         let h = &mut h;
@@ -5634,4 +5642,46 @@ fn palette_lists_project_files_and_enter_opens_the_preview() {
     );
     assert_eq!(preview.mode, crate::harness::state::PreviewMode::Code);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_call_arrival_timestamps_drive_the_round_duration() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    let call = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "in_progress",
+    }))
+    .unwrap();
+    h.handle_event(update(call));
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let tc = &h.sessions["s1"].tool_calls["t1"];
+    assert!(tc.first_seen > 0, "first arrival stamped");
+    assert!(tc.last_update >= tc.first_seen);
+    // still running: duration measures up to now
+    assert!(tc.duration_secs(now()) >= 0);
+    let upd = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "status": "completed",
+    }))
+    .unwrap();
+    h.handle_event(update(upd));
+    let tc = &h.sessions["s1"].tool_calls["t1"];
+    assert_eq!(tc.status, crate::acp::protocol::ToolStatus::Completed);
+    assert!(tc.last_update >= tc.first_seen, "last update stamped");
+    assert!(tc.duration_secs(now() + 60) >= tc.duration_secs(now()));
 }

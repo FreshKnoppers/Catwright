@@ -1649,3 +1649,12 @@ msgstr "Vibe ist fertig in {project}"
 
 msgid "Vibe needs your approval in {project}"
 msgstr "Vibe braucht deine Freigabe in {project}"
+
+msgid "Round details"
+msgstr "Runden-Details"
+
+msgid "Pending"
+msgstr "Ausstehend"
+
+msgid "Running"
+msgstr "Läuft"

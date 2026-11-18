@@ -343,6 +343,8 @@ mod tests {
                 raw_input: None,
                 raw_output: None,
                 meta: None,
+                first_seen: 0,
+                last_update: 0,
             },
         )
     }
