@@ -223,11 +223,14 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     }
 }
 
-/// `git diff HEAD` of one file, cached by path and mtime (the diff is a
-/// subprocess; it must not run every frame).
+/// The working-tree file against its last committed version, rendered with
+/// the transcript's red/green line diff (not the raw `git diff` text). The
+/// HEAD blob and the file text are cached by path, mtime and size (git and
+/// the file read are subprocesses; they must not run every frame).
 fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
-    type DiffCache =
-        std::sync::Mutex<std::collections::HashMap<(String, Option<u64>, u64), String>>;
+    type DiffCache = std::sync::Mutex<
+        std::collections::HashMap<(String, Option<u64>, u64), (Option<String>, String)>,
+    >;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let meta = std::fs::metadata(path);
@@ -242,7 +245,7 @@ fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
         mtime,
         meta.as_ref().map(|m| m.len()).unwrap_or(0),
     );
-    let text = {
+    let (old, current) = {
         let mut c = cache.lock().unwrap();
         if let Some(t) = c.get(&key) {
             t.clone()
@@ -257,27 +260,30 @@ fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| path.to_string());
-            let t = crate::harness::watch::git_output(&dir, &["diff", "HEAD", "--", &rel])
-                .unwrap_or_default();
-            c.insert(key.clone(), t.clone());
+            let head = crate::harness::watch::git_output(&dir, &["rev-parse", "HEAD"]);
+            let old = head.filter(|h| !h.trim().is_empty()).and_then(|_| {
+                crate::harness::watch::git_output(&dir, &["show", &format!("HEAD:{rel}")])
+            });
+            let current = std::fs::read_to_string(path).unwrap_or_default();
+            let entry = (old, current);
+            c.insert(key.clone(), entry.clone());
             if c.len() > 64 {
                 let k = c.keys().next().cloned();
                 if let Some(k) = k {
                     c.remove(&k);
                 }
             }
-            t
+            entry
         }
     };
-    if text.trim().is_empty() {
-        notice(ui, tr("No changes against the last commit."));
-    } else {
-        crate::render::render_code_block_lines(
-            ui,
-            egui::Id::new(("preview_diff", path)),
-            "diff",
-            &text,
-        );
+    match old {
+        Some(old) if old != current => {
+            super::transcript::diff_body(ui, Some(&old), &current, 400, None)
+        }
+        Some(_) => notice(ui, tr("No changes against the last commit.")),
+        // no commit yet, or the file is untracked: every line is new
+        None if !current.is_empty() => super::transcript::diff_body(ui, None, &current, 400, None),
+        None => notice(ui, tr("No changes against the last commit.")),
     }
 }
 
