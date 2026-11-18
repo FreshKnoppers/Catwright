@@ -9,7 +9,7 @@ mod artifacts;
 mod cards;
 pub(crate) mod composer;
 mod header;
-mod palette;
+pub(crate) mod palette;
 mod panel;
 mod sidebar;
 /// The transcript renderer; `pub(crate)` so the harness tests can check

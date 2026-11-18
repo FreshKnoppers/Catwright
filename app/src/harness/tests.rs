@@ -5397,6 +5397,14 @@ fn feature_screenshots() {
     });
     shot(&mut h, "10-confirm-clear-routines");
     h.ui.confirm = None;
+    // the command palette (Ctrl K) with a file query: project files listed
+    h.ui.palette = Some(crate::harness::state::PaletteState {
+        query: "analysis".to_string(),
+        selected: 0,
+        scroll_to_selected: false,
+    });
+    shot(&mut h, "11-palette-files");
+    h.ui.palette = None;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -5571,5 +5579,59 @@ fn desktop_notifications_queue_only_when_unfocused_and_opted_in() {
     assert!(notes[0].contains("approval"), "approval text: {}", notes[0]);
     assert!(notes[0].contains(&project_name(&dir)));
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn palette_lists_project_files_and_enter_opens_the_preview() {
+    let dir = std::env::temp_dir().join(format!("cw-pal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("analysis.py"), "x").unwrap();
+    std::fs::write(dir.join("src").join("main.rs"), "x").unwrap();
+    crate::harness::watch::git_output(&dir, &["init", "-q"]);
+    crate::harness::watch::git_output(&dir, &["add", "."]);
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    // the watcher lists the project's files in the background
+    let mut tries = 0;
+    while h.watcher.files(&dir).is_empty() && tries < 100 {
+        h.watcher.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tries += 1;
+    }
+    use crate::harness::ui::palette::{apply, entries, Action};
+    let all = entries(&mut h, "");
+    let files: Vec<&str> = all
+        .iter()
+        .filter_map(|e| match &e.action {
+            Action::File(_, rel) => Some(rel.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(files.contains(&"analysis.py"), "files: {files:?}");
+    assert!(files.contains(&"src/main.rs"), "files: {files:?}");
+    // fuzzy query narrows them
+    let hits = entries(&mut h, "main");
+    assert!(
+        hits.iter()
+            .any(|e| matches!(&e.action, Action::File(_, r) if r == "src/main.rs")),
+        "fuzzy hit for 'main'"
+    );
+    // Enter on a file opens the preview pane with the resolved path
+    let mut out = crate::harness::ui::HarnessAction::None;
+    apply(
+        &mut h,
+        Action::File(dir.clone(), "analysis.py".to_string()),
+        &mut out,
+    );
+    let preview = h.ui.preview.expect("preview opens on Enter");
+    assert!(
+        preview.path.ends_with("analysis.py"),
+        "path: {}",
+        preview.path
+    );
+    assert_eq!(preview.mode, crate::harness::state::PreviewMode::Code);
     let _ = std::fs::remove_dir_all(&dir);
 }
