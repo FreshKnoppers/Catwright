@@ -193,6 +193,33 @@ impl App {
     }
 }
 
+impl App {
+    /// One UI frame. Shared by the eframe window and the headless renderer
+    /// (`softrender`, used by `--screenshot --headless`).
+    pub(crate) fn frame(&mut self, ctx: &egui::Context) {
+        self.harness.ensure_started(ctx);
+        self.harness.poll();
+        self.harness.ui.settings_open = self.settings_open;
+        match crate::harness::ui::show(&mut self.harness, ctx) {
+            HarnessAction::None => {}
+            HarnessAction::OpenSettings => self.settings_open = true,
+            HarnessAction::OpenAccount => {
+                self.settings_open = true;
+                self.settings_nav = SettingsNav::Konto;
+            }
+        }
+        self.sync_projects();
+        self.sync_pinned();
+        self.sync_vibe_choices();
+        self.sync_layout();
+        self.settings_window(ctx);
+        self.language_window(ctx);
+        // harness dialogs (folder picker, project-remove confirm) on top of
+        // everything, also while the settings modal is open
+        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // screenshot mode: render ~120 frames, capture, save, exit
@@ -224,26 +251,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
-        self.harness.ensure_started(ctx);
-        self.harness.poll();
-        self.harness.ui.settings_open = self.settings_open;
-        match crate::harness::ui::show(&mut self.harness, ctx) {
-            HarnessAction::None => {}
-            HarnessAction::OpenSettings => self.settings_open = true,
-            HarnessAction::OpenAccount => {
-                self.settings_open = true;
-                self.settings_nav = SettingsNav::Konto;
-            }
-        }
-        self.sync_projects();
-        self.sync_pinned();
-        self.sync_vibe_choices();
-        self.sync_layout();
-        self.settings_window(ctx);
-        self.language_window(ctx);
-        // harness dialogs (folder picker, project-remove confirm) on top of
-        // everything, also while the settings modal is open
-        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
+        self.frame(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -295,6 +303,25 @@ mod tests {
             frames_left: 0,
             harness: crate::harness::Harness::new(Vec::new(), "ask".to_string()),
             language_prompt: false,
+        }
+    }
+
+    /// Headless frame of the app shell with the settings modal open
+    /// (softrender, AGENTS.md "Seeing the UI"); writes a PNG when
+    /// CATWRIGHT_SHOT_DIR is set.
+    #[test]
+    fn headless_app_frame_renders_the_settings_modal() {
+        let mut app = test_app();
+        app.settings_open = true;
+        let img = crate::softrender::render(|ctx| app.frame(ctx), 1360, 860, 3);
+        let bg = crate::theme::BG;
+        assert!(
+            img.pixels().any(|p| p.0 != [bg.r(), bg.g(), bg.b()]),
+            "something was painted"
+        );
+        if let Ok(dir) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            let p = std::path::Path::new(&dir).join("07-settings.png");
+            crate::softrender::save_png(&img, &p).unwrap();
         }
     }
 

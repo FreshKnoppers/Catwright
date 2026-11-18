@@ -34,6 +34,7 @@ mod memo;
 mod model;
 mod render;
 mod script;
+mod softrender;
 mod store;
 mod syntax;
 mod theme;
@@ -53,6 +54,11 @@ struct Cli {
     /// `--lang`: UI language for this run only (screenshots, testing).
     lang: Option<i18n::Lang>,
     frames: u32,
+    /// `--headless`: with `--screenshot`, render without a window/GPU
+    /// (see `softrender`, AGENTS.md "Seeing the UI").
+    headless: bool,
+    /// `--size WxH`: headless screenshot size in pixels (default 1440x900).
+    size: (u32, u32),
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -64,6 +70,8 @@ fn parse_cli(args: &[String]) -> Cli {
         prompt: None,
         lang: None,
         frames: 120,
+        headless: false,
+        size: (1440, 900),
     };
     let mut i = 0;
     while i < args.len() {
@@ -90,6 +98,18 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--lang" if i + 1 < args.len() => {
                 cli.lang = i18n::Lang::from_code(&args[i + 1]);
+                i += 2;
+            }
+            "--headless" => {
+                cli.headless = true;
+                i += 1;
+            }
+            "--size" if i + 1 < args.len() => {
+                cli.size = args[i + 1]
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    .filter(|(w, h)| *w > 0 && *h > 0)
+                    .unwrap_or((1440, 900));
                 i += 2;
             }
             // Code and Chat are one view now: the old `--mode code|chat`
@@ -177,6 +197,34 @@ fn main() -> eframe::Result<()> {
     std::env::remove_var("CATWRIGHT_PROMPT");
     let lang = cli.lang;
     let open = cli.project.map(|p| (p, cli.session));
+    // headless screenshot: no window, no GPU — render frames in a bare egui
+    // context and rasterize them (softrender, AGENTS.md "Seeing the UI")
+    if cli.headless {
+        let Some(path) = &screenshot else {
+            eprintln!("--headless needs --screenshot <out.png>");
+            std::process::exit(2);
+        };
+        let mut app = app::App::new(
+            None,
+            settings.clone(),
+            frames,
+            open.clone(),
+            prompt.clone(),
+            lang,
+        );
+        let (w, h) = cli.size;
+        let img = softrender::render(|ctx| app.frame(ctx), w, h, frames.max(1) as usize);
+        match softrender::save_png(&img, path) {
+            Ok(()) => {
+                eprintln!("screenshot saved to {}", path.display());
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("screenshot failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     eframe::run_native(
         "Catwright",
         options,

@@ -47,3 +47,16 @@ API keys.
   and identifiers are English.
 - Keep `cargo fmt --check`, `cargo clippy --all-targets` (no new warnings)
   and `cargo test` green.
+
+## Seeing the UI (screenshots without a display)
+
+- Headless, no window/GPU: `catwright --screenshot out.png --headless
+  [--frames N] [--size WxH] [--project DIR [--session ID]] [--lang en]`.
+  Renders through `src/softrender.rs` (bare egui context + software
+  rasterizer of the tessellated shapes).
+- In tests: `crate::softrender::render_ui(&mut harness, w, h, frames)`
+  returns an `image::RgbImage`; `crate::softrender::save_png` writes it.
+  `harness::tests::feature_screenshots` renders the feature states to PNGs
+  when `CATWRIGHT_SHOT_DIR` is set.
+- Render every UI change to a PNG and look at it before committing.
+- Windowed screenshots (needs a display, `xvfb-run`): `tools/screenshots/render.sh`.
