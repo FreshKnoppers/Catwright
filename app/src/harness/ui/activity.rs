@@ -36,6 +36,12 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
                 {
                     close = true;
                 }
+                let unseen = h.activity.len().saturating_sub(h.ui.activity_seen);
+                if unseen > 0
+                    && widgets::button(ui, tr("Mark all read"), ButtonKind::Secondary).clicked()
+                {
+                    h.ui.activity_seen = h.activity.len();
+                }
             });
         });
         ui.add_space(6.0);
@@ -105,33 +111,51 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 0.0,
                 accent,
             );
-            let mut x = rect.left() + 10.0;
-            let ws = if e.cwd.as_os_str().is_empty() {
-                String::new()
-            } else {
-                h.workspace_name(&e.cwd)
-            };
-            if !ws.is_empty() {
-                let g = widgets::line_galley(ui, &ws, widgets::mono(10.5), theme::DIM, 120.0);
-                x = widgets::paint_line(ui, x, rect.center().y, g).right() + 6.0;
+            // header row: accent bar, workspace (mono, uppercased), title —
+            // and on the right the age plus the Open action
+            let mut open: Option<(std::path::PathBuf, String)> = None;
+            ui.horizontal(|ui| {
+                let mut x = rect.left() + 10.0;
+                if !e.cwd.as_os_str().is_empty() {
+                    let g = widgets::line_galley(
+                        ui,
+                        &h.workspace_name(&e.cwd).to_uppercase(),
+                        widgets::mono(10.5),
+                        theme::DIM,
+                        120.0,
+                    );
+                    x = widgets::paint_line(ui, x, rect.center().y, g).right() + 6.0;
+                }
+                let title = if e.title.is_empty() {
+                    tr("Session").to_string()
+                } else {
+                    e.title.clone()
+                };
+                let age = extras::human_duration((extras::now_epoch() - e.at).max(0) as u64);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !e.sid.is_empty()
+                        && widgets::button(ui, tr("Open"), ButtonKind::Secondary).clicked()
+                    {
+                        let cwd = if e.cwd.as_os_str().is_empty() {
+                            h.sessions
+                                .get(&e.sid)
+                                .map(|v| v.cwd.clone())
+                                .unwrap_or_default()
+                        } else {
+                            e.cwd.clone()
+                        };
+                        open = Some((cwd, e.sid.clone()));
+                    }
+                    ui.label(RichText::new(age).monospace().size(10.5).color(theme::DIM));
+                });
+                let right = rect.right() - 130.0;
+                let g =
+                    widgets::line_galley(ui, &title, widgets::font(13.0), theme::TEXT, right - x);
+                widgets::paint_line(ui, x, rect.center().y, g);
+            });
+            if let Some((cwd, sid)) = open {
+                ops.push(FeedOp::Open { cwd, sid });
             }
-            let title = if e.title.is_empty() {
-                tr("Session").to_string()
-            } else {
-                e.title.clone()
-            };
-            let age = Some(extras::human_duration(
-                (extras::now_epoch() - e.at).max(0) as u64
-            ));
-            let mut right = rect.right();
-            if let Some(a) = age {
-                let g = widgets::line_galley(ui, &a, widgets::mono(10.5), theme::DIM, 70.0);
-                right -= g.size().x;
-                widgets::paint_line(ui, right, rect.center().y, g);
-                right -= 8.0;
-            }
-            let g = widgets::line_galley(ui, &title, widgets::font(13.0), theme::TEXT, right - x);
-            widgets::paint_line(ui, x, rect.center().y, g);
             ui.add_space(2.0);
             ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
             ui.add_space(4.0);

@@ -115,7 +115,7 @@ fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
             pos2(resp.rect.right() - w - 6.0, resp.rect.center().y - 8.0),
             vec2(w, 16.0),
         );
-        ui.painter().rect_filled(badge, 8.0, theme::ORANGE);
+        ui.painter().rect_filled(badge, 2.0, theme::ORANGE);
         ui.painter().galley(
             pos2(
                 badge.center().x - g.size().x / 2.0,
@@ -442,6 +442,14 @@ fn session_row(
             );
             x += 12.0;
         }
+        SessionState::Failed => {
+            ui.painter().rect_filled(
+                Rect::from_min_size(pos2(x, rect.center().y - 3.0), vec2(6.0, 6.0)),
+                0.0,
+                theme::RED,
+            );
+            x += 12.0;
+        }
     }
     // a session with routines gets a small clock
     if h.loops.get(sid).is_some_and(|l| !l.is_empty()) {
@@ -488,13 +496,14 @@ fn session_row(
         let age = match state {
             SessionState::Waiting => Some(tr("WAITING").to_string()),
             SessionState::Running => Some(tr("RUNNING").to_string()),
+            SessionState::Failed => Some(tr("FAILED").to_string()),
             _ => updated.and_then(|u| extras::relative_time(u, extras::now_epoch())),
         };
         if let Some(age) = age {
-            let color = if state == SessionState::Waiting {
-                theme::YELLOW
-            } else {
-                theme::DIM
+            let color = match state {
+                SessionState::Waiting => theme::YELLOW,
+                SessionState::Failed => theme::RED_TEXT,
+                _ => theme::DIM,
             };
             let g = line_galley(ui, &age, mono(10.5), color, 60.0);
             right -= g.size().x;
