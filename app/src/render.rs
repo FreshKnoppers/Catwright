@@ -821,6 +821,80 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, id: egui::Id, lang: &str, cod
         });
 }
 
+/// Code block with line numbers (the preview pane): one row per line,
+/// horizontal scroll instead of truncation.
+pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &str, code: &str) {
+    egui::Frame::default()
+        .fill(CODE_BG)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(egui::Stroke::new(1.0_f32, crate::theme::BORDER_SOFT))
+        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let copy =
+                        crate::widgets::IconButton::new(crate::icons::Icon::Copy, tr("Copy"))
+                            .side(22.0);
+                    if ui.add(copy).clicked() {
+                        ui.ctx().copy_text(code.to_string());
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(crate::theme::mono_label(if lang.is_empty() {
+                                "code"
+                            } else {
+                                lang
+                            }))
+                            .truncate(),
+                        );
+                    });
+                });
+            });
+            ui.add_space(2.0);
+            egui::ScrollArea::horizontal()
+                .id_salt(id)
+                .auto_shrink([false, true])
+                .max_width(ui.available_width())
+                .show(ui, |ui| {
+                    for (i, line) in code.lines().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("{:>4}", i + 1))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(crate::theme::DIM),
+                                )
+                                .extend(),
+                            );
+                            ui.add_space(8.0);
+                            let mut job = egui::text::LayoutJob::default();
+                            for (tok, text) in crate::syntax::tokenize(lang, line) {
+                                let color = match tok {
+                                    crate::syntax::Tok::Keyword => crate::theme::BLUE,
+                                    crate::syntax::Tok::Str => crate::theme::GREEN,
+                                    crate::syntax::Tok::Comment => crate::theme::DIM,
+                                    crate::syntax::Tok::Num => crate::theme::AMBER,
+                                    crate::syntax::Tok::Plain => TEXT,
+                                };
+                                job.append(
+                                    text.as_str(),
+                                    0.0,
+                                    egui::TextFormat {
+                                        font_id: crate::widgets::mono(12.5),
+                                        color,
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                            ui.add(egui::Label::new(job).extend());
+                        });
+                    }
+                });
+        });
+}
+
 /// Inner column widths for a table of the given natural widths. Everything
 /// fits as measured when it can; otherwise narrow columns keep their width
 /// and the wide ones share what is left (water filling), so no column is

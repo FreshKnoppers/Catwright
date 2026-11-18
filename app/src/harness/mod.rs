@@ -27,7 +27,8 @@ use extras::{
 };
 use serde_json::{json, Value};
 use state::{
-    ActivityEvent, ActivityKind, PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs, UiState,
+    ActivityEvent, ActivityKind, PreviewMode, PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs,
+    UiState,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -258,6 +259,9 @@ pub struct Harness {
     pub retrying: HashMap<String, String>,
     /// Sessions that finished a turn while another one was on screen.
     pub unseen: HashSet<String>,
+    /// Sessions whose last turn failed (red FAILED in the sidebar until the
+    /// next turn or open).
+    pub failed: HashSet<String>,
     /// The activity feed across all sessions (bounded).
     pub activity: Vec<ActivityEvent>,
     /// Archived session ids (persisted through the settings): hidden from
@@ -276,6 +280,8 @@ pub enum SessionState {
     Waiting,
     /// A turn finished while another session was on screen.
     Unseen,
+    /// The last turn of this session failed.
+    Failed,
 }
 
 impl Harness {
@@ -355,6 +361,7 @@ impl Harness {
             last_turn_secs: HashMap::new(),
             retrying: HashMap::new(),
             unseen: HashSet::new(),
+            failed: HashSet::new(),
             activity: Vec::new(),
             archived: HashSet::new(),
             known_commands: Vec::new(),
@@ -982,6 +989,8 @@ impl Harness {
                             error.message.clone(),
                             None,
                         );
+                        self.failed.insert(session_id.clone());
+                        self.unseen.remove(session_id);
                         self.turn_started.remove(session_id);
                         self.retrying.remove(session_id);
                         // The request is dead, so the turn is over — the
@@ -1209,6 +1218,7 @@ impl Harness {
             self.ui.preview = Some(PreviewState {
                 path: p.to_string_lossy().into_owned(),
                 width: 380.0,
+                mode: PreviewMode::Code,
             });
         }
     }
@@ -1461,6 +1471,7 @@ impl Harness {
         self.artifacts_open = false;
         self.ui.activity_open = false;
         self.unseen.remove(session_id);
+        self.failed.remove(session_id);
         self.ui.focus_composer = true;
         if !self.sessions.contains_key(session_id) {
             if self.client.is_none() {
@@ -2178,6 +2189,8 @@ impl Harness {
 
     /// begin_turn + `session/prompt` for `sid` (queued and held prompts).
     fn send_prompt(&mut self, sid: &str, blocks: &[PromptBlock]) {
+        // a new turn clears the failed mark of the last one
+        self.failed.remove(sid);
         // remember what is being sent: Vibe echoes the prompt back only on
         // success, so a failed request needs the text for the draft
         self.sent_prompts.insert(sid.to_string(), blocks.to_vec());
@@ -2478,6 +2491,9 @@ impl Harness {
             .is_some_and(|v| v.turn != TurnState::Idle)
         {
             return SessionState::Running;
+        }
+        if self.failed.contains(session_id) {
+            return SessionState::Failed;
         }
         if self.unseen.contains(session_id) {
             return SessionState::Unseen;

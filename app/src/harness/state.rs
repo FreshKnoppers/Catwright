@@ -190,6 +190,14 @@ pub struct Toast {
     pub since: Option<Instant>,
 }
 
+/// What the preview pane shows: the file on disk, or its diff against HEAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewMode {
+    #[default]
+    Code,
+    Diff,
+}
+
 /// The preview pane beside the transcript. While it is open it replaces the
 /// right work panel.
 #[derive(Debug, Clone)]
@@ -197,6 +205,7 @@ pub struct PreviewState {
     pub path: String,
     /// Panel width in points; the user can resize it.
     pub width: f32,
+    pub mode: PreviewMode,
 }
 
 /// Transient state of the harness UI.
