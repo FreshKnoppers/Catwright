@@ -1601,3 +1601,24 @@ msgstr "Lauf beendet"
 
 msgid "Session"
 msgstr "Sitzung"
+
+msgid "1 comment on this file"
+msgstr "1 Kommentar zu dieser Datei"
+
+msgid " · {step}"
+msgstr " · {step}"
+
+msgid "Code"
+msgstr "Code"
+
+msgid "Diff"
+msgstr "Diff"
+
+msgid "No changes against the last commit."
+msgstr "Keine Änderungen gegenüber dem letzten Commit."
+
+msgid "Mark all read"
+msgstr "Alle als gelesen markieren"
+
+msgid "FAILED"
+msgstr "FEHLGESCHLAGEN"

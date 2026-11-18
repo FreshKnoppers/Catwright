@@ -132,7 +132,9 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     if to_end {
         pills.push((Icon::ArrowDown, tr("To the end"), NavJump::End));
     }
-    if pills.is_empty() {
+    // no navigation pills over a modal (settings, rename, …): they are
+    // Foreground like the dialog and would sit on top of it
+    if pills.is_empty() || super::modal_open(h) {
         return;
     }
     let r = output.inner_rect;
@@ -225,6 +227,8 @@ fn render_items(
     // the detail level's auto-open defaults for a running turn
     let auto_group = running && matches!(detail.as_str(), "detailed" | "verbose");
     let auto_output = running && detail == "verbose";
+    // compact: the running round collapses to a single summary line
+    let compact = running && detail == "compact";
     // retention hint (audit N1): the oldest items left the view's memory
     // once the transcript outgrew its bound; Vibe keeps the real history
     if s.trimmed_front > 0 {
@@ -273,6 +277,40 @@ fn render_items(
         let expanded = open_groups.contains(&key);
         if round.shows_summary() && round_summary(ui, &s.items, round, expanded) {
             toggle_key(open_groups, key);
+        }
+        // compact mode: the running round is one line — busy marker, tool
+        // count, current step — instead of the full open transcript
+        let is_running_round = running && std::ptr::eq(round, rounds.last().unwrap_or(round));
+        if compact && is_running_round {
+            let step = s
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Tool(id) => s.tool_calls.get(id),
+                    _ => None,
+                })
+                .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending))
+                .map(|c| c.title.clone())
+                .unwrap_or_default();
+            let (rect, _) =
+                ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+            widgets::paint_busy(ui, pos2(rect.left() + 5.0, rect.center().y - 1.0), 3.0);
+            let mut label = tr("Working").to_string();
+            if round.tool_calls > 0 {
+                label.push_str(&trf(" · {n} tool calls", &[("n", &round.tool_calls)]));
+            }
+            if !step.is_empty() {
+                label.push_str(&trf(" · {step}", &[("step", &step)]));
+            }
+            let g = line_galley(
+                ui,
+                &label,
+                widgets::font(13.5),
+                theme::MUTED,
+                rect.width() - 30.0,
+            );
+            paint_line(ui, rect.left() + 22.0, rect.center().y, g);
+            continue;
         }
         let range = if round.collapsed && !expanded {
             round
@@ -1338,100 +1376,28 @@ fn comment_section(
     comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
 ) {
-    let mut save = false;
-    let mut cancel = false;
-    if let Some(e) = comments.edit.as_mut() {
-        if e.key == key {
-            ui.add_space(6.0);
-            egui::Frame::none()
-                .fill(theme::RAISED)
-                .rounding(egui::Rounding::same(4.0))
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(trf("Comment on line {n}", &[("n", &e.line.to_string())]))
-                            .color(theme::DIM)
-                            .size(12.0),
-                    );
-                    ui.add(
-                        egui::TextEdit::multiline(&mut e.text)
-                            .desired_rows(2)
-                            .desired_width(f32::INFINITY)
-                            .hint_text(tr("Your comment …")),
-                    );
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
-                            save = true;
-                        }
-                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
-                            cancel = true;
-                        }
-                    });
-                });
-        }
+    // the comments themselves hang under their lines (line_comments); here
+    // only the count and the one action that sends them all to the composer
+    let n = comments.map.get(key).map_or(0, Vec::len);
+    if n == 0 {
+        return;
     }
-    if save {
-        if let Some(e) = comments.edit.take() {
-            if !e.text.trim().is_empty() {
-                comments
-                    .map
-                    .entry(key.to_string())
-                    .or_default()
-                    .push(DiffComment {
-                        line: e.line,
-                        text: e.text.trim().to_string(),
-                    });
-            }
-        }
-    }
-    if cancel {
-        *comments.edit = None;
-    }
-    let list = comments.map.get(key).cloned().unwrap_or_default();
-    for c in &list {
-        ui.horizontal(|ui| {
-            ui.add_space(26.0);
-            ui.label(
-                RichText::new(trf(
-                    "L{line}: {text}",
-                    &[("line", &c.line.to_string()), ("text", &c.text)],
-                ))
-                .color(theme::TEXT)
-                .size(12.5),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
-                    .clicked()
-                {
-                    if let Some(v) = comments.map.get_mut(key) {
-                        v.retain(|x| x != c);
-                    }
-                }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(26.0);
+        let label = if n == 1 {
+            tr("1 comment on this file").to_string()
+        } else {
+            trf("{n} comments on this file", &[("n", &n.to_string())])
+        };
+        ui.label(RichText::new(label).color(theme::DIM).size(12.0));
+        if widgets::button(ui, tr("Send to Vibe"), ButtonKind::Primary).clicked() {
+            ops.push(MessageOp::SendComments {
+                key: key.to_string(),
+                path: path.to_string(),
             });
-        });
-    }
-    if !list.is_empty() {
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(26.0);
-            ui.label(
-                RichText::new(trf(
-                    "{n} comments on this file",
-                    &[("n", &list.len().to_string())],
-                ))
-                .color(theme::DIM)
-                .size(12.0),
-            );
-            if widgets::button(ui, tr("Send to Vibe"), ButtonKind::Primary).clicked() {
-                ops.push(MessageOp::SendComments {
-                    key: key.to_string(),
-                    path: path.to_string(),
-                });
-            }
-        });
-    }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,10 +1646,26 @@ pub(super) fn diff_body(
                         new_line
                     }
                 };
-                let gutter = comment
-                    .as_mut()
-                    .map(|(key, _state, ops)| (*key, line_no, &mut **ops));
-                diff_line(ui, line.kind, &line.text, gutter);
+                // the "+" gutter only on lines that exist on the new side
+                // (never on removed ones)
+                let commented = comment.as_ref().is_some_and(|(key, state, _)| {
+                    state
+                        .map
+                        .get(*key)
+                        .is_some_and(|l| l.iter().any(|c| c.line == line_no))
+                });
+                let gutter = if line.kind == LineKind::Removed {
+                    None
+                } else {
+                    comment
+                        .as_mut()
+                        .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
+                };
+                diff_line(ui, line.kind, &line.text, gutter, commented);
+                // comments and the editor hang directly under their line
+                if let Some((key, state, _ops)) = comment.as_mut() {
+                    line_comments(ui, key, line_no, state);
+                }
             }
         }
     }
@@ -1705,6 +1687,7 @@ fn diff_line(
     kind: LineKind,
     text: &str,
     gutter: Option<(&str, usize, &mut Vec<MessageOp>)>,
+    commented: bool,
 ) {
     let (bg, sign, color) = match kind {
         LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
@@ -1731,6 +1714,14 @@ fn diff_line(
     if let Some(bg) = bg {
         ui.painter().rect_filled(rect, 0.0, bg);
     }
+    // a commented line gets a yellow edge on the left
+    if commented {
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+            0.0,
+            theme::YELLOW,
+        );
+    }
     let sign_color = match kind {
         LineKind::Added => theme::GREEN,
         LineKind::Removed => theme::RED_TEXT,
@@ -1748,12 +1739,13 @@ fn diff_line(
         );
         let id = ui.make_persistent_id(("diff_comment", key, line));
         let resp = ui.interact(btn, id, Sense::click());
+        // the "+" only shows on hover, but the button stays clickable
         if resp.hovered() {
             ui.painter().rect_filled(btn, 3.0, theme::HOVER);
+            let g = line_galley(ui, "+", mono(12.0), theme::TEXT, 18.0);
+            ui.painter()
+                .galley(btn.center() - g.size() / 2.0, g, theme::TEXT);
         }
-        let g = line_galley(ui, "+", mono(12.0), theme::MUTED, 18.0);
-        ui.painter()
-            .galley(btn.center() - g.size() / 2.0, g, theme::MUTED);
         if resp
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
@@ -1763,6 +1755,105 @@ fn diff_line(
                 line,
             });
         }
+    }
+}
+
+/// The comments of one diff line, hanging directly under it, plus the editor
+/// when this line is being commented.
+fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Comments) {
+    // the editor for this line
+    let mut save = false;
+    let mut cancel = false;
+    if let Some(e) = comments.edit.as_ref() {
+        if e.key == key && e.line == line_no {
+            let text = comments.edit.as_mut().unwrap();
+            ui.add_space(2.0);
+            egui::Frame::none()
+                .fill(theme::RAISED)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(trf("Comment on line {n}", &[("n", &line_no.to_string())]))
+                            .color(theme::DIM)
+                            .size(12.0),
+                    );
+                    // the input field gets its own visible frame
+                    egui::Frame::none()
+                        .fill(theme::BG)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                        .rounding(egui::Rounding::same(2.0))
+                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut text.text)
+                                    .frame(false)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text(tr("Your comment …")),
+                            );
+                        });
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
+                            save = true;
+                        }
+                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            ui.add_space(2.0);
+        }
+    }
+    if save {
+        if let Some(e) = comments.edit.take() {
+            if !e.text.trim().is_empty() {
+                comments
+                    .map
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(DiffComment {
+                        line: e.line,
+                        text: e.text.trim().to_string(),
+                    });
+            }
+        }
+    }
+    if cancel {
+        *comments.edit = None;
+    }
+    let list: Vec<DiffComment> = comments
+        .map
+        .get(key)
+        .map(|l| l.iter().filter(|c| c.line == line_no).cloned().collect())
+        .unwrap_or_default();
+    for c in &list {
+        ui.horizontal(|ui| {
+            ui.add_space(26.0);
+            // yellow edge like the commented line above
+            let (rect, _) = ui.allocate_exact_size(vec2(3.0, 18.0), Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, theme::YELLOW);
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(trf(
+                    "L{line}: {text}",
+                    &[("line", &c.line.to_string()), ("text", &c.text)],
+                ))
+                .color(theme::TEXT)
+                .size(12.5),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
+                    .clicked()
+                {
+                    if let Some(v) = comments.map.get_mut(key) {
+                        v.retain(|x| x != c);
+                    }
+                }
+            });
+        });
     }
 }
 
