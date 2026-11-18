@@ -10,6 +10,9 @@ Browser/Design Mode, Mobile, SSH, Settings) und
 gespiegelt gegen `docs/acp.md`, `app/MECHANICS.md`, `docs/HANDOFF.md` und den
 Code in `app/src/`.
 
+> Zweitmeinung, Korrekturen und UI-Mockups:
+> [research-orca-deepseek-harness-review.md](research-orca-deepseek-harness-review.md).
+
 ## Kurzfazit
 
 Beide Produkte sind Harness-Oberflächen für CLI-Agenten; Catwright ist dagegen

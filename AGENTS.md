@@ -22,6 +22,10 @@ API keys.
 - `docs/acp.md`: the protocol subset we implement (source of truth).
 - `reference/` (local only, git-ignored): screenshots of other products used
   as design references; never commit them.
+- `tools/icons/render.py`: renders the app icons (`app/assets/icon.png`,
+  `dist/icons/`) from `theme::LOGO`; rerun it after changing the logo.
+- `tools/mockups/`: HTML mockups of proposed UI (not implemented), rendered
+  to `docs/mockups/`; not part of the app.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
   for `vibe-acp` with prepared demo sessions (`render.sh`); not part of the app.
 - `docs/design.md`: visual design (Mistral-like pixel style, colour tokens).

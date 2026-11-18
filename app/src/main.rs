@@ -190,8 +190,8 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// The window and taskbar icon: `assets/icon.png`, the pixel window mark
-/// of `theme::LOGO`, 128 × 128, generated from `LOGO` and `GRADIENT`.
+/// The window and taskbar icon: `assets/icon.png`, 128 × 128, the pixel
+/// mark of `theme::LOGO` on a dark tile, rendered by `tools/icons/render.py`.
 fn load_icon() -> egui::IconData {
     let bytes = include_bytes!("../assets/icon.png");
     let rgba = image::load_from_memory(bytes)
@@ -227,6 +227,41 @@ mod tests {
             icon.rgba.as_chunks::<4>().0.iter().any(|px| px[3] == 255),
             "the window mark has opaque pixels"
         );
+    }
+
+    #[test]
+    fn the_bundled_window_icon_shows_the_logo_bitmap() {
+        // tools/icons/render.py draws theme::LOGO with whole-pixel cells;
+        // find the mark by its colours and compare it cell by cell, so a
+        // changed LOGO without re-rendered icons fails here
+        let icon = load_icon();
+        let w = icon.width as usize;
+        let px = |x: usize, y: usize| {
+            let i = (y * w + x) * 4;
+            egui::Color32::from_rgb(icon.rgba[i], icon.rgba[i + 1], icon.rgba[i + 2])
+        };
+        let colors: Vec<egui::Color32> = "oyr".chars().filter_map(theme::logo_color).collect();
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+        for y in 0..icon.height as usize {
+            for x in 0..w {
+                if colors.contains(&px(x, y)) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        let (cols, rows) = (theme::LOGO[0].chars().count(), theme::LOGO.len());
+        assert!(x1 > x0 && y1 > y0, "the icon contains the mark");
+        let cell = (x1 - x0 + 1) / cols;
+        assert_eq!((x1 - x0 + 1, y1 - y0 + 1), (cell * cols, cell * rows));
+        for (r, line) in theme::LOGO.iter().enumerate() {
+            for (c, ch) in line.chars().enumerate() {
+                let got = px(x0 + c * cell + cell / 2, y0 + r * cell + cell / 2);
+                match theme::logo_color(ch) {
+                    Some(want) => assert_eq!(got, want, "cell {r},{c}"),
+                    None => assert!(!colors.contains(&got), "cell {r},{c} is empty"),
+                }
+            }
+        }
     }
 
     #[test]

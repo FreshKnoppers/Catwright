@@ -54,9 +54,12 @@ Pixel gradient (for pixel art / meters, left to right):
   = `ORANGE_DIM`, empty = `RAISED`. Use for the context window (Kontext
   panel: 20 blocks = 100 %), thinking level (low/medium/high = 1/2/3 of 3
   blocks) and speed-like indicators.
-- **Pixel logo**: our OWN small pixel mark drawn from a 7×5 (or similar)
-  bitmap in `ORANGE`, e.g. a pixel "O" or a little pixel window. Do NOT copy
-  Mistral's "M" logo or their cat mascot; we only borrow the style.
+- **Pixel logo** (`theme::LOGO`): our OWN 9×5 pixel mark, a little window
+  with an `ORANGE` frame, two `YELLOW` eyes and a `RED` sill. Drawn at 2 pt
+  cells in the sidebar. The app icons show it on a dark `SIDEBAR` tile with
+  a `BORDER_SOFT` edge (rendered by `tools/icons/render.py`, which reads the
+  bitmap from theme.rs; a test checks the bundled icon against it). Do NOT
+  copy Mistral's "M" logo or their cat mascot; we only borrow the style.
 - **Project icons**: 3×3 pixel squares whose colours are derived from a hash
   of the project path (palette = the pixel gradient + a few cool colours),
   like the coloured project dots in picture-7.

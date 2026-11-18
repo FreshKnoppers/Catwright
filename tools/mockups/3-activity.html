@@ -1,0 +1,111 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><script src="common.js"></script>
+<style>
+.nav.sel { background: var(--raised); box-shadow: inset 2px 0 var(--orange); margin: 0 10px; padding-left: 6px; border-radius: 2px; }
+.st { font: 11px var(--mono); flex: none; }
+.dot { width: 7px; height: 7px; display: block; flex: none; }
+.cnt { font: 700 11px var(--mono); padding: 0 5px; border-radius: 2px; flex: none; line-height: 16px; }
+.menu { position: absolute; background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 4px; width: 196px; box-shadow: 0 8px 24px rgba(0,0,0,.55); z-index: 30; }
+.menu div { display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border-radius: 2px; font-size: 13.5px; }
+.menu div.on { background: var(--raised); }
+.menu hr { border: 0; border-top: 1px solid var(--border-soft); margin: 4px 2px; }
+.menu .k { margin-left: auto; font: 11px var(--mono); color: var(--dim); }
+.feed { flex: 1; overflow: hidden; padding: 18px 20px 0 236px; }
+.feedcol { max-width: 840px; }
+.fhead { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.fhead h1 { font-size: 20px; font-weight: 700; }
+.filters { display: flex; gap: 6px; margin-left: 10px; }
+.filters span { font: 12px var(--mono); color: var(--dim); border: 1px solid var(--border); border-radius: 2px; padding: 2px 8px; }
+.filters span.on { color: var(--text); background: var(--raised); border-color: var(--raised); box-shadow: inset 0 -2px var(--orange); }
+.grp { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; }
+.item { display: grid; grid-template-columns: 14px 1fr auto; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--border-soft); background: var(--card); border-radius: 4px; margin-bottom: 6px; }
+.item .tt { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+.item .tt b { font-weight: 600; }
+.item .pv { grid-column: 2 / 3; color: var(--muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .tm { font: 11.5px var(--mono); color: var(--dim); text-align: right; }
+.item .act { grid-column: 3; grid-row: 2; display: flex; gap: 6px; justify-content: flex-end; }
+.item.wait { border-top: 2px solid var(--yellow); }
+.item.fail { border-left: 2px solid var(--red); }
+.item.unread .tt b::after { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--orange); margin-left: 7px; vertical-align: 2px; }
+.sq { width: 8px; height: 8px; margin-top: 6px; display: block; }
+.btn.sm { padding: 2px 9px; font-size: 12.5px; }
+.btn.deny { background: transparent; border-color: var(--red); color: var(--red-text); }
+</style></head><body><div class="app">
+
+<div class="sidebar" style="position:relative">
+  <div class="brand"><span data-logo></span>Catwright<span class="sp"></span><span data-i="panel" data-c="#b4b4ba"></span></div>
+  <div class="nav"><span data-i="plus" data-c="#ececec"></span>New session<span class="k">Ctrl N</span></div>
+  <div class="nav"><span data-i="search" data-c="#ececec"></span>Search<span class="k">Ctrl K</span></div>
+  <div class="nav sel"><span data-i="bell" data-c="#fa500f"></span>Activity<span class="badge">4</span></div>
+  <div class="nav"><span data-i="artifacts" data-c="#ececec"></span>Artifacts</div>
+  <div class="sechead"><span class="label">Projects</span><span data-i="plus" data-c="#b4b4ba"></span></div>
+  <div class="row"><span data-i="right" data-c="#8a8a8f" data-s="1"></span><span data-i="comment" data-c="#fa500f"></span><span class="t">General</span><span class="age">5</span></div>
+  <div class="row"><span data-i="down" data-c="#8a8a8f" data-s="1"></span><span data-proj="P_WS"></span><span class="t">weather-station</span><span class="age">6</span></div>
+  <div class="row sess"><span class="t">Add an outlier filter</span><span data-busy></span></div>
+  <div class="row sess"><span class="t">Fix CSV parser for CRLF</span><span class="st" style="color:var(--yellow)">WAITING</span></div>
+  <div class="row sess"><span class="t" style="color:var(--text)">README draft</span><span class="dot" style="background:var(--orange)"></span><span class="age">4 min</span></div>
+  <div class="row sess hover"><span class="t" style="color:var(--text)">Plot weekly trend</span><span class="st" style="color:var(--red-text)">FAILED</span></div>
+  <div class="row sess"><span class="t">Hourly sensor check</span><span data-i="clock" data-c="#ffaf00" data-s="1.5"></span><span class="age">22 min</span></div>
+  <div class="row sess"><span class="t">Daily temperature stats</span><span class="age">36 min</span></div>
+  <div class="row sess" style="color:var(--dim)"><span data-i="archive" data-c="#8a8a8f" data-s="1.5"></span><span class="t" style="font-size:13px">Archived · 4</span></div>
+  <div class="row"><span data-i="right" data-c="#8a8a8f" data-s="1"></span><span data-proj="P_HC"></span><span class="t">home-climate</span><span class="dot" style="background:var(--yellow);margin-right:2px"></span><span class="cnt" style="background:var(--orange);color:#111">2</span></div>
+  <div class="footer">
+    <div class="label" style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><i style="width:6px;height:6px;background:var(--green);display:block"></i>Mistral Vibe 3.1.3</div>
+    <div style="display:flex;align-items:center;gap:8px"><span data-i="user" data-c="#ececec"></span><div style="flex:1"><div>alex</div><div style="display:flex;gap:8px;align-items:center"><span data-meter="16,2,4"></span><span class="label">12.0 %</span></div></div><span data-i="gear" data-c="#b4b4ba"></span></div>
+  </div>
+  <div class="menu" style="left:262px;top:372px">
+    <div><span data-i="pencil" data-c="#b4b4ba"></span>Rename</div>
+    <div><span data-i="pin" data-c="#b4b4ba"></span>Pin</div>
+    <div class="on"><span data-i="eye" data-c="#fa500f"></span>Mark as unread</div>
+    <div><span data-i="branch" data-c="#b4b4ba"></span>Fork</div>
+    <hr>
+    <div><span data-i="archive" data-c="#b4b4ba"></span>Archive</div>
+    <div style="color:var(--red-text)"><span data-i="trash" data-c="#ff6e62"></span>Delete …</div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="feed"><div class="feedcol">
+    <div class="fhead"><span data-i="bell" data-c="#fa500f"></span><h1>Activity</h1>
+      <div class="filters"><span class="on">All</span><span>Waiting · 1</span><span>Unread · 3</span><span>Failed · 1</span></div>
+      <span style="flex:1"></span><span class="btn ghost sm">Mark all read</span></div>
+
+    <div class="grp"><span class="label" style="color:var(--yellow)">■ Waiting for you</span></div>
+    <div class="item wait"><span class="sq" style="background:var(--yellow)"></span>
+      <div class="tt"><span data-proj="P_WS"></span><span class="mono dim" style="font-size:12px">WEATHER-STATION</span><b>Fix CSV parser for CRLF</b></div>
+      <div class="tm">just now</div>
+      <div class="pv">Vibe wants to run <code>pip install --user chardet</code></div>
+      <div class="act"><span class="btn sm">Open</span><span class="btn deny sm">Deny</span><span class="btn primary sm">Allow once</span></div>
+    </div>
+
+    <div class="grp"><span class="label">■ Finished</span></div>
+    <div class="item unread"><span class="sq" style="background:var(--green)"></span>
+      <div class="tt"><span data-proj="P_WS"></span><span class="mono dim" style="font-size:12px">WEATHER-STATION</span><b>README draft</b></div>
+      <div class="tm">4 min</div>
+      <div class="pv">README.md now documents the schema, the run instructions and both data-quality caveats. All 5 tests pass.</div>
+    </div>
+    <div class="item unread"><span class="sq" style="background:var(--green)"></span>
+      <div class="tt"><span data-proj="P_HC"></span><span class="mono dim" style="font-size:12px">HOME-CLIMATE</span><b>Night setback schedule</b></div>
+      <div class="tm">11 min</div>
+      <div class="pv">Moving the 18 °C window to 22:00–06:00 saves about 6 % per year; the dashboard shows both variants side by side.</div>
+    </div>
+    <div class="item"><span class="sq" style="background:var(--green)"></span>
+      <div class="tt"><span data-proj="P_WS"></span><span class="mono dim" style="font-size:12px">WEATHER-STATION</span><b>Hourly sensor check</b><span data-i="clock" data-c="#ffaf00" data-s="1.5"></span><span class="dim" style="font-size:12.5px">routine · every 1 h</span></div>
+      <div class="tm">22 min</div>
+      <div class="pv">No new gaps since the last run; 6 readings added, all within range.</div>
+    </div>
+
+    <div class="grp"><span class="label" style="color:var(--red-text)">■ Failed</span></div>
+    <div class="item fail unread"><span class="sq" style="background:var(--red)"></span>
+      <div class="tt"><span data-proj="P_WS"></span><span class="mono dim" style="font-size:12px">WEATHER-STATION</span><b>Plot weekly trend</b></div>
+      <div class="tm">31 min</div>
+      <div class="pv" style="color:var(--red-text)">Rate limited (-31001). The turn stopped after 3 tool calls; nothing was written.</div>
+      <div class="act"><span class="btn sm">Open</span><span class="btn sm">Retry</span></div>
+    </div>
+  </div></div>
+</div>
+
+<div class="note l" style="left:290px;top:236px;max-width:200px"><b>5</b>Eigene Zustände: läuft, wartet, ungelesen, <span style="color:#a00">fehlgeschlagen</span>. Routinen mit Uhr, archivierte Sessions eingeklappt.</div>
+<div class="note t" style="left:20px;top:494px;max-width:240px"><b>5</b>Eingeklapptes Projekt: Zähler für Ungelesenes, gelber Punkt wenn etwas wartet.</div>
+<div class="note t" style="left:520px;top:560px;max-width:320px"><b>5</b>Feed über alle Projekte, mit einer Zeile Vorschau. Freigaben direkt beantworten.</div>
+<div class="mocktag" style="bottom:110px">MOCKUP · not implemented</div>
+</div></body></html>
