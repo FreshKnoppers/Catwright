@@ -1658,3 +1658,36 @@ msgstr "Ausstehend"
 
 msgid "Running"
 msgstr "Läuft"
+
+msgid "Worktrees"
+msgstr "Worktrees"
+
+msgid "Create worktree"
+msgstr "Worktree erstellen"
+
+msgid "Delete worktree"
+msgstr "Worktree löschen"
+
+msgid "A new worktree of the current project, as its own workspace with its own sessions."
+msgstr "Ein neuer Worktree des aktuellen Projekts, als eigener Arbeitsbereich mit eigenen Sitzungen."
+
+msgid "Start ref (branch, tag or commit) — empty: a new branch from HEAD"
+msgstr "Start-Ref (Branch, Tag oder Commit) — leer: neuer Branch von HEAD"
+
+msgid "Delete the worktree “{name}”? The files in the main project stay untouched."
+msgstr "Worktree „{name}“ löschen? Die Dateien im Hauptprojekt bleiben unberührt."
+
+msgid "The worktree has uncommitted changes — they are lost."
+msgstr "Der Worktree hat ungespeicherte Änderungen — sie gehen verloren."
+
+msgid "Also delete the branch “{branch}”"
+msgstr "Auch den Branch „{branch}“ löschen"
+
+msgid "Deleting worktree …"
+msgstr "Worktree wird gelöscht …"
+
+msgid "Worktree deleted."
+msgstr "Worktree gelöscht."
+
+msgid "The worktree could not be deleted: {error}"
+msgstr "Der Worktree konnte nicht gelöscht werden: {error}"

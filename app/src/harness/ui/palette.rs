@@ -171,7 +171,16 @@ pub(crate) fn apply(h: &mut Harness, action: Action, out: &mut HarnessAction) {
         Action::Settings => *out = HarnessAction::OpenSettings,
         Action::Artifacts => h.artifacts_open = true,
         Action::Fork => h.fork_active_session(),
-        Action::Worktree => h.create_worktree(),
+        Action::Worktree => {
+            // create dialog with the optional start ref
+            if h.current_project.is_some() {
+                h.ui.worktree_dialog = Some(crate::harness::state::WorktreeDialog {
+                    start_ref: String::new(),
+                });
+            } else {
+                h.status = tr("No project open.").to_string();
+            }
+        }
         Action::Open(cwd, sid) => h.open_session(cwd, &sid),
         Action::Project(p) => {
             h.select_workspace(p);

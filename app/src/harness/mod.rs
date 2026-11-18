@@ -129,6 +129,8 @@ pub struct Harness {
     pending_setup: Vec<SetupStep>,
     /// A `git worktree add` running in the background (`create_worktree`).
     worktree_job: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+    /// A `git worktree remove` running in the background (`delete_worktree`).
+    worktree_delete_job: Option<mpsc::Receiver<Result<(), String>>>,
     client: Option<AcpClient>,
     rx: Option<mpsc::Receiver<AcpEvent>>,
     pub conn: Conn,
@@ -310,6 +312,7 @@ impl Harness {
             start_thinking: None,
             pending_setup: Vec::new(),
             worktree_job: None,
+            worktree_delete_job: None,
             client: None,
             rx: None,
             conn: Conn::Off,
@@ -457,6 +460,7 @@ impl Harness {
     pub fn poll(&mut self) {
         self.watcher.poll();
         self.poll_worktree();
+        self.poll_worktree_delete();
         // Start watchdog (review M6): a child that lives but never answers
         // `initialize` produces no exit event, so `connection_lost` would
         // never run on its own. Killing it here feeds the normal reconnect
@@ -1163,7 +1167,7 @@ impl Harness {
     /// workspace (Handoff Ideenliste 6): `session/list` matches cwd
     /// exactly, so every worktree is its own workspace with its own
     /// sessions. The branch is `catwright/<worktree name>`.
-    pub fn create_worktree(&mut self) {
+    pub fn create_worktree(&mut self, start_ref: Option<String>) {
         // The checkout runs on a background thread (a big repository takes
         // a while, and the UI must not freeze); `poll` picks the result up.
         // A failed or timed-out checkout is cleaned up again, so no half
@@ -1186,7 +1190,7 @@ impl Harness {
             .unwrap_or_default();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(make_worktree(&project, &dir));
+            let _ = tx.send(make_worktree(&project, &dir, start_ref.as_deref()));
         });
         self.worktree_job = Some(rx);
         self.status = trf("Creating worktree “{name}” …", &[("name", &name)]);
@@ -1220,6 +1224,87 @@ impl Harness {
             Err(e) => {
                 self.status = trf(
                     "The worktree could not be created: {error}",
+                    &[("error", &e)],
+                );
+            }
+        }
+    }
+
+    /// Worktrees of `project` without the main worktree (the sidebar list).
+    pub fn worktrees_of(&mut self, project: &Path) -> Vec<watch::WorktreeInfo> {
+        self.watcher
+            .worktrees(project)
+            .iter()
+            .filter(|w| !w.main && w.path != project)
+            .cloned()
+            .collect()
+    }
+
+    /// Uncommitted changes in a worktree (warns in the delete dialog).
+    pub fn worktree_dirty(path: &Path) -> bool {
+        watch::git_output(path, &["status", "--porcelain"])
+            .map(|o| !o.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Delete a worktree in the background; its branch only when
+    /// `delete_branch` is set (the dialog's default-off option). The main
+    /// worktree is never passed here (the sidebar does not list it).
+    pub fn delete_worktree(
+        &mut self,
+        project: &Path,
+        path: &Path,
+        branch: &str,
+        delete_branch: bool,
+    ) {
+        if self.worktree_delete_job.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let project = project.to_path_buf();
+        let path = path.to_path_buf();
+        let branch = branch.to_string();
+        std::thread::spawn(move || {
+            let res = watch::run_git(
+                &project,
+                &["worktree", "remove", &path.to_string_lossy()],
+                WORKTREE_TIMEOUT,
+            );
+            let res = match res {
+                Ok(_) => {
+                    if delete_branch && !branch.is_empty() {
+                        let _ =
+                            watch::run_git(&project, &["branch", "-D", &branch], WORKTREE_TIMEOUT);
+                    }
+                    let _ = watch::run_git(&project, &["worktree", "prune"], WORKTREE_TIMEOUT);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(res);
+        });
+        self.worktree_delete_job = Some(rx);
+        self.status = tr("Deleting worktree …").to_string();
+    }
+
+    /// Take the result of a finished worktree deletion, if any.
+    fn poll_worktree_delete(&mut self) {
+        let Some(rx) = &self.worktree_delete_job else {
+            return;
+        };
+        let done = match rx.try_recv() {
+            Ok(done) => done,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err("git".to_string()),
+        };
+        self.worktree_delete_job = None;
+        match done {
+            Ok(()) => {
+                self.status = tr("Worktree deleted.").to_string();
+            }
+            Err(e) => {
+                self.status = trf(
+                    "The worktree could not be deleted: {error}",
                     &[("error", &e)],
                 );
             }
@@ -3091,7 +3176,7 @@ const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
 /// `git worktree add -b catwright/<name> <dir> HEAD` for `project`; on
 /// failure the half-made worktree and its branch are removed again. Runs
 /// on a background thread (see `Harness::create_worktree`).
-fn make_worktree(project: &Path, dir: &Path) -> Result<PathBuf, String> {
+fn make_worktree(project: &Path, dir: &Path, start_ref: Option<&str>) -> Result<PathBuf, String> {
     use crate::harness::watch::run_git;
     let name = dir
         .file_name()
@@ -3099,11 +3184,16 @@ fn make_worktree(project: &Path, dir: &Path) -> Result<PathBuf, String> {
         .unwrap_or_default();
     let branch = format!("catwright/{name}");
     let dir_str = dir.to_string_lossy().into_owned();
-    let added = run_git(
-        project,
-        &["worktree", "add", "-b", &branch, &dir_str, "HEAD"],
-        WORKTREE_TIMEOUT,
-    );
+    // with a start ref (branch, tag or commit) the worktree checks out that
+    // ref; without one it gets its own `catwright/<name>` branch at HEAD
+    let added = match start_ref.filter(|r| !r.trim().is_empty()) {
+        Some(r) => run_git(project, &["worktree", "add", &dir_str, r], WORKTREE_TIMEOUT),
+        None => run_git(
+            project,
+            &["worktree", "add", "-b", &branch, &dir_str, "HEAD"],
+            WORKTREE_TIMEOUT,
+        ),
+    };
     match added {
         Ok(_) => Ok(dir.to_path_buf()),
         Err(e) => {

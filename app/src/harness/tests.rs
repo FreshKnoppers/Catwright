@@ -4030,7 +4030,7 @@ fn create_worktree_adds_the_copy_as_its_own_workspace() {
     .is_some());
     let (mut h, _agent) = setup(vec![], "ask");
     h.current_project = Some(repo.clone());
-    h.create_worktree();
+    h.create_worktree(None);
     assert!(h.worktree_running(), "the checkout runs in the background");
     for _ in 0..1500 {
         h.poll();
@@ -5105,7 +5105,7 @@ fn failed_worktree_is_cleaned_up_and_explained() {
     // a repository without any commit: there is no HEAD to check out
     assert!(crate::harness::watch::git_output(&repo, &["init", "-q"]).is_some());
     let target = base.join("wt").join("repo-1");
-    let err = make_worktree(&repo, &target).expect_err("no HEAD, no worktree");
+    let err = make_worktree(&repo, &target, None).expect_err("no HEAD, no worktree");
     assert!(!err.is_empty());
     let branches = crate::harness::watch::git_output(&repo, &["branch", "--list"]).unwrap();
     assert!(!branches.contains("catwright/"), "{branches}");
@@ -5413,6 +5413,49 @@ fn feature_screenshots() {
     });
     shot(&mut h, "11-palette-files");
     h.ui.palette = None;
+    // a worktree of the project shows in the sidebar; the delete dialog warns
+    {
+        let wt = std::env::temp_dir().join(format!("cw-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        crate::harness::watch::git_output(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "catwright/demo",
+                &wt.to_string_lossy(),
+                "HEAD",
+            ],
+        );
+        h.watcher.invalidate_git(&dir); // re-read now, not after the 6 s interval
+        let mut tries = 0;
+        while h.worktrees_of(&dir).is_empty() && tries < 100 {
+            h.watcher.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            tries += 1;
+        }
+        shot(&mut h, "13-worktrees");
+        let w = h
+            .worktrees_of(&dir)
+            .into_iter()
+            .next()
+            .expect("one worktree");
+        std::fs::write(w.path.join("dirty.txt"), "x").unwrap();
+        h.ui.worktree_delete = Some(crate::harness::state::WorktreeDelete {
+            project: dir.clone(),
+            path: w.path.clone(),
+            branch: w.branch.clone(),
+            dirty: Harness::worktree_dirty(&w.path),
+            delete_branch: false,
+        });
+        shot(&mut h, "14-worktree-delete");
+        h.ui.worktree_delete = None;
+        crate::harness::watch::git_output(
+            &dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -5672,7 +5715,7 @@ fn tool_call_arrival_timestamps_drive_the_round_duration() {
     assert!(tc.first_seen > 0, "first arrival stamped");
     assert!(tc.last_update >= tc.first_seen);
     // still running: duration measures up to now
-    assert!(tc.duration_secs(now()) >= 0);
+    assert_eq!(tc.duration_secs(now()), now() - tc.first_seen);
     let upd = serde_json::from_value(json!({
         "sessionUpdate": "tool_call_update",
         "toolCallId": "t1",
@@ -5684,4 +5727,112 @@ fn tool_call_arrival_timestamps_drive_the_round_duration() {
     assert_eq!(tc.status, crate::acp::protocol::ToolStatus::Completed);
     assert!(tc.last_update >= tc.first_seen, "last update stamped");
     assert!(tc.duration_secs(now() + 60) >= tc.duration_secs(now()));
+}
+
+#[test]
+fn worktree_porcelain_parsing_marks_the_main_worktree() {
+    let out = "worktree /home/u/proj\nHEAD abc123\nbranch refs/heads/main\n\nworktree /cfg/worktrees/proj-1\nHEAD def456\nbranch refs/heads/catwright/proj-1\n";
+    let wts = crate::harness::watch::parse_worktrees(out);
+    assert_eq!(wts.len(), 2);
+    assert!(wts[0].main, "the first entry is the main worktree");
+    assert!(!wts[1].main);
+    assert_eq!(wts[0].branch, "main");
+    assert_eq!(wts[1].branch, "catwright/proj-1");
+    assert_eq!(
+        wts[1].path,
+        std::path::PathBuf::from("/cfg/worktrees/proj-1")
+    );
+}
+
+#[test]
+fn delete_worktree_removes_it_and_the_branch_only_when_asked() {
+    use crate::harness::watch::run_git;
+    let base = std::env::temp_dir().join(format!("cw-wtdel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(
+        &repo,
+        &["init", "-q", "-b", "main"],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    std::fs::write(repo.join("f.txt"), "x").unwrap();
+    run_git(&repo, &["add", "."], Duration::from_secs(30)).unwrap();
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "c1",
+        ],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let wt = base.join("wt1");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt-branch",
+            &wt.to_string_lossy(),
+            "HEAD",
+        ],
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    assert!(wt.exists());
+
+    let (mut h, _agent) = setup(vec![repo.clone()], "ask");
+    // without the branch option: worktree gone, branch stays
+    h.delete_worktree(&repo, &wt, "wt-branch", false);
+    let mut tries = 0;
+    while (wt.exists() || !h.status.contains("Worktree deleted.")) && tries < 200 {
+        h.poll();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        tries += 1;
+    }
+    assert!(!wt.exists(), "worktree removed");
+    let branches = run_git(&repo, &["branch", "--list"], Duration::from_secs(30)).unwrap();
+    assert!(
+        branches.contains("wt-branch"),
+        "branch kept by default: {branches}"
+    );
+
+    // with the option: branch deleted too
+    let wt2 = base.join("wt2");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt-branch2",
+            &wt2.to_string_lossy(),
+            "HEAD",
+        ],
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    h.delete_worktree(&repo, &wt2, "wt-branch2", true);
+    let mut tries = 0;
+    while (wt2.exists() || !h.status.contains("Worktree deleted.")) && tries < 200 {
+        h.poll();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        tries += 1;
+    }
+    assert!(!wt2.exists());
+    let branches = run_git(&repo, &["branch", "--list"], Duration::from_secs(30)).unwrap();
+    assert!(
+        !branches.contains("wt-branch2"),
+        "branch deleted on request: {branches}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
 }

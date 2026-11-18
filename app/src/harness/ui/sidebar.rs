@@ -29,6 +29,11 @@ enum Op {
     Unarchive(String),
     Remove(PathBuf),
     AddProject,
+    DeleteWorktree {
+        project: PathBuf,
+        path: PathBuf,
+        branch: String,
+    },
 }
 
 pub(super) fn show(h: &mut Harness, ctx: &egui::Context, action: &mut HarnessAction) {
@@ -211,6 +216,43 @@ fn workspace_tree(h: &mut Harness, ui: &mut egui::Ui, p: &Path, ops: &mut Vec<Op
         };
         if more_row(ui, &label) {
             ops.push(Op::ToggleAll(p.to_path_buf()));
+        }
+    }
+    // the project's other worktrees (never the main worktree)
+    let wts = h.worktrees_of(p);
+    if !wts.is_empty() {
+        ui.add_space(2.0);
+        ui.add_space(2.0);
+        ui.label(theme::mono_label(tr("Worktrees")));
+        for w in &wts {
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                let name = w
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| w.path.to_string_lossy().into_owned());
+                let label = if w.branch.is_empty() {
+                    name
+                } else {
+                    format!("{name} ({})", w.branch)
+                };
+                let g = line_galley(ui, &label, mono(11.0), theme::DIM, 170.0);
+                let (rect, _) = ui.allocate_exact_size(vec2(g.size().x, 20.0), Sense::hover());
+                paint_line(ui, rect.left(), rect.center().y, g);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(IconButton::new(Icon::Trash, tr("Delete worktree")).side(20.0))
+                        .clicked()
+                    {
+                        ops.push(Op::DeleteWorktree {
+                            project: p.to_path_buf(),
+                            path: w.path.clone(),
+                            branch: w.branch.clone(),
+                        });
+                    }
+                });
+            });
         }
     }
     // archived sessions of this workspace, folded behind their own row
@@ -648,6 +690,20 @@ fn apply_ops(h: &mut Harness, ops: Vec<Op>) {
             Op::Archive(session_id) => h.archive_session(&session_id),
             Op::Unarchive(session_id) => h.unarchive_session(&session_id),
             Op::Remove(p) => h.remove_confirm = Some(p),
+            Op::DeleteWorktree {
+                project,
+                path,
+                branch,
+            } => {
+                let dirty = Harness::worktree_dirty(&path);
+                h.ui.worktree_delete = Some(crate::harness::state::WorktreeDelete {
+                    project,
+                    path,
+                    branch,
+                    dirty,
+                    delete_branch: false,
+                });
+            }
             Op::AddProject => {
                 h.folder_picker = Some(dialogs::FolderPicker::new(picker_start(h)));
             }
