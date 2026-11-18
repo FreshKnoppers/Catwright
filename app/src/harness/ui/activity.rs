@@ -111,6 +111,37 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 let (bar, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), Sense::hover());
                 ui.painter().rect_filled(bar, 0.0, accent);
                 ui.add_space(7.0);
+                // left side: workspace (mono, uppercased) and title, bounded
+                // so the right side (age + Open) always keeps its space
+                let left_w = (ui.available_width() - 170.0).max(40.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_w, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if !e.cwd.as_os_str().is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(h.workspace_name(&e.cwd).to_uppercase())
+                                        .monospace()
+                                        .size(10.5)
+                                        .color(theme::DIM),
+                                )
+                                .truncate(),
+                            );
+                            ui.add_space(6.0);
+                        }
+                        let title = if e.title.is_empty() {
+                            tr("Session").to_string()
+                        } else {
+                            e.title.clone()
+                        };
+                        ui.add(
+                            egui::Label::new(RichText::new(title).size(13.0).color(theme::TEXT))
+                                .truncate(),
+                        );
+                    },
+                );
+                // right side: age and the Open action
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !e.sid.is_empty()
                         && widgets::button(ui, tr("Open"), ButtonKind::Secondary).clicked()
@@ -127,28 +158,6 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                     }
                     let age = extras::human_duration((extras::now_epoch() - e.at).max(0) as u64);
                     ui.label(RichText::new(age).monospace().size(10.5).color(theme::DIM));
-                    ui.add_space(8.0);
-                    let title = if e.title.is_empty() {
-                        tr("Session").to_string()
-                    } else {
-                        e.title.clone()
-                    };
-                    ui.add(
-                        egui::Label::new(RichText::new(title).size(13.0).color(theme::TEXT))
-                            .truncate(),
-                    );
-                    if !e.cwd.as_os_str().is_empty() {
-                        ui.add_space(6.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(h.workspace_name(&e.cwd).to_uppercase())
-                                    .monospace()
-                                    .size(10.5)
-                                    .color(theme::DIM),
-                            )
-                            .truncate(),
-                        );
-                    }
                 });
             });
             if let Some((cwd, sid)) = open {
