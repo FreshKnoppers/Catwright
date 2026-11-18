@@ -1637,3 +1637,15 @@ msgstr "Alle als gelesen markieren"
 
 msgid "FAILED"
 msgstr "FEHLGESCHLAGEN"
+
+msgid "Desktop notifications"
+msgstr "Desktop-Benachrichtigungen"
+
+msgid "When a turn finishes or Vibe needs an approval — but only while the window is not focused. Uses notify-send when it is installed."
+msgstr "Wenn eine Runde fertig ist oder Vibe eine Freigabe braucht — aber nur solange das Fenster nicht fokussiert ist. Nutzt notify-send, falls installiert."
+
+msgid "Vibe is done in {project}"
+msgstr "Vibe ist fertig in {project}"
+
+msgid "Vibe needs your approval in {project}"
+msgstr "Vibe braucht deine Freigabe in {project}"

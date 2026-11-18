@@ -172,6 +172,14 @@ pub struct Harness {
     /// the session on screen when `vibe-acp` ended, or one the user clicked
     /// while it restarted (the latest of these wins).
     open_on_ready: Option<(PathBuf, String)>,
+    /// Mirror of Settings::notify_turn_events, refreshed by the app shell
+    /// every frame.
+    pub notify_events: bool,
+    /// Whether the window has focus (refreshed by the app shell every
+    /// frame). Notifications only fire while it does not.
+    pub window_focused: bool,
+    /// Notification bodies waiting to be sent (drained by the app shell).
+    pending_notify: Vec<String>,
     /// CLI `--activity`: bring the activity feed back after the
     /// `--session` of the same start opens (open_session resets the view).
     pub(crate) activity_on_ready: bool,
@@ -321,6 +329,9 @@ impl Harness {
             remove_confirm: None,
             open_on_ready: None,
             activity_on_ready: false,
+            notify_events: false,
+            window_focused: true,
+            pending_notify: Vec::new(),
             prompt_on_ready: None,
             artifacts_open: false,
             artifact_selected: None,
@@ -826,6 +837,7 @@ impl Harness {
                     .to_string();
                 }
                 self.push_activity(ActivityKind::Waiting, &sid, text, Some(request_id));
+                self.maybe_notify(&sid, false);
             }
             AcpEvent::PromptFinished { session_id, result } => {
                 // the turn is over: no text to restore for it anymore
@@ -843,6 +855,7 @@ impl Harness {
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| tr("Turn finished").to_string());
                     self.push_activity(ActivityKind::Finished, &session_id, text, None);
+                    self.maybe_notify(&session_id, true);
                 }
                 let mut cwd = None;
                 if let Some(v) = self.sessions.get_mut(&session_id) {
@@ -1799,6 +1812,40 @@ impl Harness {
     }
 
     /// Append one entry to the activity feed (bounded to the newest 100).
+    /// Queue a desktop notification for a finished turn (`done`) or a
+    /// waiting approval, but only when the setting is on and the window has
+    /// no focus. The body names the project only — never the session title,
+    /// the prompt or the answer.
+    fn maybe_notify(&mut self, sid: &str, done: bool) {
+        if !self.notify_events || self.window_focused {
+            return;
+        }
+        let cwd = self.sessions.get(sid).map(|v| v.cwd.clone()).or_else(|| {
+            self.listed
+                .values()
+                .flatten()
+                .find(|s| s.session_id == sid)
+                .map(|s| PathBuf::from(&s.cwd))
+        });
+        let Some(cwd) = cwd else { return };
+        let project = project_name(&cwd);
+        let body = if done {
+            trf("Vibe is done in {project}", &[("project", &project)])
+        } else {
+            trf(
+                "Vibe needs your approval in {project}",
+                &[("project", &project)],
+            )
+        };
+        self.pending_notify.push(body);
+    }
+
+    /// Notification bodies queued since the last call (the app shell sends
+    /// them via notify-send).
+    pub fn take_pending_notifications(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_notify)
+    }
+
     pub fn push_activity(
         &mut self,
         kind: ActivityKind,

@@ -226,7 +226,14 @@ impl App {
     /// (`softrender`, used by `--screenshot --headless`).
     pub(crate) fn frame(&mut self, ctx: &egui::Context) {
         self.harness.ensure_started(ctx);
+        self.harness.window_focused = ctx.input(|i| i.focused);
+        self.harness.notify_events = self.settings.notify_turn_events;
         self.harness.poll();
+        // desktop notifications (opt-in, only while the window has no
+        // focus); the bodies name the project only
+        for body in self.harness.take_pending_notifications() {
+            notify_send(&body);
+        }
         self.harness.ui.settings_open = self.settings_open;
         match crate::harness::ui::show(&mut self.harness, ctx) {
             HarnessAction::None => {}
@@ -246,6 +253,37 @@ impl App {
         // everything, also while the settings modal is open
         crate::harness::ui::show_dialogs(&mut self.harness, ctx);
     }
+}
+
+/// Send one desktop notification via `notify-send`, when it is installed;
+/// when it is not, do nothing at all. The child is reaped on its own thread
+/// so it never blocks the UI or leaves a zombie (review N11).
+fn notify_send(body: &str) {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let ok = *AVAILABLE.get_or_init(|| {
+        std::process::Command::new("notify-send")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false)
+    });
+    if !ok {
+        return;
+    }
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("notify-send")
+            .arg("Catwright")
+            .arg(&body)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut c| c.wait());
+    });
 }
 
 impl eframe::App for App {

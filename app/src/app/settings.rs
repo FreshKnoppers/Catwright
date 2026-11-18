@@ -332,6 +332,18 @@ impl App {
                 }
             },
         );
+        setting_row(
+            ui,
+            tr("Desktop notifications"),
+            tr("When a turn finishes or Vibe needs an approval — but only while the window is not focused. Uses notify-send when it is installed."),
+            |ui| {
+                let on = self.settings.notify_turn_events;
+                if widgets::toggle(ui, on, "").clicked() {
+                    self.settings.notify_turn_events = !on;
+                    self.harness.notify_events = !on;
+                }
+            },
+        );
         section(ui, tr("Config folder"));
         ui.horizontal(|ui| {
             if let Some(dir) = store::config_dir() {

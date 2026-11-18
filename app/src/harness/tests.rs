@@ -5514,3 +5514,62 @@ fn clear_loops_sends_loops_clear_and_refreshes_the_list() {
     let msg = agent.read_msg();
     assert_eq!(msg["method"], json!("_loops/list"));
 }
+
+#[test]
+fn desktop_notifications_queue_only_when_unfocused_and_opted_in() {
+    let dir = std::env::temp_dir().join(format!("cw-notify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    let done: proto::PromptResult =
+        serde_json::from_value(json!({"stopReason": "end_turn"})).unwrap();
+    let mut finish = |h: &mut Harness| {
+        h.handle_event(AcpEvent::PromptFinished {
+            session_id: "s1".to_string(),
+            result: done.clone(),
+        });
+        agent.read_msg(); // the list refresh after the turn
+    };
+
+    // opted in, window unfocused: a finished turn queues a notification that
+    // names the project only (never title, prompt or answer)
+    h.notify_events = true;
+    h.window_focused = false;
+    finish(&mut h);
+    let notes = h.take_pending_notifications();
+    assert_eq!(notes.len(), 1, "one notification per finished turn");
+    assert!(
+        notes[0].contains("Vibe is done in"),
+        "generic text: {}",
+        notes[0]
+    );
+    assert!(
+        notes[0].contains(&project_name(&dir)),
+        "names the project: {}",
+        notes[0]
+    );
+
+    // window focused: nothing is queued
+    h.window_focused = true;
+    finish(&mut h);
+    assert!(h.take_pending_notifications().is_empty());
+
+    // opted out: nothing is queued even when unfocused
+    h.notify_events = false;
+    h.window_focused = false;
+    finish(&mut h);
+    assert!(h.take_pending_notifications().is_empty());
+
+    // a waiting approval queues the approval text
+    h.notify_events = true;
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    let notes = h.take_pending_notifications();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("approval"), "approval text: {}", notes[0]);
+    assert!(notes[0].contains(&project_name(&dir)));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
