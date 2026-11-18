@@ -1427,7 +1427,14 @@ fn comment_section(
             trf("{n} comments on this file", &[("n", &n.to_string())])
         };
         ui.label(RichText::new(label).color(theme::DIM).size(12.0));
-        if widgets::button(ui, tr("Send to Vibe"), ButtonKind::Primary).clicked() {
+        // while the editor is open the primary action is the editor's own
+        // send; this one stays Secondary so a card never shows two primaries
+        let kind = if comments.edit.is_some() {
+            ButtonKind::Secondary
+        } else {
+            ButtonKind::Primary
+        };
+        if widgets::button(ui, tr("Send to Vibe"), kind).clicked() {
             ops.push(MessageOp::SendComments {
                 key: key.to_string(),
                 path: path.to_string(),
