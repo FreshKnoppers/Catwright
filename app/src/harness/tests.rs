@@ -4950,6 +4950,7 @@ fn a_loaded_session_asks_for_its_review_state_again() {
                 .to_string(),
         );
     }
+
     assert!(methods.contains(&"_loops/list".to_string()));
     assert!(methods.contains(&"_review/state".to_string()));
     h.handle_event(AcpEvent::ExtResult {
@@ -5284,6 +5285,7 @@ fn feature_screenshots() {
     let shot = |h: &mut Harness, name: &str| {
         let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
             let _ = crate::harness::ui::show(h, ctx);
+            crate::harness::ui::show_dialogs(h, ctx);
         });
         // the frame is not blank
         let bg = crate::theme::BG;
@@ -5366,6 +5368,35 @@ fn feature_screenshots() {
                 .unwrap();
         }
     }
+    // routines card with two loops and its "Delete all" button, then the
+    // confirmation dialog for _loops/clear
+    h.loops.insert(
+        "s1".to_string(),
+        vec![
+            crate::harness::extras::LoopInfo {
+                id: "l1".to_string(),
+                prompt: "Daily summary\nSummarise the day.".to_string(),
+                interval_seconds: Some(86400),
+                cron: None,
+                next_fire_at: crate::harness::extras::now_epoch() as f64 + 3600.0,
+            },
+            crate::harness::extras::LoopInfo {
+                id: "l2".to_string(),
+                prompt: "Weekly report\nReport on Monday.".to_string(),
+                interval_seconds: None,
+                cron: Some("0 9 * * 1".to_string()),
+                next_fire_at: crate::harness::extras::now_epoch() as f64 + 90000.0,
+            },
+        ],
+    );
+    h.ui.panel_sections.insert("routines", true);
+    shot(&mut h, "09-routines");
+    h.ui.confirm = Some(crate::harness::state::Confirm::ClearRoutines {
+        session_id: "s1".to_string(),
+        count: 2,
+    });
+    shot(&mut h, "10-confirm-clear-routines");
+    h.ui.confirm = None;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -5462,5 +5493,24 @@ fn compact_round_keeps_the_changed_file_card() {
         texts.iter().any(|t| t == "analysis.py"),
         "the changed-file card stays:\n{texts:#?}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clear_loops_sends_loops_clear_and_refreshes_the_list() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    h.clear_loops("s1");
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], json!("_loops/clear"));
+    assert_eq!(msg["params"]["sessionId"], json!("s1"));
+    // the answer refreshes the list
+    h.handle_event(AcpEvent::ExtResult {
+        kind: ExtKind::LoopsClear {
+            session_id: "s1".to_string(),
+        },
+        result: json!({}),
+    });
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], json!("_loops/list"));
 }

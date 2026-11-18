@@ -642,6 +642,15 @@ msgstr "Wiederkehrende Aufträge in dieser Sitzung. Sie laufen nur, solange sie 
 msgid "Delete routine"
 msgstr "Routine löschen"
 
+msgid "Delete all routines"
+msgstr "Alle Routinen löschen"
+
+msgid "Delete all {count} routines of this session? They will not run again."
+msgstr "Alle {count} Routinen dieser Sitzung löschen? Sie laufen nicht mehr."
+
+msgid "Delete all"
+msgstr "Alle löschen"
+
 msgid "Every"
 msgstr "Alle"
 

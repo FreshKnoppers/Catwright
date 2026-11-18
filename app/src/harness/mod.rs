@@ -2747,6 +2747,13 @@ impl Harness {
         });
     }
 
+    /// Delete every routine of the session (`_loops/clear`).
+    pub fn clear_loops(&mut self, session_id: &str) {
+        self.send_ext(ExtKind::LoopsClear {
+            session_id: session_id.to_string(),
+        });
+    }
+
     /// Mark changes as reviewed (`approve`) or undo them in the working
     /// tree. `target` is Vibe's review target, e.g. `{"kind":"all"}`.
     pub fn review_action(&mut self, session_id: &str, approve: bool, target: Value) {
@@ -2926,7 +2933,9 @@ impl Harness {
             ExtKind::LoopsList { session_id } => {
                 self.loops.insert(session_id, extras::parse_loops(&result));
             }
-            ExtKind::LoopsCreate { session_id, .. } | ExtKind::LoopsDelete { session_id, .. } => {
+            ExtKind::LoopsCreate { session_id, .. }
+            | ExtKind::LoopsDelete { session_id, .. }
+            | ExtKind::LoopsClear { session_id } => {
                 self.send_ext(ExtKind::LoopsList { session_id });
             }
             ExtKind::ReviewState { session_id } => {
@@ -2989,6 +2998,7 @@ impl Harness {
             ExtKind::TrustDecision { .. } => tr("Save trust"),
             ExtKind::LoopsCreate { .. } => tr("Create routine"),
             ExtKind::LoopsDelete { .. } => tr("Delete routine"),
+            ExtKind::LoopsClear { .. } => tr("Delete all routines"),
             ExtKind::ReviewMutate { .. } => tr("Apply changes"),
             ExtKind::ReviewTurnDiff {
                 session_id,

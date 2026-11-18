@@ -555,6 +555,14 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
                 .to_string(),
             tr("Automatic"),
         ),
+        Confirm::ClearRoutines { count, .. } => (
+            tr("Delete all routines"),
+            trf(
+                "Delete all {count} routines of this session? They will not run again.",
+                &[("count", count)],
+            ),
+            tr("Delete all"),
+        ),
     };
     match dialogs::confirm(ctx, "harness_confirm", title, &text, label, true) {
         Some(true) => {
@@ -573,6 +581,7 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
                     Some(sid) => h.set_mode(&sid, "auto-approve"),
                     None => h.start_mode = "auto-approve".to_string(),
                 },
+                Confirm::ClearRoutines { session_id, .. } => h.clear_loops(&session_id),
             }
         }
         Some(false) => h.ui.confirm = None,

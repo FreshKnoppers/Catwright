@@ -604,6 +604,7 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     };
     let mut delete: Option<String> = None;
     let mut create = false;
+    let mut clear_all = false;
     let form = &mut h.ui.loop_form;
     card(
         &mut h.ui.panel_sections,
@@ -676,8 +677,17 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         form.open = false;
                     }
                 });
-            } else if widgets::button(ui, tr("New routine"), ButtonKind::Secondary).clicked() {
-                form.open = true;
+            } else {
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("New routine"), ButtonKind::Secondary).clicked() {
+                        form.open = true;
+                    }
+                    if !loops.is_empty()
+                        && widgets::button(ui, tr("Delete all"), ButtonKind::Secondary).clicked()
+                    {
+                        clear_all = true;
+                    }
+                });
             }
         },
     );
@@ -693,6 +703,12 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     }
     if let Some(id) = delete {
         h.delete_loop(sid, &id);
+    }
+    if clear_all {
+        h.ui.confirm = Some(Confirm::ClearRoutines {
+            session_id: sid.to_string(),
+            count: loops.len(),
+        });
     }
 }
 

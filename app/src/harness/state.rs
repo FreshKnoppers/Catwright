@@ -103,6 +103,11 @@ pub enum Confirm {
     AutoApprove {
         session_id: Option<String>,
     },
+    /// `_loops/clear`: delete every routine of the session.
+    ClearRoutines {
+        session_id: String,
+        count: usize,
+    },
 }
 
 /// The command palette while it is open.
