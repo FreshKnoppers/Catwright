@@ -52,14 +52,17 @@ API keys.
 
 ## Seeing the UI (no display needed)
 
-UI work is not done until you have looked at it. Rendering needs no X11,
-Wayland, xvfb or GPU: egui's meshes are rasterized on the CPU
-(`softrender.rs`, matches the GL output except for hover effects).
+UI work is not done until you have looked at it. Render every UI change to
+a PNG and open it before committing. Rendering needs no X11, Wayland, xvfb
+or GPU: egui's meshes are rasterized on the CPU (`softrender.rs`, matches
+the GL output except for hover effects; image textures included).
 
-- Whole app: `catwright --screenshot out.png --headless [--frames N]`
-  together with the usual `--project`/`--session`/`--settings`/`--lang`;
+- Whole app: `catwright --screenshot out.png --headless [--frames N]
+  [--size WxH]` together with the usual `--project`/`--session`/
+  `--settings`/`--lang`; it waits for the agent like the window does.
   `tools/screenshots/render.sh [out-dir]` does this against demo sessions.
 - One view in a test: `crate::softrender::render_ui([1360, 860], 3, |ctx| {
   let _ = crate::harness::ui::show(&mut h, ctx); })` returns an
-  `image::RgbaImage`; save it to a temp dir and open the PNG to check the
-  look. Do not commit such PNGs from tests.
+  `image::RgbaImage`; `img.save(path)` writes the PNG.
+  `harness::tests::feature_screenshots` renders the feature states to PNGs
+  when `CATWRIGHT_SHOT_DIR` is set. Do not commit such PNGs from tests.

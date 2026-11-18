@@ -9,7 +9,7 @@ use crate::acp::session::{
     diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
 };
 use crate::diff::{self, LineKind, Segment};
-use crate::harness::state::{TurnDiffView, TurnDiffs};
+use crate::harness::state::{CommentEdit, DiffComment, TurnDiffView, TurnDiffs};
 use crate::harness::{extras, stop_reason_note};
 use crate::i18n::{tr, trf};
 use crate::icons;
@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Actions from message rows, applied after the transcript is drawn.
-enum MessageOp {
+pub(super) enum MessageOp {
     Rewind(String),
     Fork(String),
     /// Vibe's `/retry` for the finished turn.
@@ -31,6 +31,16 @@ enum MessageOp {
     /// Load one file's diff for the turn (`_review/turnDiff`).
     TurnDiff {
         turn_id: String,
+        path: String,
+    },
+    /// Start writing a comment on one diff line.
+    CommentAt {
+        key: String,
+        line: usize,
+    },
+    /// Turn all comments of one diff into a composer draft.
+    SendComments {
+        key: String,
         path: String,
     },
 }
@@ -85,7 +95,23 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             MessageOp::Fork(message_id) => h.fork_active_at(Some(message_id)),
             MessageOp::TurnDiff { turn_id, path } => h.load_turn_diff(sid, &turn_id, &path),
             MessageOp::Retry => h.run_command("/retry"),
-            MessageOp::OpenFile(path) => h.open_artifact(sid, &path),
+            MessageOp::OpenFile(path) => h.open_preview(sid, &path),
+            MessageOp::CommentAt { key, line } => {
+                h.ui.comment_edit = Some(CommentEdit {
+                    key,
+                    line,
+                    text: String::new(),
+                });
+            }
+            MessageOp::SendComments { key, path } => {
+                let comments = h.ui.diff_comments.get(&key).cloned().unwrap_or_default();
+                if !comments.is_empty() {
+                    h.draft = comments_prompt(&path, &comments);
+                    h.ui.focus_composer = true;
+                    h.status =
+                        tr("Comments are in the input field — add to them and send.").to_string();
+                }
+            }
         }
     }
     // the pills of the NEXT frame jump to the positions this frame drew
@@ -106,7 +132,9 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     if to_end {
         pills.push((Icon::ArrowDown, tr("To the end"), NavJump::End));
     }
-    if pills.is_empty() {
+    // no navigation pills over a modal (settings, rename, …): they are
+    // Foreground like the dialog and would sit on top of it
+    if pills.is_empty() || super::modal_open(h) {
         return;
     }
     let r = output.inner_rect;
@@ -182,8 +210,10 @@ fn render_items(
         turn_started,
         retrying,
         last_turn_secs,
+        ui: h_ui,
         ..
     } = h;
+    let detail = h_ui.transcript_detail.clone();
     let review: &[extras::ReviewFile] = review.get(sid).map_or(&[], Vec::as_slice);
     let scopes: &[extras::ReviewScope] = review_scopes.get(sid).map_or(&[], Vec::as_slice);
     let diffs: &TurnDiffs = turn_diffs.get(sid).unwrap_or(TurnDiffs::empty());
@@ -194,6 +224,11 @@ fn render_items(
         return Vec::new();
     };
     let running = s.turn != TurnState::Idle;
+    // the detail level's auto-open defaults for a running turn
+    let auto_group = running && matches!(detail.as_str(), "detailed" | "verbose");
+    let auto_output = running && detail == "verbose";
+    // compact: the running round collapses to a single summary line
+    let compact = running && detail == "compact";
     // retention hint (audit N1): the oldest items left the view's memory
     // once the transcript outgrew its bound; Vibe keeps the real history
     if s.trimmed_front > 0 {
@@ -220,6 +255,10 @@ fn render_items(
             round_of.insert(id.as_str(), round);
         }
     }
+    let comments = &mut Comments {
+        map: &mut h_ui.diff_comments,
+        edit: &mut h_ui.comment_edit,
+    };
     let mut turn_ops: Vec<MessageOp> = Vec::new();
     let mut turn_changes = TurnChanges {
         cwd,
@@ -239,6 +278,40 @@ fn render_items(
         if round.shows_summary() && round_summary(ui, &s.items, round, expanded) {
             toggle_key(open_groups, key);
         }
+        // compact mode: the running round is one line — busy marker, tool
+        // count, current step — instead of the full open transcript
+        let is_running_round = running && std::ptr::eq(round, rounds.last().unwrap_or(round));
+        if compact && is_running_round {
+            let step = s
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Tool(id) => s.tool_calls.get(id),
+                    _ => None,
+                })
+                .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending))
+                .map(|c| c.title.clone())
+                .unwrap_or_default();
+            let (rect, _) =
+                ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+            widgets::paint_busy(ui, pos2(rect.left() + 5.0, rect.center().y - 1.0), 3.0);
+            let mut label = tr("Working").to_string();
+            if round.tool_calls > 0 {
+                label.push_str(&trf(" · {n} tool calls", &[("n", &round.tool_calls)]));
+            }
+            if !step.is_empty() {
+                label.push_str(&trf(" · {step}", &[("step", &step)]));
+            }
+            let g = line_galley(
+                ui,
+                &label,
+                widgets::font(13.5),
+                theme::MUTED,
+                rect.width() - 30.0,
+            );
+            paint_line(ui, rect.left() + 22.0, rect.center().y, g);
+            continue;
+        }
         let range = if round.collapsed && !expanded {
             round
                 .answer
@@ -253,7 +326,11 @@ fn render_items(
             cwd,
             plan: &s.plan,
             open_groups,
+            closed_groups: &mut h_ui.closed_groups,
+            auto_group,
+            auto_output,
             diff_open,
+            comments,
             ui_events,
             form_values,
             scripts,
@@ -286,14 +363,20 @@ fn render_items(
 
 /// What one `render_range` pass needs besides the session view. Bundled so
 /// the per-item helpers keep short argument lists.
-struct ItemCtx<'a> {
+struct ItemCtx<'a, 'c> {
     sid: &'a str,
     running: bool,
     compact_plan: bool,
     cwd: &'a Path,
     plan: &'a [PlanEntry],
     open_groups: &'a mut HashSet<String>,
+    closed_groups: &'a mut HashSet<String>,
+    /// Detail-level default: auto-open tool groups and thoughts while running.
+    auto_group: bool,
+    /// Detail-level default: auto-open tool outputs while running (verbose).
+    auto_output: bool,
     diff_open: &'a mut HashSet<String>,
+    comments: &'a mut Comments<'c>,
     ui_events: &'a mut Vec<UiEvent>,
     form_values: &'a mut HashMap<String, String>,
     scripts: &'a mut HashMap<String, crate::script::ScriptTool>,
@@ -302,9 +385,11 @@ struct ItemCtx<'a> {
 
 /// Draw `items[range]`, tool calls through their groups. Ranges start at a
 /// round start, so a tool group is never cut: `tool_groups` is computed over
-/// the whole transcript and every group lies inside one round.
+/// the whole transcript and every group lies inside one round. The second
+/// lifetime is the comments' inner borrow: `&mut` is invariant there, so a
+/// single lifetime would pin every field borrow to the whole loop.
 fn render_range(
-    ctx: &mut ItemCtx<'_>,
+    ctx: &mut ItemCtx<'_, '_>,
     ui: &mut egui::Ui,
     s: &SessionView,
     groups: &[std::ops::Range<usize>],
@@ -328,7 +413,11 @@ fn render_range(
                 ctx.running,
                 ctx.cwd,
                 ctx.open_groups,
+                ctx.closed_groups,
+                ctx.auto_group,
+                ctx.auto_output,
                 ctx.diff_open,
+                ctx.comments,
                 ctx.ops,
             );
             i = g.end;
@@ -366,6 +455,8 @@ fn render_range(
                     text,
                     streaming,
                     ctx.open_groups,
+                    ctx.closed_groups,
+                    ctx.auto_group,
                 );
             }
             Item::Plan => {
@@ -384,6 +475,54 @@ fn toggle_key(set: &mut HashSet<String>, key: String) {
     if !set.remove(&key) {
         set.insert(key);
     }
+}
+
+/// Effective open state of a collapsible row: an explicit open wins, then an
+/// explicit close, then the detail level's default for a running turn.
+pub(crate) fn effective_open(
+    open: &HashSet<String>,
+    closed: &HashSet<String>,
+    key: &str,
+    auto: bool,
+) -> bool {
+    open.contains(key) || (auto && !closed.contains(key))
+}
+
+/// Toggle a row that may be auto-open: closing records the key in `closed`
+/// so the auto default stops re-opening it, opening clears that record.
+pub(crate) fn toggle_effective(
+    open: &mut HashSet<String>,
+    closed: &mut HashSet<String>,
+    key: &str,
+    currently_open: bool,
+) {
+    if currently_open {
+        open.remove(key);
+        closed.insert(key.to_string());
+    } else {
+        closed.remove(key);
+        open.insert(key.to_string());
+    }
+}
+
+/// The composer draft built from a diff's comments: one line per comment
+/// with its new-side line number.
+pub(crate) fn comments_prompt(path: &str, comments: &[DiffComment]) -> String {
+    let mut out = trf(
+        "Please address these review comments on {path}:",
+        &[("path", &path)],
+    );
+    for c in comments {
+        out.push_str(&format!("\nL{}: {}", c.line, c.text));
+    }
+    out
+}
+
+/// Borrowed comment state of the transcript: the stored comments plus the
+/// comment being written.
+pub(super) struct Comments<'a> {
+    map: &'a mut HashMap<String, Vec<DiffComment>>,
+    edit: &'a mut Option<CommentEdit>,
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +768,7 @@ fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn thought_row(
     ui: &mut egui::Ui,
     sid: &str,
@@ -637,9 +777,11 @@ fn thought_row(
     text: &str,
     streaming: bool,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto: bool,
 ) {
     let key = thought_key(sid, message_id, index);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto);
     if collapsible_row(
         ui,
         Icon::Spark,
@@ -651,11 +793,7 @@ fn thought_row(
         open,
         theme::DIM,
     ) {
-        if open {
-            open_groups.remove(&key);
-        } else {
-            open_groups.insert(key);
-        }
+        toggle_effective(open_groups, closed_groups, &key, open);
     }
     if open {
         indented(ui, |ui| {
@@ -897,7 +1035,11 @@ fn tool_group(
     running: bool,
     cwd: &Path,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto_group: bool,
+    auto_output: bool,
     diff_open: &mut HashSet<String>,
+    comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
 ) {
     let active = calls
@@ -906,7 +1048,7 @@ fn tool_group(
     let busy = running && active.is_some();
     let failed = calls.iter().any(|c| c.status == ToolStatus::Failed);
     let key = tool_group_key(owner, start, calls);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto_group);
 
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
     if resp.hovered() {
@@ -949,31 +1091,38 @@ fn tool_group(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked();
     if clicked {
-        if open {
-            open_groups.remove(&key);
-        } else {
-            open_groups.insert(key.clone());
-        }
+        toggle_effective(open_groups, closed_groups, &key, open);
     }
     if open {
         indented(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             for call in calls {
-                tool_row(ui, owner, call, open_groups, ops);
+                tool_row(
+                    ui,
+                    owner,
+                    call,
+                    open_groups,
+                    closed_groups,
+                    auto_output,
+                    ops,
+                );
             }
         });
     }
     for file in group_diffs(calls) {
-        diff_chip(ui, owner, cwd, &file, diff_open);
+        diff_chip(ui, owner, cwd, &file, diff_open, comments, ops);
     }
     ui.add_space(8.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tool_row(
     ui: &mut egui::Ui,
     owner: &str,
     call: &ToolCall,
     open_groups: &mut HashSet<String>,
+    closed_groups: &mut HashSet<String>,
+    auto_output: bool,
     ops: &mut Vec<MessageOp>,
 ) {
     let output: Vec<&str> = call
@@ -985,7 +1134,7 @@ fn tool_row(
         })
         .collect();
     let key = format!("{owner}#tool#{}", call.tool_call_id);
-    let open = open_groups.contains(&key);
+    let open = effective_open(open_groups, closed_groups, &key, auto_output);
     let has_output = output.iter().any(|t| !t.trim().is_empty());
     let (rect, resp) = ui.allocate_exact_size(
         vec2(ui.available_width(), 24.0),
@@ -1039,7 +1188,7 @@ fn tool_row(
         if widgets::place(
             ui,
             btn,
-            IconButton::new(Icon::File, tr("Open file in Artifacts")).side(22.0),
+            IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
@@ -1051,11 +1200,7 @@ fn tool_row(
         chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), open);
         let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         if resp.clicked() {
-            if open {
-                open_groups.remove(&key);
-            } else {
-                open_groups.insert(key);
-            }
+            toggle_effective(open_groups, closed_groups, &key, open);
         }
     }
     if open && has_output {
@@ -1127,12 +1272,15 @@ fn output_box(ui: &mut egui::Ui, id: egui::Id, text: &str) {
 }
 
 /// One edited file: path, `+a −r`, and the diff when expanded.
+#[allow(clippy::too_many_arguments)]
 fn diff_chip(
     ui: &mut egui::Ui,
     owner: &str,
     cwd: &Path,
     file: &DiffFile,
     diff_open: &mut HashSet<String>,
+    comments: &mut Comments,
+    ops: &mut Vec<MessageOp>,
 ) {
     let key = format!("{owner}#{}::{}", file.call_id, file.path);
     let open = diff_open.contains(&key);
@@ -1158,7 +1306,22 @@ fn diff_chip(
             );
             let stats = stat_galleys(ui, file.added, file.removed);
             let stats_w = stats.iter().map(|g| g.size().x).sum::<f32>() + 8.0;
-            let mut right = rect.right() - 26.0;
+            // the preview button sits between the stats and the chevron
+            let prev_btn = Rect::from_min_size(
+                pos2(rect.right() - 48.0, rect.center().y - 11.0),
+                vec2(22.0, 22.0),
+            );
+            if widgets::place(
+                ui,
+                prev_btn,
+                IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+            {
+                ops.push(MessageOp::OpenFile(file.path.to_string()));
+            }
+            let mut right = rect.right() - 74.0;
             let g = line_galley(
                 ui,
                 &rel,
@@ -1189,11 +1352,52 @@ fn diff_chip(
                     if i > 0 {
                         ui.add_space(6.0);
                     }
-                    diff_body(ui, *old, new, 400);
+                    diff_body(
+                        ui,
+                        *old,
+                        new,
+                        400,
+                        Some((key.as_str(), &mut *comments, &mut *ops)),
+                    );
                 }
+                comment_section(ui, &key, file.path, comments, ops);
                 ui.add_space(4.0);
             }
         });
+}
+
+/// The review comments of one open diff: the editor for the line being
+/// commented, the stored comments, and the "Send to Vibe" button that turns
+/// them into a composer draft.
+fn comment_section(
+    ui: &mut egui::Ui,
+    key: &str,
+    path: &str,
+    comments: &mut Comments,
+    ops: &mut Vec<MessageOp>,
+) {
+    // the comments themselves hang under their lines (line_comments); here
+    // only the count and the one action that sends them all to the composer
+    let n = comments.map.get(key).map_or(0, Vec::len);
+    if n == 0 {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(26.0);
+        let label = if n == 1 {
+            tr("1 comment on this file").to_string()
+        } else {
+            trf("{n} comments on this file", &[("n", &n.to_string())])
+        };
+        ui.label(RichText::new(label).color(theme::DIM).size(12.0));
+        if widgets::button(ui, tr("Send to Vibe"), ButtonKind::Primary).clicked() {
+            ops.push(MessageOp::SendComments {
+                key: key.to_string(),
+                path: path.to_string(),
+            });
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1295,7 +1499,22 @@ impl TurnChanges<'_> {
         if resp.hovered() {
             ui.painter().rect_filled(rect, 3.0, theme::HOVER);
         }
-        let mut right = rect.right() - 22.0;
+        // the preview button sits left of the stats / chevron
+        let prev_btn = Rect::from_min_size(
+            pos2(rect.right() - 44.0, rect.center().y - 11.0),
+            vec2(22.0, 22.0),
+        );
+        if widgets::place(
+            ui,
+            prev_btn,
+            IconButton::new(Icon::Eye, tr("Open file preview")).side(22.0),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+        {
+            self.ops.push(MessageOp::OpenFile(path.to_string()));
+        }
+        let mut right = rect.right() - 70.0;
         if let Some(TurnDiffView::Loaded(d)) = view {
             let stat = diff_stat_cached(d.baseline.as_deref(), d.current.as_deref().unwrap_or(""));
             for g in stat_galleys(ui, stat.added, stat.removed).into_iter().rev() {
@@ -1359,6 +1578,7 @@ impl TurnChanges<'_> {
                         d.baseline.as_deref(),
                         d.current.as_deref().unwrap_or(""),
                         400,
+                        None,
                     );
                     ui.add_space(4.0);
                 });
@@ -1392,9 +1612,18 @@ fn stat_galleys(ui: &egui::Ui, added: usize, removed: usize) -> Vec<std::sync::A
 }
 
 /// The real line diff of one text pair, folded to the changed hunks.
-pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_rows: usize) {
+/// With `comment` (`key` + state + ops), every line gets a "+" gutter button
+/// that starts a review comment on its new-side line number.
+pub(super) fn diff_body(
+    ui: &mut egui::Ui,
+    old: Option<&str>,
+    new: &str,
+    max_rows: usize,
+    mut comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+) {
     let segments = diff::folded_cached(old, new);
     let total = segments.len();
+    let mut new_line = 0usize;
     for seg in segments.iter().take(max_rows) {
         match seg {
             Segment::Skipped(n) => {
@@ -1409,7 +1638,35 @@ pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_row
                 let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
                 paint_line(ui, rect.left() + 26.0, rect.center().y, g);
             }
-            Segment::Line(line) => diff_line(ui, line.kind, &line.text),
+            Segment::Line(line) => {
+                let line_no = match line.kind {
+                    LineKind::Removed => new_line.max(1),
+                    _ => {
+                        new_line += 1;
+                        new_line
+                    }
+                };
+                // the "+" gutter only on lines that exist on the new side
+                // (never on removed ones)
+                let commented = comment.as_ref().is_some_and(|(key, state, _)| {
+                    state
+                        .map
+                        .get(*key)
+                        .is_some_and(|l| l.iter().any(|c| c.line == line_no))
+                });
+                let gutter = if line.kind == LineKind::Removed {
+                    None
+                } else {
+                    comment
+                        .as_mut()
+                        .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
+                };
+                diff_line(ui, line.kind, &line.text, gutter, commented);
+                // comments and the editor hang directly under their line
+                if let Some((key, state, _ops)) = comment.as_mut() {
+                    line_comments(ui, key, line_no, state);
+                }
+            }
         }
     }
     if total > max_rows {
@@ -1425,11 +1682,24 @@ pub(super) fn diff_body(ui: &mut egui::Ui, old: Option<&str>, new: &str, max_row
     }
 }
 
-fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
+fn diff_line(
+    ui: &mut egui::Ui,
+    kind: LineKind,
+    text: &str,
+    gutter: Option<(&str, usize, &mut Vec<MessageOp>)>,
+    commented: bool,
+) {
     let (bg, sign, color) = match kind {
         LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
         LineKind::Removed => (Some(theme::DIFF_DEL_BG), "−", theme::TEXT),
         LineKind::Same => (None, " ", theme::DIM),
+    };
+    let commentable = gutter.is_some();
+    // with a comment gutter the sign and text shift right
+    let (sign_x, text_x, text_w) = if commentable {
+        (24.0, 38.0, 48.0)
+    } else {
+        (12.0, 26.0, 34.0)
     };
     let width = ui.available_width();
     let galley = ui.fonts(|f| {
@@ -1437,12 +1707,20 @@ fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
             text.to_string(),
             mono(12.0),
             color,
-            (width - 34.0).max(40.0),
+            (width - text_w).max(40.0),
         )
     });
     let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y.max(17.0)), Sense::hover());
     if let Some(bg) = bg {
         ui.painter().rect_filled(rect, 0.0, bg);
+    }
+    // a commented line gets a yellow edge on the left
+    if commented {
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+            0.0,
+            theme::YELLOW,
+        );
     }
     let sign_color = match kind {
         LineKind::Added => theme::GREEN,
@@ -1451,9 +1729,132 @@ fn diff_line(ui: &mut egui::Ui, kind: LineKind, text: &str) {
     };
     let g = line_galley(ui, sign, mono(12.0), sign_color, 12.0);
     ui.painter()
-        .galley(rect.left_top() + vec2(12.0, 0.0), g, sign_color);
+        .galley(rect.left_top() + vec2(sign_x, 0.0), g, sign_color);
     ui.painter()
-        .galley(rect.left_top() + vec2(26.0, 0.0), galley, color);
+        .galley(rect.left_top() + vec2(text_x, 0.0), galley, color);
+    if let Some((key, line, ops)) = gutter {
+        let btn = Rect::from_min_size(
+            rect.left_top() + vec2(2.0, 1.0),
+            vec2(18.0, rect.height() - 2.0),
+        );
+        let id = ui.make_persistent_id(("diff_comment", key, line));
+        let resp = ui.interact(btn, id, Sense::click());
+        // the "+" only shows on hover, but the button stays clickable
+        if resp.hovered() {
+            ui.painter().rect_filled(btn, 3.0, theme::HOVER);
+            let g = line_galley(ui, "+", mono(12.0), theme::TEXT, 18.0);
+            ui.painter()
+                .galley(btn.center() - g.size() / 2.0, g, theme::TEXT);
+        }
+        if resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
+            ops.push(MessageOp::CommentAt {
+                key: key.to_string(),
+                line,
+            });
+        }
+    }
+}
+
+/// The comments of one diff line, hanging directly under it, plus the editor
+/// when this line is being commented.
+fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Comments) {
+    // the editor for this line
+    let mut save = false;
+    let mut cancel = false;
+    if let Some(e) = comments.edit.as_ref() {
+        if e.key == key && e.line == line_no {
+            let text = comments.edit.as_mut().unwrap();
+            ui.add_space(2.0);
+            egui::Frame::none()
+                .fill(theme::RAISED)
+                .rounding(egui::Rounding::same(4.0))
+                .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(trf("Comment on line {n}", &[("n", &line_no.to_string())]))
+                            .color(theme::DIM)
+                            .size(12.0),
+                    );
+                    // the input field gets its own visible frame
+                    egui::Frame::none()
+                        .fill(theme::BG)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                        .rounding(egui::Rounding::same(2.0))
+                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut text.text)
+                                    .frame(false)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text(tr("Your comment …")),
+                            );
+                        });
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
+                            save = true;
+                        }
+                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            ui.add_space(2.0);
+        }
+    }
+    if save {
+        if let Some(e) = comments.edit.take() {
+            if !e.text.trim().is_empty() {
+                comments
+                    .map
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(DiffComment {
+                        line: e.line,
+                        text: e.text.trim().to_string(),
+                    });
+            }
+        }
+    }
+    if cancel {
+        *comments.edit = None;
+    }
+    let list: Vec<DiffComment> = comments
+        .map
+        .get(key)
+        .map(|l| l.iter().filter(|c| c.line == line_no).cloned().collect())
+        .unwrap_or_default();
+    for c in &list {
+        ui.horizontal(|ui| {
+            ui.add_space(26.0);
+            // yellow edge like the commented line above
+            let (rect, _) = ui.allocate_exact_size(vec2(3.0, 18.0), Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, theme::YELLOW);
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(trf(
+                    "L{line}: {text}",
+                    &[("line", &c.line.to_string()), ("text", &c.text)],
+                ))
+                .color(theme::TEXT)
+                .size(12.5),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
+                    .clicked()
+                {
+                    if let Some(v) = comments.map.get_mut(key) {
+                        v.retain(|x| x != c);
+                    }
+                }
+            });
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,6 +1950,54 @@ mod tests {
     /// index key would hand a stale fold state to whatever ends up
     /// there. N16: a tool output's scroll id is content-independent,
     /// so streamed output keeps its scroll position chunk by chunk.
+    #[test]
+    fn effective_open_prefers_explicit_over_auto() {
+        let mut open = HashSet::new();
+        let mut closed = HashSet::new();
+        // auto default opens the row
+        assert!(super::effective_open(&open, &closed, "k", true));
+        // no auto default: closed
+        assert!(!super::effective_open(&open, &closed, "k", false));
+        // an explicit close beats the auto default
+        closed.insert("k".to_string());
+        assert!(!super::effective_open(&open, &closed, "k", true));
+        // an explicit open beats an explicit close
+        open.insert("k".to_string());
+        assert!(super::effective_open(&open, &closed, "k", false));
+    }
+
+    #[test]
+    fn toggle_effective_records_the_override() {
+        let mut open = HashSet::new();
+        let mut closed = HashSet::new();
+        // close an auto-opened row: recorded in closed, gone from open
+        super::toggle_effective(&mut open, &mut closed, "k", true);
+        assert!(!super::effective_open(&open, &closed, "k", true));
+        // re-open: the close record is cleared again
+        super::toggle_effective(&mut open, &mut closed, "k", false);
+        assert!(super::effective_open(&open, &closed, "k", false));
+        assert!(closed.is_empty());
+    }
+
+    #[test]
+    fn comments_prompt_lists_every_comment_with_its_line() {
+        let comments = vec![
+            super::DiffComment {
+                line: 48,
+                text: "append ^ for outliers".to_string(),
+            },
+            super::DiffComment {
+                line: 72,
+                text: "take the CSV path from argv".to_string(),
+            },
+        ];
+        let prompt = super::comments_prompt("src/analysis.py", &comments);
+        assert!(prompt.contains("src/analysis.py"));
+        assert!(prompt.contains("L48: append ^ for outliers"));
+        assert!(prompt.contains("L72: take the CSV path from argv"));
+        assert_eq!(prompt.matches('\n').count(), 2);
+    }
+
     #[test]
     fn fold_and_scroll_keys_bind_to_identity_not_position() {
         let t1 = call("t1");

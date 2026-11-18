@@ -1517,3 +1517,108 @@ msgstr "… {count} ältere Transkript-Einträge werden nicht angezeigt"
 
 msgid "The config folder could not be used: {path}"
 msgstr "Der Konfigurationsordner konnte nicht verwendet werden: {path}"
+
+msgid "Transcript detail while Vibe works"
+msgstr "Transkript-Detailgrad während Vibe arbeitet"
+
+msgid "How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."
+msgstr "Wie offen Tool-Aufrufe und Gedanken während eines Laufs sind. Änderungen und Freigaben bleiben auf jeder Stufe sichtbar."
+
+msgid "Compact"
+msgstr "Kompakt"
+
+msgid "Standard"
+msgstr "Standard"
+
+msgid "Detailed"
+msgstr "Detailliert"
+
+msgid "Verbose"
+msgstr "Ausführlich"
+
+msgid "Open file preview"
+msgstr "Dateivorschau öffnen"
+
+msgid "Close preview"
+msgstr "Vorschau schließen"
+
+msgid "Comment"
+msgstr "Kommentar"
+
+msgid "Send to Vibe"
+msgstr "An Vibe senden"
+
+msgid "Delete comment"
+msgstr "Kommentar löschen"
+
+msgid "Your comment …"
+msgstr "Dein Kommentar …"
+
+msgid "Comment on line {n}"
+msgstr "Kommentar zu Zeile {n}"
+
+msgid "{n} comments on this file"
+msgstr "{n} Kommentare zu dieser Datei"
+
+msgid "Please address these review comments on {path}:"
+msgstr "Bitte arbeite diese Review-Kommentare in {path} ein:"
+
+msgid "Comments are in the input field — add to them and send."
+msgstr "Die Kommentare liegen im Eingabefeld — ergänze sie und sende ab."
+
+msgid "Activity"
+msgstr "Aktivität"
+
+msgid "Nothing yet — finished and waiting turns land here."
+msgstr "Noch nichts — beendete und wartende Läufe landen hier."
+
+msgid "Finished"
+msgstr "Fertig"
+
+msgid "Open"
+msgstr "Öffnen"
+
+msgid "Mark as unread"
+msgstr "Als ungelesen markieren"
+
+msgid "Archive"
+msgstr "Archivieren"
+
+msgid "Unarchive"
+msgstr "Wiederherstellen"
+
+msgid "Archived ({n})"
+msgstr "Archiviert ({n})"
+
+msgid "Vibe asks a question"
+msgstr "Vibe stellt eine Frage"
+
+msgid "Permission request"
+msgstr "Freigabe-Anfrage"
+
+msgid "Turn finished"
+msgstr "Lauf beendet"
+
+msgid "Session"
+msgstr "Sitzung"
+
+msgid "1 comment on this file"
+msgstr "1 Kommentar zu dieser Datei"
+
+msgid " · {step}"
+msgstr " · {step}"
+
+msgid "Code"
+msgstr "Code"
+
+msgid "Diff"
+msgstr "Diff"
+
+msgid "No changes against the last commit."
+msgstr "Keine Änderungen gegenüber dem letzten Commit."
+
+msgid "Mark all read"
+msgstr "Alle als gelesen markieren"
+
+msgid "FAILED"
+msgstr "FEHLGESCHLAGEN"

@@ -43,11 +43,12 @@ pub enum Icon {
     ArrowDown,
     Chat,
     Pin,
+    Clock,
 }
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 33] = [
+    pub const ALL: [Icon; 34] = [
         Icon::Plus,
         Icon::Search,
         Icon::Artifacts,
@@ -81,6 +82,7 @@ impl Icon {
         Icon::ArrowDown,
         Icon::Chat,
         Icon::Pin,
+        Icon::Clock,
     ];
 
     /// The bitmap: `#` = filled, `.` = empty.
@@ -136,6 +138,9 @@ impl Icon {
             ],
             Icon::Copy => [
                 "..#####", "..#...#", "###...#", "#.#...#", "#.#####", "#...#..", "#####..",
+            ],
+            Icon::Clock => [
+                "..###..", ".#...#.", ".#..#..", ".#.#...", ".#...#.", "..###..", ".......",
             ],
             Icon::Pin => [
                 "..###..", ".#####.", ".#####.", "...#...", "...#...", "...#...", "...#...",

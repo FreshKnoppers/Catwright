@@ -17,7 +17,7 @@
 //!   catwright --screenshot out.png [--frames N] render N frames (default 120), save PNG, exit
 //!   catwright --screenshot out.png --headless   same without a window or display server: the
 //!                                                frame is rasterized on the CPU (softrender.rs),
-//!                                                1360 × 860 points
+//!                                                1360 × 860 points, or `--size WxH`
 //!   catwright --lang en|de                      UI language for this run (not saved)
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
@@ -48,6 +48,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
+/// Window size at start, and the default `--headless` screenshot size.
+const HEADLESS_SIZE: (u32, u32) = (1360, 860);
+
 struct Cli {
     screenshot: Option<PathBuf>,
     settings: Option<String>,
@@ -59,6 +62,9 @@ struct Cli {
     frames: u32,
     /// `--headless`: render the screenshot without a window (softrender).
     headless: bool,
+    /// `--size WxH`: headless screenshot size in points (default: the
+    /// window's 1360x860).
+    size: (u32, u32),
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -71,6 +77,7 @@ fn parse_cli(args: &[String]) -> Cli {
         lang: None,
         frames: 120,
         headless: false,
+        size: HEADLESS_SIZE,
     };
     let mut i = 0;
     while i < args.len() {
@@ -101,6 +108,14 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--lang" if i + 1 < args.len() => {
                 cli.lang = i18n::Lang::from_code(&args[i + 1]);
+                i += 2;
+            }
+            "--size" if i + 1 < args.len() => {
+                cli.size = args[i + 1]
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    .filter(|(w, h)| *w > 0 && *h > 0)
+                    .unwrap_or(HEADLESS_SIZE);
                 i += 2;
             }
             // Code and Chat are one view now: the old `--mode code|chat`
@@ -196,7 +211,7 @@ fn main() -> eframe::Result<()> {
             std::process::exit(2);
         }
         let app = app::App::new(screenshot, settings, frames, open, prompt, lang);
-        match app.run_headless([1360, 860]) {
+        match app.run_headless([cli.size.0, cli.size.1]) {
             Ok(path) => {
                 eprintln!("screenshot saved to {}", path.display());
                 std::process::exit(0);

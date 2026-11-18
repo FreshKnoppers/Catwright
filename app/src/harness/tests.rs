@@ -1274,8 +1274,8 @@ fn failed_prompt_expires_waiting_approvals() {
     });
     assert_eq!(
         h.session_state("s1"),
-        SessionState::Idle,
-        "the dead request leaves no waiting behind"
+        SessionState::Failed,
+        "the dead request leaves no waiting behind — the session is marked failed"
     );
     assert!(h.sessions["s1"].permissions.is_empty());
     assert!(
@@ -4036,22 +4036,21 @@ fn create_worktree_adds_the_copy_as_its_own_workspace() {
 }
 
 #[test]
-fn open_artifact_resolves_relative_paths_against_the_session() {
+fn open_preview_resolves_relative_paths_against_the_session() {
     let dir = std::env::temp_dir();
     let (mut h, _agent) = setup(vec![dir.clone()], "ask");
     h.sessions
         .insert("s1".to_string(), SessionView::new("s1", dir.clone()));
-    h.open_artifact("s1", "src/main.rs");
+    h.open_preview("s1", "src/main.rs");
     assert_eq!(
-        h.artifact_selected.as_deref(),
+        h.ui.preview.as_ref().map(|p| p.path.as_str()),
         Some(dir.join("src/main.rs").to_string_lossy().as_ref()),
         "a relative path joins the session's workspace"
     );
-    assert!(h.artifacts_open);
     let abs = dir.join("abs.txt");
-    h.open_artifact("s1", abs.to_string_lossy().as_ref());
+    h.open_preview("s1", abs.to_string_lossy().as_ref());
     assert_eq!(
-        h.artifact_selected.as_deref(),
+        h.ui.preview.as_ref().map(|p| p.path.as_str()),
         Some(abs.to_string_lossy().as_ref())
     );
 }
@@ -4098,6 +4097,60 @@ fn sidebar_entries_sort_by_updated_at() {
     assert_eq!(rows[0].session_id, "new");
     assert_eq!(rows[1].session_id, "old");
     assert_eq!(rows[2].session_id, "none");
+}
+
+#[test]
+fn permission_request_lands_in_the_activity_feed_as_waiting() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    let ev = h.activity.last().expect("an activity entry");
+    assert_eq!(ev.kind, ActivityKind::Waiting);
+    assert_eq!(ev.sid, "s1");
+    assert_eq!(ev.request_id, Some(json!(0)), "the feed can answer it");
+}
+
+#[test]
+fn activity_feed_is_bounded_to_the_newest_100() {
+    let (mut h, _agent) = setup(vec![], "ask");
+    for i in 0..120 {
+        h.push_activity(ActivityKind::Finished, "s", format!("t{i}"), None);
+    }
+    assert_eq!(h.activity.len(), 100);
+    assert_eq!(h.activity[0].text, "t20", "the oldest entries are dropped");
+}
+
+#[test]
+fn archived_sessions_leave_the_list_and_get_their_own_group() {
+    let dir = std::env::temp_dir();
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    h.listed.insert(
+        dir.clone(),
+        vec![
+            serde_json::from_value(json!({"sessionId": "a", "cwd": dir.to_string_lossy()}))
+                .unwrap(),
+            serde_json::from_value(json!({"sessionId": "b", "cwd": dir.to_string_lossy()}))
+                .unwrap(),
+        ],
+    );
+    h.archive_session("a");
+    let rows = h.sidebar_rows(&dir, "New session");
+    let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+    assert_eq!(ids, ["b"], "archived sessions leave the list");
+    let archived = h.sidebar_rows_archived(&dir, "New session");
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].session_id, "a");
+    h.unarchive_session("a");
+    assert_eq!(h.sidebar_rows(&dir, "New session").len(), 2);
+    // archiving clears the unread mark
+    h.mark_unread("b");
+    assert_eq!(h.session_state("b"), SessionState::Unseen);
+    h.archive_session("b");
+    assert_eq!(h.session_state("b"), SessionState::Idle);
 }
 
 /// `session/fork`: the request carries the source id, the new view
@@ -5037,4 +5090,274 @@ fn failed_worktree_is_cleaned_up_and_explained() {
     assert!(!branches.contains("catwright/"), "{branches}");
     assert!(!target.exists());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Headless render of the new views: the frames run in a plain egui context
+/// (no window) and the painted text shapes are read back, so the test proves
+/// the new widgets are really laid out, not just that the code runs.
+fn render_texts(h: &mut Harness, frames: usize) -> Vec<String> {
+    let ctx = egui::Context::default();
+    // the app installs its fonts on creation (main.rs); a bare Context
+    // cannot draw the UI without them
+    crate::fonts::install_fallback_fonts(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(1440.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..frames {
+        let out = ctx.run(input.clone(), |ctx| {
+            let _ = crate::harness::ui::show(h, ctx);
+        });
+        for clipped in &out.shapes {
+            let galley = match &clipped.shape {
+                egui::Shape::Text(t) => &t.galley,
+                _ => continue,
+            };
+            texts.push(galley.text().to_string());
+        }
+    }
+    texts
+}
+
+#[test]
+fn new_views_render_headless_with_their_widgets() {
+    let dir = std::env::temp_dir().join(format!("od-render-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("analysis.py");
+    std::fs::write(&file, "a = 1\nb = 2\n").unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    h.handle_event(update(user_chunk("m1", "Add the stats table")));
+    let tool_call = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "completed",
+        "locations": [{"path": file.to_string_lossy()}],
+        "content": [{"type": "diff", "path": file.to_string_lossy(),
+                     "oldText": "a = 1\n", "newText": "a = 1\nb = 2\nc = 3\n"}]
+    }))
+    .unwrap();
+    h.handle_event(update(tool_call));
+    h.handle_event(update(agent_chunk("a1", "Table added.")));
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    h.active = Some("s1".to_string());
+
+    // 1) the activity feed: the waiting entry with its actions (section
+    // headers are mono labels, so they render uppercased)
+    h.ui.activity_open = true;
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(all.contains("Activity"), "nav row renders:\n{all}");
+    assert!(all.contains("WAITING FOR YOU"), "feed section:\n{all}");
+    assert!(all.contains("Permission request"), "feed entry:\n{all}");
+    assert!(all.contains("Open"), "feed action:\n{all}");
+
+    // 2) the session with an open diff, one comment and the preview pane
+    h.ui.activity_open = false;
+    // unfold the round so the tool group (and its diff chip) renders
+    let rounds = h.sessions["s1"].folded_rounds();
+    let rkey = crate::acp::session::round_key("s1", &rounds[0]);
+    h.open_groups.insert(rkey);
+    let key = format!("s1#t1::{}", file.to_string_lossy());
+    h.diff_open.insert(key.clone());
+    h.ui.diff_comments.insert(
+        key,
+        vec![crate::harness::state::DiffComment {
+            line: 3,
+            text: "mark the outlier".to_string(),
+        }],
+    );
+    h.ui.preview = Some(crate::harness::state::PreviewState {
+        path: file.to_string_lossy().into_owned(),
+        width: 380.0,
+        mode: crate::harness::state::PreviewMode::Code,
+    });
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(
+        all.contains("analysis.py"),
+        "diff chip and preview header:\n{all}"
+    );
+    assert!(all.contains("c = 3"), "the open diff body:\n{all}");
+    assert!(all.contains("Send to Vibe"), "comment action:\n{all}");
+    assert!(all.contains("L3: mark the outlier"), "comment row:\n{all}");
+    assert!(
+        all.contains("1 comment on this file"),
+        "comment count:\n{all}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Render the feature states to PNGs when CATWRIGHT_SHOT_DIR is set, so a
+/// change can be looked at before it is committed (AGENTS.md "Seeing the UI").
+#[test]
+fn feature_screenshots() {
+    let dir = std::env::temp_dir().join(format!("od-shots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("analysis.py");
+    std::fs::write(&file, "a = 1\nb = 2\n").unwrap();
+    // a real git repo, so the preview pane's Diff mode has something to show
+    crate::harness::watch::git_output(&dir, &["init", "-q"]);
+    crate::harness::watch::git_output(&dir, &["add", "analysis.py"]);
+    crate::harness::watch::git_output(
+        &dir,
+        &[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "v1",
+        ],
+    );
+    std::fs::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    h.handle_event(update(user_chunk("m1", "Add the stats table")));
+    let tool_call = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "completed",
+        "locations": [{"path": file.to_string_lossy()}],
+        "content": [{"type": "diff", "path": file.to_string_lossy(),
+                     "oldText": "a = 1\n", "newText": "a = 1\nb = 2\nc = 3\nd = 4\n"}]
+    }))
+    .unwrap();
+    h.handle_event(update(tool_call));
+    h.handle_event(update(agent_chunk("a1", "Table added.")));
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    h.active = Some("s1".to_string());
+    let rounds = h.sessions["s1"].folded_rounds();
+    h.open_groups
+        .insert(crate::acp::session::round_key("s1", &rounds[0]));
+    let key = format!("s1#t1::{}", file.to_string_lossy());
+    h.diff_open.insert(key.clone());
+    h.ui.diff_comments.insert(
+        key.clone(),
+        vec![crate::harness::state::DiffComment {
+            line: 3,
+            text: "mark the outlier".to_string(),
+        }],
+    );
+
+    let shot = |h: &mut Harness, name: &str| {
+        let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+            let _ = crate::harness::ui::show(h, ctx);
+        });
+        // the frame is not blank
+        let bg = crate::theme::BG;
+        assert!(
+            img.pixels().any(|p| p.0[..3] != [bg.r(), bg.g(), bg.b()]),
+            "{name}: something was painted"
+        );
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            let p = std::path::Path::new(&out).join(format!("{name}.png"));
+            img.save(&p).unwrap();
+        }
+    };
+
+    shot(&mut h, "01-diff-comments");
+    h.ui.comment_edit = Some(crate::harness::state::CommentEdit {
+        key: key.clone(),
+        line: 4,
+        text: String::new(),
+    });
+    shot(&mut h, "02-comment-editor");
+    h.ui.comment_edit = None;
+    h.ui.preview = Some(crate::harness::state::PreviewState {
+        path: file.to_string_lossy().into_owned(),
+        width: 380.0,
+        mode: crate::harness::state::PreviewMode::Code,
+    });
+    shot(&mut h, "03-preview-pane");
+    h.ui.preview.as_mut().unwrap().mode = crate::harness::state::PreviewMode::Diff;
+    shot(&mut h, "03b-preview-diff");
+    h.ui.preview = None;
+    h.ui.activity_open = true;
+    shot(&mut h, "04-activity");
+    h.ui.activity_open = false;
+    // a failed session shows FAILED in the sidebar
+    h.handle_event(AcpEvent::RequestFailed {
+        request: RequestKind::Prompt {
+            session_id: "s1".to_string(),
+        },
+        error: rpc::RpcError {
+            code: -31001,
+            message: "rate limited".to_string(),
+            data: None,
+        },
+    });
+    shot(&mut h, "06-sidebar-failed");
+    // a running turn at each detail level
+    h.sessions.get_mut("s1").unwrap().begin_turn();
+    for level in ["compact", "standard", "detailed", "verbose"] {
+        h.ui.transcript_detail = level.to_string();
+        shot(&mut h, &format!("05-detail-{level}"));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn failed_turn_marks_the_session_failed_until_the_next_turn_or_open() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.handle_event(AcpEvent::RequestFailed {
+        request: RequestKind::Prompt {
+            session_id: "s1".to_string(),
+        },
+        error: rpc::RpcError {
+            code: -31001,
+            message: "rate limited".to_string(),
+            data: None,
+        },
+    });
+    assert_eq!(h.session_state("s1"), SessionState::Failed);
+    let ev = h.activity.last().unwrap();
+    assert_eq!(ev.kind, ActivityKind::Failed);
+    assert!(ev.text.contains("rate limited"));
+    // opening the session clears the mark
+    h.open_session(dir.clone(), "s1");
+    assert_eq!(h.session_state("s1"), SessionState::Idle);
+    // and so does the next prompt
+    h.handle_event(AcpEvent::RequestFailed {
+        request: RequestKind::Prompt {
+            session_id: "s1".to_string(),
+        },
+        error: rpc::RpcError {
+            code: -32603,
+            message: "boom".to_string(),
+            data: None,
+        },
+    });
+    assert_eq!(h.session_state("s1"), SessionState::Failed);
+    h.sessions.get_mut("s1").unwrap().begin_turn();
+    h.send_prompt("s1", &[proto::PromptBlock::Text("again".to_string())]);
+    let _ = agent.read_msg();
+    assert_eq!(
+        h.session_state("s1"),
+        SessionState::Running,
+        "a new turn clears the failed mark"
+    );
 }

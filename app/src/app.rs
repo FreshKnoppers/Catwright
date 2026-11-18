@@ -73,8 +73,10 @@ impl App {
         harness.thinking_by_model = settings.vibe_thinking_by_model.clone();
         harness.ui.sidebar_collapsed = settings.sidebar_collapsed;
         harness.ui.panel_closed = settings.panel_closed;
+        harness.ui.transcript_detail = settings.transcript_detail.clone();
         harness.auto_account = settings.auto_account;
         harness.pinned = settings.pinned_sessions.iter().cloned().collect();
+        harness.archived = settings.archived_sessions.iter().cloned().collect();
         // claimed in every case: an instance that could not read the
         // settings must not overwrite another instance's file either
         let owns_settings = store::claim_settings();
@@ -133,9 +135,14 @@ impl App {
     fn sync_layout(&mut self) {
         let collapsed = self.harness.ui.sidebar_collapsed;
         let panel = self.harness.ui.panel_closed;
-        if collapsed != self.settings.sidebar_collapsed || panel != self.settings.panel_closed {
+        let detail = self.harness.ui.transcript_detail.clone();
+        if collapsed != self.settings.sidebar_collapsed
+            || panel != self.settings.panel_closed
+            || detail != self.settings.transcript_detail
+        {
             self.settings.sidebar_collapsed = collapsed;
             self.settings.panel_closed = panel;
+            self.settings.transcript_detail = detail;
             self.autosave();
         }
     }
@@ -144,8 +151,11 @@ impl App {
     fn sync_pinned(&mut self) {
         let mut current: Vec<String> = self.harness.pinned.iter().cloned().collect();
         current.sort();
-        if current != self.settings.pinned_sessions {
+        let mut archived: Vec<String> = self.harness.archived.iter().cloned().collect();
+        archived.sort();
+        if current != self.settings.pinned_sessions || archived != self.settings.archived_sessions {
             self.settings.pinned_sessions = current;
+            self.settings.archived_sessions = archived;
             self.autosave();
         }
     }
@@ -180,6 +190,33 @@ impl App {
             self.settings_status =
                 crate::i18n::trf("The settings could not be saved: {error}", &[("error", &e)]);
         }
+    }
+}
+
+impl App {
+    /// One UI frame. Shared by the eframe window and the headless renderer
+    /// (`softrender`, used by `--screenshot --headless`).
+    pub(crate) fn frame(&mut self, ctx: &egui::Context) {
+        self.harness.ensure_started(ctx);
+        self.harness.poll();
+        self.harness.ui.settings_open = self.settings_open;
+        match crate::harness::ui::show(&mut self.harness, ctx) {
+            HarnessAction::None => {}
+            HarnessAction::OpenSettings => self.settings_open = true,
+            HarnessAction::OpenAccount => {
+                self.settings_open = true;
+                self.settings_nav = SettingsNav::Konto;
+            }
+        }
+        self.sync_projects();
+        self.sync_pinned();
+        self.sync_vibe_choices();
+        self.sync_layout();
+        self.settings_window(ctx);
+        self.language_window(ctx);
+        // harness dialogs (folder picker, project-remove confirm) on top of
+        // everything, also while the settings modal is open
+        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
     }
 }
 
@@ -266,31 +303,6 @@ impl App {
         Ok(path)
     }
 
-    /// One frame of the whole UI, the same with a window (`update`) and
-    /// without one (`run_headless`).
-    fn frame(&mut self, ctx: &egui::Context) {
-        self.harness.ensure_started(ctx);
-        self.harness.poll();
-        self.harness.ui.settings_open = self.settings_open;
-        match crate::harness::ui::show(&mut self.harness, ctx) {
-            HarnessAction::None => {}
-            HarnessAction::OpenSettings => self.settings_open = true,
-            HarnessAction::OpenAccount => {
-                self.settings_open = true;
-                self.settings_nav = SettingsNav::Konto;
-            }
-        }
-        self.sync_projects();
-        self.sync_pinned();
-        self.sync_vibe_choices();
-        self.sync_layout();
-        self.settings_window(ctx);
-        self.language_window(ctx);
-        // harness dialogs (folder picker, project-remove confirm) on top of
-        // everything, also while the settings modal is open
-        crate::harness::ui::show_dialogs(&mut self.harness, ctx);
-    }
-
     /// Saves the settings when the window closes.
     fn save_on_exit(&mut self) {
         // A failed exit save must not be silent either, but by now no
@@ -341,6 +353,25 @@ mod tests {
             frames_left: 0,
             harness: crate::harness::Harness::new(Vec::new(), "ask".to_string()),
             language_prompt: false,
+        }
+    }
+
+    /// Headless frame of the app shell with the settings modal open
+    /// (softrender, AGENTS.md "Seeing the UI"); writes a PNG when
+    /// CATWRIGHT_SHOT_DIR is set.
+    #[test]
+    fn headless_app_frame_renders_the_settings_modal() {
+        let mut app = test_app();
+        app.settings_open = true;
+        let img = crate::softrender::render_ui([1360, 860], 3, |ctx| app.frame(ctx));
+        let bg = crate::theme::BG;
+        assert!(
+            img.pixels().any(|p| p.0[..3] != [bg.r(), bg.g(), bg.b()]),
+            "something was painted"
+        );
+        if let Ok(dir) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            let p = std::path::Path::new(&dir).join("07-settings.png");
+            img.save(&p).unwrap();
         }
     }
 

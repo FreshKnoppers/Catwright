@@ -115,6 +115,48 @@ pub struct PaletteState {
     pub scroll_to_selected: bool,
 }
 
+/// Kind of an activity-feed entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    /// A permission or question waits for the user.
+    Waiting,
+    /// A turn finished.
+    Finished,
+    /// A turn failed.
+    Failed,
+}
+
+/// One entry of the activity feed across all sessions.
+#[derive(Debug, Clone)]
+pub struct ActivityEvent {
+    pub kind: ActivityKind,
+    pub sid: String,
+    pub cwd: PathBuf,
+    pub title: String,
+    pub text: String,
+    /// Permission request id of a waiting entry, so the feed can answer it
+    /// directly while the request is still open.
+    pub request_id: Option<serde_json::Value>,
+    /// Epoch seconds.
+    pub at: i64,
+}
+
+/// One review comment on a diff line (line number on the new side of the
+/// diff).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffComment {
+    pub line: usize,
+    pub text: String,
+}
+
+/// A comment being written for one diff (`key` = the diff chip's key).
+#[derive(Debug, Clone)]
+pub struct CommentEdit {
+    pub key: String,
+    pub line: usize,
+    pub text: String,
+}
+
 /// The "Neue Routine" form of a session.
 #[derive(Debug, Clone)]
 pub struct LoopForm {
@@ -148,12 +190,49 @@ pub struct Toast {
     pub since: Option<Instant>,
 }
 
+/// What the preview pane shows: the file on disk, or its diff against HEAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewMode {
+    #[default]
+    Code,
+    Diff,
+}
+
+/// The preview pane beside the transcript. While it is open it replaces the
+/// right work panel.
+#[derive(Debug, Clone)]
+pub struct PreviewState {
+    pub path: String,
+    /// Panel width in points; the user can resize it.
+    pub width: f32,
+    pub mode: PreviewMode,
+}
+
 /// Transient state of the harness UI.
 pub struct UiState {
     /// Persisted through the settings.
     pub sidebar_collapsed: bool,
     /// The right panel is closed. Persisted through the settings.
     pub panel_closed: bool,
+    /// How open tool groups and thoughts are while a turn runs. Persisted
+    /// through the settings.
+    pub transcript_detail: String,
+    /// Collapsible keys the user closed explicitly; an auto-open default
+    /// (the detail level) never overrides them.
+    pub closed_groups: HashSet<String>,
+    /// The file preview pane beside the transcript (`None`: closed).
+    pub preview: Option<PreviewState>,
+    /// Review comments on diffs, keyed by the diff chip's key.
+    pub diff_comments: HashMap<String, Vec<DiffComment>>,
+    /// The comment currently being written.
+    pub comment_edit: Option<CommentEdit>,
+    /// The activity feed is shown in the main area.
+    pub activity_open: bool,
+    /// How many activity entries were already seen (the sidebar badge counts
+    /// the rest).
+    pub activity_seen: usize,
+    /// Projects whose archived-session group is expanded in the sidebar.
+    pub archived_expanded: HashSet<PathBuf>,
     /// Projects whose session lists are folded in the sidebar.
     pub collapsed_projects: HashSet<PathBuf>,
     /// Projects showing all sessions instead of the newest few.
@@ -195,6 +274,14 @@ impl Default for UiState {
         Self {
             sidebar_collapsed: false,
             panel_closed: false,
+            transcript_detail: "standard".to_string(),
+            closed_groups: HashSet::new(),
+            preview: None,
+            diff_comments: HashMap::new(),
+            comment_edit: None,
+            activity_open: false,
+            activity_seen: 0,
+            archived_expanded: HashSet::new(),
             collapsed_projects: HashSet::new(),
             expanded_projects: HashSet::new(),
             panel_sections: HashMap::new(),

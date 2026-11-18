@@ -130,127 +130,284 @@ fn file_row(
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-fn preview(ui: &mut egui::Ui, path: &str) {
-    let kind = artifacts::kind_of(path);
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
+/// The preview pane on the right of the transcript: file name plus path
+/// relative to the project, a Code/Diff toggle, and the content with line
+/// numbers. While it is open the right work panel stays hidden.
+pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
+    use crate::harness::state::PreviewMode;
+    let Some(p) = h.ui.preview.clone() else {
+        return;
+    };
+    let mut close = false;
+    let mut mode = p.mode;
+    // paths are shown relative to the active session's workspace (or the
+    // current project); the absolute path stays on the hover tooltip
+    let base = h
+        .active
+        .as_deref()
+        .and_then(|sid| h.sessions.get(sid))
+        .map(|v| v.cwd.clone())
+        .or_else(|| h.current_project.clone());
+    let out = egui::SidePanel::right("harness_preview")
+        .resizable(true)
+        .default_width(p.width)
+        .width_range(220.0..=640.0)
+        .frame(
+            egui::Frame::none()
+                .fill(theme::SIDEBAR)
+                .inner_margin(egui::Margin::symmetric(10.0, 12.0)),
+        )
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(artifacts::file_name(path))
-                        .color(theme::TEXT)
-                        .family(crate::fonts::bold())
-                        .size(16.0),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(artifacts::file_name(&p.path))
+                            .color(theme::TEXT)
+                            .size(13.5),
+                    )
+                    .truncate(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(IconButton::new(
-                            Icon::Folder,
-                            tr("Open folder in the file manager"),
-                        ))
+                        .add(IconButton::new(Icon::Close, tr("Close preview")).side(22.0))
                         .clicked()
                     {
-                        open_folder_of(path);
+                        close = true;
                     }
-                    if kind == ArtifactKind::Html
-                        && ui
-                            .add(IconButton::new(Icon::Globe, tr("Open in browser")))
-                            .clicked()
+                    ui.add_space(4.0);
+                    if ui
+                        .selectable_label(mode == PreviewMode::Diff, tr("Diff"))
+                        .clicked()
                     {
-                        open_in_browser(path);
+                        mode = PreviewMode::Diff;
+                    }
+                    if ui
+                        .selectable_label(mode == PreviewMode::Code, tr("Code"))
+                        .clicked()
+                    {
+                        mode = PreviewMode::Code;
                     }
                 });
             });
+            let shown = match &base {
+                Some(b) => std::path::Path::new(&p.path)
+                    .strip_prefix(b)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| p.path.clone()),
+                None => p.path.clone(),
+            };
             ui.add(
-                egui::Label::new(RichText::new(path).monospace().size(11.5).color(theme::DIM))
-                    .truncate(),
-            );
-            ui.add_space(10.0);
-            // The version of the file on disk (see `cached_preview`): the
-            // preview below borrows it without a per-frame copy.
-            let preview = cached_preview(path, kind);
-            // Identity, not content: the scroll states of this file's
-            // blocks stay its own and survive a growing text (review N16).
-            let code_id = egui::Id::new(("artifact_code", path));
-            match preview.as_ref() {
-                Preview::Text(text) => match kind {
-                    ArtifactKind::Markdown => {
-                        let blocks = crate::markdown::parse_cached(text);
-                        // read-only preview: interaction state is local to
-                        // this frame, ui-js blocks fall back to their source
-                        let mut events = Vec::new();
-                        let mut forms = std::collections::HashMap::new();
-                        let mut rctx = RenderCtx::new(&mut events, &mut forms, "artifacts");
-                        rctx.scroll_salt = crate::memo::hash_str(path);
-                        crate::render::render_blocks(ui, &blocks, 0, &mut rctx);
-                    }
-                    ArtifactKind::Csv => {
-                        let mut grid = artifacts::parse_csv(text).into_iter();
-                        let columns: Vec<Vec<crate::markdown::MdInline>> = grid
-                            .next()
-                            .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
-                            .unwrap_or_default();
-                        let body: Vec<Vec<Vec<crate::markdown::MdInline>>> = grid
-                            .map(|row| {
-                                row.iter()
-                                    .map(|c| crate::markdown::parse_inline(c))
-                                    .collect()
-                            })
-                            .collect();
-                        crate::render::render_table_grid(
-                            ui,
-                            egui::Id::new(("artifact_csv", path)),
-                            &columns,
-                            &body,
-                        );
-                    }
-                    ArtifactKind::Html => {
-                        crate::render::render_code_block(ui, code_id, "html", text)
-                    }
-                    _ => crate::render::render_code_block(ui, code_id, "", text),
-                },
-                Preview::Image(bytes) => match png_texture(ui.ctx(), path, bytes) {
-                    Ok(tex) => {
-                        ui.add(egui::Image::from_texture(&tex).max_width(ui.available_width()));
-                    }
-                    Err(PngTextureError::TooLarge) => notice(
-                        ui,
-                        &trf(
-                            "The image is too large for the preview (max. {dim} px, {mem}).",
-                            &[
-                                (
-                                    "dim",
-                                    &format!("{} x {}", PNG_MAX_DIMENSION, PNG_MAX_DIMENSION),
-                                ),
-                                ("mem", &human_size(PNG_MAX_ALLOC_BYTES)),
-                            ],
-                        ),
-                    ),
-                    Err(PngTextureError::Undecodable) => {
-                        notice(ui, tr("The image could not be decoded."))
-                    }
-                },
-                Preview::Missing => {
-                    notice(
-                        ui,
-                        tr("The file is missing on disk (deleted or reverted?)."),
-                    );
+                egui::Label::new(
+                    RichText::new(shown)
+                        .monospace()
+                        .size(11.0)
+                        .color(theme::DIM),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&p.path);
+            ui.add_space(4.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match mode {
+                    PreviewMode::Code => preview_content(ui, &p.path, true),
+                    PreviewMode::Diff => diff_content(ui, &p.path, base.as_deref()),
+                });
+        });
+    if let Some(p) = h.ui.preview.as_mut() {
+        p.width = out.response.rect.width();
+        p.mode = mode;
+    }
+    if close {
+        h.ui.preview = None;
+    }
+}
+
+/// `git diff HEAD` of one file, cached by path and mtime (the diff is a
+/// subprocess; it must not run every frame).
+fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
+    type DiffCache =
+        std::sync::Mutex<std::collections::HashMap<(String, Option<u64>, u64), String>>;
+    static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let meta = std::fs::metadata(path);
+    let mtime = meta
+        .as_ref()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    let key = (
+        path.to_string(),
+        mtime,
+        meta.as_ref().map(|m| m.len()).unwrap_or(0),
+    );
+    let text = {
+        let mut c = cache.lock().unwrap();
+        if let Some(t) = c.get(&key) {
+            t.clone()
+        } else {
+            let dir = base.map(|b| b.to_path_buf()).unwrap_or_else(|| {
+                std::path::Path::new(path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/"))
+                    .to_path_buf()
+            });
+            let rel = std::path::Path::new(path)
+                .strip_prefix(&dir)
+                .map(|r| r.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| path.to_string());
+            let t = crate::harness::watch::git_output(&dir, &["diff", "HEAD", "--", &rel])
+                .unwrap_or_default();
+            c.insert(key.clone(), t.clone());
+            if c.len() > 64 {
+                let k = c.keys().next().cloned();
+                if let Some(k) = k {
+                    c.remove(&k);
                 }
-                Preview::TooLarge(n) => {
-                    notice(
-                        ui,
-                        &trf(
-                            "Too large for the preview ({size}, max. {max}).",
-                            &[
-                                ("size", &human_size(*n)),
-                                ("max", &human_size(artifacts::MAX_PREVIEW_BYTES)),
-                            ],
-                        ),
-                    );
-                }
-                Preview::Unreadable => notice(ui, tr("The file could not be read.")),
+            }
+            t
+        }
+    };
+    if text.trim().is_empty() {
+        notice(ui, tr("No changes against the last commit."));
+    } else {
+        crate::render::render_code_block_lines(
+            ui,
+            egui::Id::new(("preview_diff", path)),
+            "diff",
+            &text,
+        );
+    }
+}
+
+pub(super) fn preview(ui: &mut egui::Ui, path: &str) {
+    let kind = artifacts::kind_of(path);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(artifacts::file_name(path))
+                .color(theme::TEXT)
+                .family(crate::fonts::bold())
+                .size(16.0),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(IconButton::new(
+                    Icon::Folder,
+                    tr("Open folder in the file manager"),
+                ))
+                .clicked()
+            {
+                open_folder_of(path);
+            }
+            if kind == ArtifactKind::Html
+                && ui
+                    .add(IconButton::new(Icon::Globe, tr("Open in browser")))
+                    .clicked()
+            {
+                open_in_browser(path);
             }
         });
+    });
+    ui.add(
+        egui::Label::new(RichText::new(path).monospace().size(11.5).color(theme::DIM)).truncate(),
+    );
+    ui.add_space(10.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| preview_content(ui, path, false));
+}
+
+/// The preview content of one file, without any header. `numbered`: code
+/// blocks get line numbers (the preview pane).
+fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
+    let kind = artifacts::kind_of(path);
+    // The version of the file on disk (see `cached_preview`): the preview
+    // below borrows it without a per-frame copy.
+    let preview = cached_preview(path, kind);
+    // Identity, not content: the scroll states of this file's blocks stay
+    // its own and survive a growing text (review N16).
+    let code_id = egui::Id::new(("artifact_code", path));
+    match preview.as_ref() {
+        Preview::Text(text) => match kind {
+            ArtifactKind::Markdown => {
+                let blocks = crate::markdown::parse_cached(text);
+                // read-only preview: interaction state is local to this
+                // frame, ui-js blocks fall back to their source
+                let mut events = Vec::new();
+                let mut forms = std::collections::HashMap::new();
+                let mut rctx = RenderCtx::new(&mut events, &mut forms, "artifacts");
+                rctx.scroll_salt = crate::memo::hash_str(path);
+                crate::render::render_blocks(ui, &blocks, 0, &mut rctx);
+            }
+            ArtifactKind::Csv => {
+                let mut grid = artifacts::parse_csv(text).into_iter();
+                let columns: Vec<Vec<crate::markdown::MdInline>> = grid
+                    .next()
+                    .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
+                    .unwrap_or_default();
+                let body: Vec<Vec<Vec<crate::markdown::MdInline>>> = grid
+                    .map(|row| {
+                        row.iter()
+                            .map(|c| crate::markdown::parse_inline(c))
+                            .collect()
+                    })
+                    .collect();
+                crate::render::render_table_grid(
+                    ui,
+                    egui::Id::new(("artifact_csv", path)),
+                    &columns,
+                    &body,
+                );
+            }
+            ArtifactKind::Html => crate::render::render_code_block(ui, code_id, "html", text),
+            _ => {
+                if numbered {
+                    crate::render::render_code_block_lines(ui, code_id, "", text)
+                } else {
+                    crate::render::render_code_block(ui, code_id, "", text)
+                }
+            }
+        },
+        Preview::Image(bytes) => match png_texture(ui.ctx(), path, bytes) {
+            Ok(tex) => {
+                ui.add(egui::Image::from_texture(&tex).max_width(ui.available_width()));
+            }
+            Err(PngTextureError::TooLarge) => notice(
+                ui,
+                &trf(
+                    "The image is too large for the preview (max. {dim} px, {mem}).",
+                    &[
+                        (
+                            "dim",
+                            &format!("{} x {}", PNG_MAX_DIMENSION, PNG_MAX_DIMENSION),
+                        ),
+                        ("mem", &human_size(PNG_MAX_ALLOC_BYTES)),
+                    ],
+                ),
+            ),
+            Err(PngTextureError::Undecodable) => notice(ui, tr("The image could not be decoded.")),
+        },
+        Preview::Missing => {
+            notice(
+                ui,
+                tr("The file is missing on disk (deleted or reverted?)."),
+            );
+        }
+        Preview::TooLarge(n) => {
+            notice(
+                ui,
+                &trf(
+                    "Too large for the preview ({size}, max. {max}).",
+                    &[
+                        ("size", &human_size(*n)),
+                        ("max", &human_size(artifacts::MAX_PREVIEW_BYTES)),
+                    ],
+                ),
+            );
+        }
+        Preview::Unreadable => notice(ui, tr("The file could not be read.")),
+    }
 }
 
 fn notice(ui: &mut egui::Ui, text: &str) {
