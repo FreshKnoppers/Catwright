@@ -58,6 +58,14 @@ The screenshots show demo projects with prepared sessions
 - Vibe's approvals and questions as cards; mode and model picker, thinking
   level per model
 - Diffs, review of a turn's changes, rewind to an earlier state
+- Review comments on diff lines, sent to Vibe as one message ("Send to Vibe")
+- Preview pane beside the transcript: code with line numbers or the diff
+  against the last commit (Code/Diff switch, `--open <file>` on start)
+- Transcript detail levels (Compact/Standard/Detailed/Verbose) while a turn runs
+- Activity feed across all sessions: answer a waiting approval right there,
+  finished and failed turns at a glance, unread badge and archiving
+- File chips in answers: mentioning a workspace file opens the preview on click
+- Drag & drop files onto the composer to attach them
 - Subagents with status bars (and a small pixel cat)
 - Context usage as Vibe reports it (the same numbers as the CLI footer), with
   Vibe's own estimate of what fills it
