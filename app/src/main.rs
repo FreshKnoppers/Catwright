@@ -15,6 +15,9 @@
 //!                                                CATWRIGHT_PROMPT env var do not)
 //!   catwright --settings [tab]                  open the settings (allgemein|vibe|konto|kuerzel|datenschutz)
 //!   catwright --screenshot out.png [--frames N] render N frames (default 120), save PNG, exit
+//!   catwright --screenshot out.png --headless   same without a window or display server: the
+//!                                                frame is rasterized on the CPU (softrender.rs),
+//!                                                1360 × 860 points
 //!   catwright --lang en|de                      UI language for this run (not saved)
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
@@ -34,6 +37,7 @@ mod memo;
 mod model;
 mod render;
 mod script;
+mod softrender;
 mod store;
 mod syntax;
 mod theme;
@@ -53,6 +57,8 @@ struct Cli {
     /// `--lang`: UI language for this run only (screenshots, testing).
     lang: Option<i18n::Lang>,
     frames: u32,
+    /// `--headless`: render the screenshot without a window (softrender).
+    headless: bool,
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -64,6 +70,7 @@ fn parse_cli(args: &[String]) -> Cli {
         prompt: None,
         lang: None,
         frames: 120,
+        headless: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -87,6 +94,10 @@ fn parse_cli(args: &[String]) -> Cli {
             "--prompt" if i + 1 < args.len() => {
                 cli.prompt = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--headless" => {
+                cli.headless = true;
+                i += 1;
             }
             "--lang" if i + 1 < args.len() => {
                 cli.lang = i18n::Lang::from_code(&args[i + 1]);
@@ -177,6 +188,25 @@ fn main() -> eframe::Result<()> {
     std::env::remove_var("CATWRIGHT_PROMPT");
     let lang = cli.lang;
     let open = cli.project.map(|p| (p, cli.session));
+    if cli.headless {
+        // no window: the same App, driven frame by frame and rasterized on
+        // the CPU, so screenshots work without X11/Wayland or a GPU
+        if screenshot.is_none() {
+            eprintln!("--headless needs --screenshot <png>");
+            std::process::exit(2);
+        }
+        let app = app::App::new(screenshot, settings, frames, open, prompt, lang);
+        match app.run_headless([1360, 860]) {
+            Ok(path) => {
+                eprintln!("screenshot saved to {}", path.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("screenshot failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     eframe::run_native(
         "Catwright",
         options,
@@ -280,6 +310,18 @@ mod tests {
         let c = cli(&["--mode"]);
         assert_eq!(c.frames, 120);
         assert_eq!(c.project, None);
+    }
+
+    #[test]
+    fn headless_flag_parses_and_defaults_off() {
+        assert!(!cli(&["--screenshot", "/tmp/x.png"]).headless);
+        let c = cli(&["--screenshot", "/tmp/x.png", "--headless", "--frames", "9"]);
+        assert!(c.headless);
+        assert_eq!(c.frames, 9, "the flag takes no value");
+        assert_eq!(
+            c.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/x.png"))
+        );
     }
 
     #[test]

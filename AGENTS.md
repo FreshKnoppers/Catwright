@@ -28,6 +28,8 @@ API keys.
   to `docs/mockups/`; not part of the app.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
   for `vibe-acp` with prepared demo sessions (`render.sh`); not part of the app.
+- `app/src/softrender.rs`: CPU rasterizer for egui frames, so the UI can be
+  looked at without a display server or GPU (see "Seeing the UI").
 - `docs/design.md`: visual design (Mistral-like pixel style, colour tokens).
 
 ## Hard rules
@@ -47,3 +49,17 @@ API keys.
   and identifiers are English.
 - Keep `cargo fmt --check`, `cargo clippy --all-targets` (no new warnings)
   and `cargo test` green.
+
+## Seeing the UI (no display needed)
+
+UI work is not done until you have looked at it. Rendering needs no X11,
+Wayland, xvfb or GPU: egui's meshes are rasterized on the CPU
+(`softrender.rs`, matches the GL output except for hover effects).
+
+- Whole app: `catwright --screenshot out.png --headless [--frames N]`
+  together with the usual `--project`/`--session`/`--settings`/`--lang`;
+  `tools/screenshots/render.sh [out-dir]` does this against demo sessions.
+- One view in a test: `crate::softrender::render_ui([1360, 860], 3, |ctx| {
+  let _ = crate::harness::ui::show(&mut h, ctx); })` returns an
+  `image::RgbaImage`; save it to a temp dir and open the PNG to check the
+  look. Do not commit such PNGs from tests.

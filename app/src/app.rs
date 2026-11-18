@@ -213,7 +213,62 @@ impl eframe::App for App {
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        self.frame(ctx);
+    }
 
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_on_exit();
+    }
+}
+
+impl App {
+    /// `--screenshot <png> --headless`: run the app without a window and
+    /// without a display server, `frames` frames of `size` points at 60 fps,
+    /// then rasterize the last one on the CPU (`softrender`) and save it.
+    pub fn run_headless(mut self, size: [u32; 2]) -> Result<std::path::PathBuf, String> {
+        let path = self
+            .screenshot_path
+            .clone()
+            .ok_or_else(|| "--headless needs --screenshot <png>".to_string())?;
+        let frames = self.frames_left.max(1);
+        let ctx = egui::Context::default();
+        crate::fonts::install_fallback_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let mut textures = crate::softrender::Textures::default();
+        let start = std::time::Instant::now();
+        let screen =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
+        for i in 0..frames {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(start.elapsed().as_secs_f64()),
+                focused: true,
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| self.frame(ctx));
+            textures.set(&out.textures_delta);
+            if i + 1 == frames {
+                let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+                let px = |v: u32| (v as f32 * out.pixels_per_point).round() as usize;
+                let img = crate::softrender::rasterize(
+                    &prims,
+                    &textures,
+                    out.pixels_per_point,
+                    [px(size[0]), px(size[1])],
+                    crate::theme::BG,
+                );
+                img.save(&path).map_err(|e| e.to_string())?;
+            }
+            textures.free(&out.textures_delta);
+            // the agent answers on its own threads; give it real time
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        Ok(path)
+    }
+
+    /// One frame of the whole UI, the same with a window (`update`) and
+    /// without one (`run_headless`).
+    fn frame(&mut self, ctx: &egui::Context) {
         self.harness.ensure_started(ctx);
         self.harness.poll();
         self.harness.ui.settings_open = self.settings_open;
@@ -236,7 +291,8 @@ impl eframe::App for App {
         crate::harness::ui::show_dialogs(&mut self.harness, ctx);
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    /// Saves the settings when the window closes.
+    fn save_on_exit(&mut self) {
         // A failed exit save must not be silent either, but by now no
         // toast or modal can be shown any more. Only metadata goes to
         // stderr (the error itself, never file contents), and the save

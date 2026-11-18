@@ -10,6 +10,8 @@ Changes:
 - New logo and app icon: a little pixel window with yellow eyes, in the
   app's orange instead of the red-to-yellow gradient. The app icon now sits
   on a dark tile, so it stays visible on light panels too.
+- `--screenshot <png> --headless` renders without a window, display server
+  or GPU (CPU rasterizer); the README screenshots are made this way.
 
 Fixes:
 
