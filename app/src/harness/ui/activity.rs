@@ -99,39 +99,18 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
         .inner_margin(egui::Margin::symmetric(10.0, 8.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), Sense::hover());
-            let accent = match e.kind {
-                ActivityKind::Waiting => theme::YELLOW,
-                ActivityKind::Finished => theme::GREEN,
-                ActivityKind::Failed => theme::RED,
-            };
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(rect.left_top(), egui::vec2(3.0, rect.height())),
-                0.0,
-                accent,
-            );
             // header row: accent bar, workspace (mono, uppercased), title —
             // and on the right the age plus the Open action
             let mut open: Option<(std::path::PathBuf, String)> = None;
             ui.horizontal(|ui| {
-                let mut x = rect.left() + 10.0;
-                if !e.cwd.as_os_str().is_empty() {
-                    let g = widgets::line_galley(
-                        ui,
-                        &h.workspace_name(&e.cwd).to_uppercase(),
-                        widgets::mono(10.5),
-                        theme::DIM,
-                        120.0,
-                    );
-                    x = widgets::paint_line(ui, x, rect.center().y, g).right() + 6.0;
-                }
-                let title = if e.title.is_empty() {
-                    tr("Session").to_string()
-                } else {
-                    e.title.clone()
+                let accent = match e.kind {
+                    ActivityKind::Waiting => theme::YELLOW,
+                    ActivityKind::Finished => theme::GREEN,
+                    ActivityKind::Failed => theme::RED,
                 };
-                let age = extras::human_duration((extras::now_epoch() - e.at).max(0) as u64);
+                let (bar, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), Sense::hover());
+                ui.painter().rect_filled(bar, 0.0, accent);
+                ui.add_space(7.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !e.sid.is_empty()
                         && widgets::button(ui, tr("Open"), ButtonKind::Secondary).clicked()
@@ -146,12 +125,31 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                         };
                         open = Some((cwd, e.sid.clone()));
                     }
+                    let age = extras::human_duration((extras::now_epoch() - e.at).max(0) as u64);
                     ui.label(RichText::new(age).monospace().size(10.5).color(theme::DIM));
+                    ui.add_space(8.0);
+                    let title = if e.title.is_empty() {
+                        tr("Session").to_string()
+                    } else {
+                        e.title.clone()
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(title).size(13.0).color(theme::TEXT))
+                            .truncate(),
+                    );
+                    if !e.cwd.as_os_str().is_empty() {
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(h.workspace_name(&e.cwd).to_uppercase())
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(theme::DIM),
+                            )
+                            .truncate(),
+                        );
+                    }
                 });
-                let right = rect.right() - 130.0;
-                let g =
-                    widgets::line_galley(ui, &title, widgets::font(13.0), theme::TEXT, right - x);
-                widgets::paint_line(ui, x, rect.center().y, g);
             });
             if let Some((cwd, sid)) = open {
                 ops.push(FeedOp::Open { cwd, sid });
@@ -159,26 +157,10 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
             ui.add_space(2.0);
             ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if !e.sid.is_empty()
-                    && widgets::button(ui, tr("Open"), ButtonKind::Secondary).clicked()
-                {
-                    let cwd = if e.cwd.as_os_str().is_empty() {
-                        h.sessions
-                            .get(&e.sid)
-                            .map(|v| v.cwd.clone())
-                            .unwrap_or_default()
-                    } else {
-                        e.cwd.clone()
-                    };
-                    ops.push(FeedOp::Open {
-                        cwd,
-                        sid: e.sid.clone(),
-                    });
-                }
-                // a waiting permission can be answered right here while it
-                // is still open in its session
-                if e.kind == ActivityKind::Waiting {
+            // a waiting permission can be answered right here while it
+            // is still open in its session
+            if e.kind == ActivityKind::Waiting {
+                ui.horizontal(|ui| {
                     if let (Some(rid), Some(v)) = (&e.request_id, h.sessions.get(&e.sid)) {
                         if let Some(p) = v.permissions.iter().find(|p| &p.request_id == rid) {
                             for opt in &p.request.options {
@@ -197,8 +179,8 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                             }
                         }
                     }
-                }
-            });
+                });
+            }
         });
     ui.add_space(6.0);
 }
