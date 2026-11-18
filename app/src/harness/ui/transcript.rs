@@ -184,6 +184,16 @@ fn round_jump_target(tops: &[f32], current: f32, max_offset: f32, up: bool) -> O
     best
 }
 
+/// " · 1 tool call" / " · {n} tool calls" — singular and plural are separate
+/// msgids so the German catalog covers each.
+fn tool_calls_suffix(n: usize) -> String {
+    if n == 1 {
+        tr(" · 1 tool call").to_string()
+    } else {
+        trf(" · {n} tool calls", &[("n", &n)])
+    }
+}
+
 fn render_items(
     h: &mut Harness,
     ui: &mut egui::Ui,
@@ -269,6 +279,7 @@ fn render_items(
         ops: &mut turn_ops,
     };
     let mut round_tops: Vec<f32> = Vec::with_capacity(rounds.len());
+    let mut compact_line_shown = false;
     for round in &rounds {
         // where this round starts on screen: the round navigation jumps
         // here (also for a folded round, whose summary row is its top)
@@ -278,8 +289,9 @@ fn render_items(
         if round.shows_summary() && round_summary(ui, &s.items, round, expanded) {
             toggle_key(open_groups, key);
         }
-        // compact mode: the running round is one line — busy marker, tool
-        // count, current step — instead of the full open transcript
+        // compact mode: the running round's tool calls collapse into one
+        // line at their position in the round — busy marker, tool count,
+        // current step; agent text and changed files stay visible
         let is_running_round = running && std::ptr::eq(round, rounds.last().unwrap_or(round));
         if compact && is_running_round {
             let step = s
@@ -292,26 +304,13 @@ fn render_items(
                 .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending))
                 .map(|c| c.title.clone())
                 .unwrap_or_default();
-            let (rect, _) =
-                ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-            widgets::paint_busy(ui, pos2(rect.left() + 5.0, rect.center().y - 1.0), 3.0);
             let mut label = tr("Working").to_string();
             if round.tool_calls > 0 {
-                label.push_str(&trf(" · {n} tool calls", &[("n", &round.tool_calls)]));
+                label.push_str(&tool_calls_suffix(round.tool_calls));
             }
             if !step.is_empty() {
                 label.push_str(&trf(" · {step}", &[("step", &step)]));
             }
-            let g = line_galley(
-                ui,
-                &label,
-                widgets::font(13.5),
-                theme::MUTED,
-                rect.width() - 30.0,
-            );
-            paint_line(ui, rect.left() + 22.0, rect.center().y, g);
-            // the agent's text and the changed files stay visible; only the
-            // tool calls are summarized into the line above
             let mut ctx = ItemCtx {
                 sid,
                 running,
@@ -323,6 +322,7 @@ fn render_items(
                 auto_group: false,
                 auto_output: false,
                 skip_tools: true,
+                compact_line: Some(label),
                 diff_open,
                 comments,
                 ui_events,
@@ -331,6 +331,9 @@ fn render_items(
                 ops,
             };
             render_range(&mut ctx, ui, s, &groups, round.range.clone());
+            // painted where the tool calls would be; without any tool call
+            // yet the busy row after the loop stays the working marker
+            compact_line_shown = ctx.compact_line.is_none();
             if let Some(turn_id) = &round.user_message_id {
                 turn_changes.round_files(ui, turn_id);
             }
@@ -354,6 +357,7 @@ fn render_items(
             auto_group,
             auto_output,
             skip_tools: false,
+            compact_line: None,
             diff_open,
             comments,
             ui_events,
@@ -373,8 +377,9 @@ fn render_items(
     let waiting_user = !s.permissions.is_empty() || has_question;
     if running {
         // in compact mode the running round already shows its one Working
-        // line; the busy row with the cat would be a second one
-        if !compact {
+        // line at the tool calls; the busy row with the cat would be a
+        // second one — only without any tool call yet does it stay
+        if !compact || !compact_line_shown {
             ui.add_space(4.0);
             busy_row(
                 ui,
@@ -407,6 +412,9 @@ struct ItemCtx<'a, 'c> {
     /// Compact mode: tool groups are not rendered at all (one summary line
     /// instead); agent text and changed files still are.
     skip_tools: bool,
+    /// Compact mode: the one summary line, painted where the first tool
+    /// group would be. `None` once painted (or in non-compact rounds).
+    compact_line: Option<String>,
     diff_open: &'a mut HashSet<String>,
     comments: &'a mut Comments<'c>,
     ui_events: &'a mut Vec<UiEvent>,
@@ -431,6 +439,20 @@ fn render_range(
     while i < range.end {
         if let Some(g) = groups.iter().find(|g| g.start == i) {
             if ctx.skip_tools {
+                // compact: one summary line where the tool calls would be
+                if let Some(label) = ctx.compact_line.take() {
+                    let (rect, _) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                    widgets::paint_busy(ui, pos2(rect.left() + 5.0, rect.center().y - 1.0), 3.0);
+                    let g = line_galley(
+                        ui,
+                        &label,
+                        widgets::font(13.5),
+                        theme::MUTED,
+                        rect.width() - 30.0,
+                    );
+                    paint_line(ui, rect.left() + 22.0, rect.center().y, g);
+                }
                 i = g.end;
                 continue;
             }
@@ -630,7 +652,7 @@ fn round_summary(ui: &mut egui::Ui, items: &[Item], round: &Round, expanded: boo
         trf("“{title}”", &[("title", &shorten(&title, 90))])
     };
     if round.tool_calls > 0 {
-        label.push_str(&trf(" · {n} tool calls", &[("n", &round.tool_calls)]));
+        label.push_str(&tool_calls_suffix(round.tool_calls));
     }
     // a quiet card (fill + 1 px edge + accent strip), so a folded round
     // reads as something to open at first glance, not as plain text

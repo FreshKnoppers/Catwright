@@ -375,6 +375,9 @@ msgstr "„{title}“"
 msgid " · {n} tool calls"
 msgstr " · {n} Tool-Aufrufe"
 
+msgid " · 1 tool call"
+msgstr " · 1 Tool-Aufruf"
+
 msgid "Plan"
 msgstr "Plan"
 
