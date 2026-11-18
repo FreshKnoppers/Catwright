@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Actions from message rows, applied after the transcript is drawn.
-pub(super) enum MessageOp {
+pub(crate) enum MessageOp {
     Rewind(String),
     Fork(String),
     /// Vibe's `/retry` for the finished turn.
@@ -310,6 +310,30 @@ fn render_items(
                 rect.width() - 30.0,
             );
             paint_line(ui, rect.left() + 22.0, rect.center().y, g);
+            // the agent's text and the changed files stay visible; only the
+            // tool calls are summarized into the line above
+            let mut ctx = ItemCtx {
+                sid,
+                running,
+                compact_plan,
+                cwd,
+                plan: &s.plan,
+                open_groups,
+                closed_groups: &mut h_ui.closed_groups,
+                auto_group: false,
+                auto_output: false,
+                skip_tools: true,
+                diff_open,
+                comments,
+                ui_events,
+                form_values,
+                scripts,
+                ops,
+            };
+            render_range(&mut ctx, ui, s, &groups, round.range.clone());
+            if let Some(turn_id) = &round.user_message_id {
+                turn_changes.round_files(ui, turn_id);
+            }
             continue;
         }
         let range = if round.collapsed && !expanded {
@@ -329,6 +353,7 @@ fn render_items(
             closed_groups: &mut h_ui.closed_groups,
             auto_group,
             auto_output,
+            skip_tools: false,
             diff_open,
             comments,
             ui_events,
@@ -347,14 +372,18 @@ fn render_items(
     ops.append(&mut turn_ops);
     let waiting_user = !s.permissions.is_empty() || has_question;
     if running {
-        ui.add_space(4.0);
-        busy_row(
-            ui,
-            s,
-            turn_started.get(sid).map(|t| t.elapsed().as_secs()),
-            retrying.get(sid),
-            waiting_user,
-        );
+        // in compact mode the running round already shows its one Working
+        // line; the busy row with the cat would be a second one
+        if !compact {
+            ui.add_space(4.0);
+            busy_row(
+                ui,
+                s,
+                turn_started.get(sid).map(|t| t.elapsed().as_secs()),
+                retrying.get(sid),
+                waiting_user,
+            );
+        }
     } else {
         turn_footer(ui, s, last_turn_secs.get(sid).copied(), ops);
     }
@@ -375,6 +404,9 @@ struct ItemCtx<'a, 'c> {
     auto_group: bool,
     /// Detail-level default: auto-open tool outputs while running (verbose).
     auto_output: bool,
+    /// Compact mode: tool groups are not rendered at all (one summary line
+    /// instead); agent text and changed files still are.
+    skip_tools: bool,
     diff_open: &'a mut HashSet<String>,
     comments: &'a mut Comments<'c>,
     ui_events: &'a mut Vec<UiEvent>,
@@ -398,6 +430,10 @@ fn render_range(
     let mut i = range.start;
     while i < range.end {
         if let Some(g) = groups.iter().find(|g| g.start == i) {
+            if ctx.skip_tools {
+                i = g.end;
+                continue;
+            }
             let calls: Vec<&ToolCall> = s.items[g.clone()]
                 .iter()
                 .filter_map(|it| match it {
@@ -520,7 +556,7 @@ pub(crate) fn comments_prompt(path: &str, comments: &[DiffComment]) -> String {
 
 /// Borrowed comment state of the transcript: the stored comments plus the
 /// comment being written.
-pub(super) struct Comments<'a> {
+pub(crate) struct Comments<'a> {
     map: &'a mut HashMap<String, Vec<DiffComment>>,
     edit: &'a mut Option<CommentEdit>,
 }
@@ -1614,7 +1650,31 @@ fn stat_galleys(ui: &egui::Ui, added: usize, removed: usize) -> Vec<std::sync::A
 /// The real line diff of one text pair, folded to the changed hunks.
 /// With `comment` (`key` + state + ops), every line gets a "+" gutter button
 /// that starts a review comment on its new-side line number.
-pub(super) fn diff_body(
+/// New-side line number of every segment: `Some(n)` for a line, `None` for a
+/// folded block. A skipped block still advances the number — otherwise every
+/// line after it would be numbered too low (and "Send to Vibe" would name the
+/// wrong line).
+pub(crate) fn line_numbers(segments: &[Segment]) -> Vec<Option<usize>> {
+    let mut new_line = 0usize;
+    segments
+        .iter()
+        .map(|seg| match seg {
+            Segment::Skipped(n) => {
+                new_line += n;
+                None
+            }
+            Segment::Line(l) => match l.kind {
+                LineKind::Removed => Some(new_line.max(1)),
+                _ => {
+                    new_line += 1;
+                    Some(new_line)
+                }
+            },
+        })
+        .collect()
+}
+
+pub(crate) fn diff_body(
     ui: &mut egui::Ui,
     old: Option<&str>,
     new: &str,
@@ -1623,8 +1683,8 @@ pub(super) fn diff_body(
 ) {
     let segments = diff::folded_cached(old, new);
     let total = segments.len();
-    let mut new_line = 0usize;
-    for seg in segments.iter().take(max_rows) {
+    let numbers = line_numbers(&segments);
+    for (seg, line_no) in segments.iter().zip(numbers.iter()).take(max_rows) {
         match seg {
             Segment::Skipped(n) => {
                 let n = *n;
@@ -1639,13 +1699,7 @@ pub(super) fn diff_body(
                 paint_line(ui, rect.left() + 26.0, rect.center().y, g);
             }
             Segment::Line(line) => {
-                let line_no = match line.kind {
-                    LineKind::Removed => new_line.max(1),
-                    _ => {
-                        new_line += 1;
-                        new_line
-                    }
-                };
+                let line_no = line_no.expect("line_numbers pairs with every segment");
                 // the "+" gutter only on lines that exist on the new side
                 // (never on removed ones)
                 let commented = comment.as_ref().is_some_and(|(key, state, _)| {
@@ -1977,6 +2031,27 @@ mod tests {
         super::toggle_effective(&mut open, &mut closed, "k", false);
         assert!(super::effective_open(&open, &closed, "k", false));
         assert!(closed.is_empty());
+    }
+
+    #[test]
+    fn line_numbers_advance_across_folded_blocks() {
+        // 40 old lines, one change at the very end: the fold skips the
+        // first 36 lines, and the line after the skipped block must still
+        // get its real new-side number (40), not 4
+        let old: String = (0..40).map(|i| format!("l{i}\n")).collect();
+        let new = old.replace("l39\n", "changed\n");
+        let segments = super::diff::folded_cached(Some(&old), &new);
+        let numbers = super::line_numbers(&segments);
+        assert!(matches!(segments[0], super::Segment::Skipped(36)));
+        let added = segments
+            .iter()
+            .zip(numbers.iter())
+            .find(|(seg, _)| {
+                matches!(seg, super::Segment::Line(l) if l.kind == super::LineKind::Added)
+            })
+            .map(|(_, n)| *n)
+            .expect("there is an added line");
+        assert_eq!(added, Some(40), "the line after the fold keeps its number");
     }
 
     #[test]

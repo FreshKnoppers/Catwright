@@ -146,7 +146,7 @@ pub fn rasterize(
         if cx0 >= cx1 || cy0 >= cy1 {
             continue;
         }
-        for tri in mesh.indices.chunks_exact(3) {
+        for tri in mesh.indices.as_chunks::<3>().0 {
             let v = [
                 &mesh.vertices[tri[0] as usize],
                 &mesh.vertices[tri[1] as usize],
