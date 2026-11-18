@@ -5361,3 +5361,55 @@ fn failed_turn_marks_the_session_failed_until_the_next_turn_or_open() {
         "a new turn clears the failed mark"
     );
 }
+
+#[test]
+fn compact_round_keeps_the_changed_file_card() {
+    // compact folds a running round's tool calls into one line, but the
+    // changed files stay visible (the setting promises it for every level)
+    let dir = std::env::temp_dir().join(format!("od-compact-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("analysis.py");
+    std::fs::write(&file, "a = 1\nb = 2\n").unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    h.handle_event(update(user_chunk("m1", "Add the stats table")));
+    let edit = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "completed",
+        "locations": [{"path": file.to_string_lossy()}],
+        "content": [{"type": "diff", "path": file.to_string_lossy(),
+                     "oldText": "a = 1\n", "newText": "a = 1\nb = 2\n"}]
+    }))
+    .unwrap();
+    h.handle_event(update(edit));
+    h.handle_event(update(agent_chunk("a1", "Table added.")));
+    h.sessions.get_mut("s1").unwrap().begin_turn();
+    h.active = Some("s1".to_string());
+
+    h.ui.transcript_detail = "compact".to_string();
+    // the right panel lists changed files too; only the transcript counts
+    h.ui.panel_closed = true;
+    let texts = render_texts(&mut h, 3);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with(&format!("{} ·", tr("Working")))),
+        "the summary line:\n{texts:#?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("Writing analysis.py")),
+        "the tool call itself is folded away:\n{texts:#?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "analysis.py"),
+        "the changed-file card stays:\n{texts:#?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

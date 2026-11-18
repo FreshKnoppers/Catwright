@@ -438,6 +438,13 @@ fn render_range(
     let mut i = range.start;
     while i < range.end {
         if let Some(g) = groups.iter().find(|g| g.start == i) {
+            let calls: Vec<&ToolCall> = s.items[g.clone()]
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Tool(id) => s.tool_calls.get(id),
+                    _ => None,
+                })
+                .collect();
             if ctx.skip_tools {
                 // compact: one summary line where the tool calls would be
                 if let Some(label) = ctx.compact_line.take() {
@@ -453,16 +460,27 @@ fn render_range(
                     );
                     paint_line(ui, rect.left() + 22.0, rect.center().y, g);
                 }
+                // the changed files stay visible at every detail level; in
+                // the other modes tool_group draws them below the calls
+                let files = group_diffs(&calls);
+                let any_file = !files.is_empty();
+                for file in files {
+                    diff_chip(
+                        ui,
+                        ctx.sid,
+                        ctx.cwd,
+                        &file,
+                        ctx.diff_open,
+                        ctx.comments,
+                        ctx.ops,
+                    );
+                }
+                if any_file {
+                    ui.add_space(8.0);
+                }
                 i = g.end;
                 continue;
             }
-            let calls: Vec<&ToolCall> = s.items[g.clone()]
-                .iter()
-                .filter_map(|it| match it {
-                    Item::Tool(id) => s.tool_calls.get(id),
-                    _ => None,
-                })
-                .collect();
             tool_group(
                 ui,
                 ctx.sid,
