@@ -5091,3 +5091,109 @@ fn failed_worktree_is_cleaned_up_and_explained() {
     assert!(!target.exists());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Headless render of the new views: the frames run in a plain egui context
+/// (no window) and the painted text shapes are read back, so the test proves
+/// the new widgets are really laid out, not just that the code runs.
+fn render_texts(h: &mut Harness, frames: usize) -> Vec<String> {
+    let ctx = egui::Context::default();
+    // the app installs its fonts on creation (main.rs); a bare Context
+    // cannot draw the UI without them
+    crate::fonts::install_fallback_fonts(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(1440.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..frames {
+        let out = ctx.run(input.clone(), |ctx| {
+            let _ = crate::harness::ui::show(h, ctx);
+        });
+        for clipped in &out.shapes {
+            let galley = match &clipped.shape {
+                egui::Shape::Text(t) => &t.galley,
+                _ => continue,
+            };
+            texts.push(galley.text().to_string());
+        }
+    }
+    texts
+}
+
+#[test]
+fn new_views_render_headless_with_their_widgets() {
+    let dir = std::env::temp_dir().join(format!("od-render-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("analysis.py");
+    std::fs::write(&file, "a = 1\nb = 2\n").unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    h.handle_event(update(user_chunk("m1", "Add the stats table")));
+    let tool_call = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "completed",
+        "locations": [{"path": file.to_string_lossy()}],
+        "content": [{"type": "diff", "path": file.to_string_lossy(),
+                     "oldText": "a = 1\n", "newText": "a = 1\nb = 2\nc = 3\n"}]
+    }))
+    .unwrap();
+    h.handle_event(update(tool_call));
+    h.handle_event(update(agent_chunk("a1", "Table added.")));
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    h.active = Some("s1".to_string());
+
+    // 1) the activity feed: the waiting entry with its actions (section
+    // headers are mono labels, so they render uppercased)
+    h.ui.activity_open = true;
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(all.contains("Activity"), "nav row renders:\n{all}");
+    assert!(all.contains("WAITING FOR YOU"), "feed section:\n{all}");
+    assert!(all.contains("Permission request"), "feed entry:\n{all}");
+    assert!(all.contains("Open"), "feed action:\n{all}");
+
+    // 2) the session with an open diff, one comment and the preview pane
+    h.ui.activity_open = false;
+    // unfold the round so the tool group (and its diff chip) renders
+    let rounds = h.sessions["s1"].folded_rounds();
+    let rkey = crate::acp::session::round_key("s1", &rounds[0]);
+    h.open_groups.insert(rkey);
+    let key = format!("s1#t1::{}", file.to_string_lossy());
+    h.diff_open.insert(key.clone());
+    h.ui.diff_comments.insert(
+        key,
+        vec![crate::harness::state::DiffComment {
+            line: 3,
+            text: "mark the outlier".to_string(),
+        }],
+    );
+    h.ui.preview = Some(crate::harness::state::PreviewState {
+        path: file.to_string_lossy().into_owned(),
+        width: 380.0,
+    });
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(
+        all.contains("analysis.py"),
+        "diff chip and preview header:\n{all}"
+    );
+    assert!(all.contains("c = 3"), "the open diff body:\n{all}");
+    assert!(all.contains("Send to Vibe"), "comment action:\n{all}");
+    assert!(all.contains("L3: mark the outlier"), "comment row:\n{all}");
+    assert!(
+        all.contains("1 comments on this file"),
+        "comment count:\n{all}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
