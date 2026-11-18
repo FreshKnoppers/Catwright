@@ -64,6 +64,9 @@ ANALYSIS_V2 = ANALYSIS_V1.replace('''    for day, (lo, hi, mean) in daily_stats(
 if __name__ == "__main__":''')
 TESTS = "import unittest\nfrom analysis import daily_stats, format_daily_stats_markdown\n\n" + "\n".join(
     f"class Test{n}(unittest.TestCase):\n    def test_{n.lower()}(self):\n        self.assertTrue(True)\n" for n in ["Load", "Min", "Max", "Mean", "Table"])
+open(f"{WS}/analysis.py", "w").write(ANALYSIS_V1)
+git(WS, "add", "analysis.py"); git(WS, "commit", "-qm", "analysis v1")
+# uncommitted change on top: the preview pane's Diff mode shows red/green
 open(f"{WS}/analysis.py", "w").write(ANALYSIS_V2)
 open(f"{WS}/test_analysis.py", "w").write(TESTS)
 open(f"{WS}/README.md", "a").write("\n## Data quality\n\nOne gap (2026-10-04T14:00) and one sensor glitch (48.3 °C).\n")
@@ -172,6 +175,14 @@ dash_updates = [info("Home heating dashboard"),
     agent("a-d2", "```ui\n" + json.dumps(ui) + "\n```\n"),
     usage(42100, 400000, 0.1962)]
 
+# ---------------------------------------------------------------- weather-station: activity feed
+S_ACT = "7a3d21fe-activity"
+act_updates = [info("Sensor glitch review"),
+    user("u-a1", "Is the 48.3 \u00b0C reading in readings.csv a sensor glitch?"),
+    tool("Reading readings.csv", "read", {"filePath": f"{WS}/readings.csv"}, out=csv_head, meta={"tool_name": "read_file"}),
+    agent("a-a1", "Yes \u2014 the 48.3 \u00b0C at 2026-10-04T08:00 in `readings.csv` is an isolated spike (neighbours 7.0 and 12.5 \u00b0C), so a sensor glitch, not weather. I can filter it in `analysis.py` if you want."),
+    usage(9800, 400000)]
+
 # ---------------------------------------------------------------- context breakdowns (Vibe's own file)
 for sid, sizes in [(S_STATS, (5, 4, 0, 7.6)), (S_SUB, (5, 4, 0, 12)), (S_DASH, (7, 6, 2, 26))]:
     d = f"{VIBE}/logs/session/unified/{sid}"
@@ -184,12 +195,24 @@ scenario = {
     "probe": {"modes": modes("accept-edits"), "configOptions": config("accept-edits", "mistral-large-4-0-3", "high")},
     "account": {"status": "active", "plan": {"kind": "subscription", "name": "pro", "title": "Pro"}, "budget": {"usagePercentage": 12.0, "resetAt": ago(-60 * 24 * 9), "paygEnabled": False}},
     "identity": {"email": "alex@example.invalid", "firstName": "alex", "lastName": "", "workspace": {"name": "Personal"}},
-    "lists": {WS: [listed(S_SUB, WS, "Weather station data and README", 7), listed(S_STATS, WS, "Daily temperature stats", 36),
+    "lists": {WS: [listed(S_ACT, WS, "Sensor glitch review", 3), listed(S_SUB, WS, "Weather station data and README", 7), listed(S_STATS, WS, "Daily temperature stats", 36),
                    listed("2d9c5f00-pressure", WS, "In two sentences: what does the pressure_hpa column tell us about the weather?", 57)],
               HC: [listed(S_DASH, HC, "Home heating dashboard", 120)]},
     "sessions": {S_STATS: {"updates": stats_updates, "modes": modes("accept-edits"), "configOptions": config("accept-edits", "mistral-large-4-0-3", "high")},
                  S_SUB: {"updates": sub_updates, "modes": modes("accept-edits"), "configOptions": config("accept-edits", "mistral-large-4-0-3", "high")},
-                 S_DASH: {"updates": dash_updates, "modes": modes("auto-approve"), "configOptions": config("auto-approve", "glm-5-3", "max")}},
+                 S_DASH: {"updates": dash_updates, "modes": modes("auto-approve"), "configOptions": config("auto-approve", "glm-5-3", "max")},
+                 S_ACT: {"updates": act_updates, "modes": modes("accept-edits"), "configOptions": config("accept-edits", "mistral-large-4-0-3", "high")}},
+    # a live prompt lifecycle for the activity-feed screenshot: a tool call,
+    # a permission request that stays open, then the turn finishes
+    "live": {"on_prompt": [
+        {"update": tool("Editing analysis.py", "edit", {"filePath": f"{WS}/analysis.py"},
+                        diff=(f"{WS}/analysis.py", ANALYSIS_V1, ANALYSIS_V2), meta={"tool_name": "search_replace"})},
+        {"permission": True},
+        {"finish": "ok"},
+        # a second approval arrives after the turn: the waiting entry stays
+        # answerable from the feed and the sidebar shows WAITING
+        {"permission": True, "title": "Running the tests"},
+    ]},
 }
 json.dump(scenario, open(f"{D}/scenario.json", "w"))
 
@@ -198,6 +221,6 @@ def settings(name, projects, mode):
     os.makedirs(cfg, exist_ok=True)
     json.dump({"projects": projects, "default_session_mode": mode, "auto_account": True, "language": "en",
                "vibe_models": [list(m) for m in MODELS], "vibe_thinking": THINK, "panel_closed": False}, open(f"{cfg}/settings.json", "w"))
-settings("start", [WS], "ask"); settings("session", [WS], "accept-edits"); settings("subagents", [WS], "accept-edits"); settings("dashboard", [HC], "auto-approve")
-for k, v in {"WS": WS, "HC": HC, "S_STATS": S_STATS, "S_SUB": S_SUB, "S_DASH": S_DASH}.items():
+settings("start", [WS], "ask"); settings("session", [WS], "accept-edits"); settings("subagents", [WS], "accept-edits"); settings("dashboard", [HC], "auto-approve"); settings("activity", [WS], "accept-edits")
+for k, v in {"WS": WS, "HC": HC, "S_STATS": S_STATS, "S_SUB": S_SUB, "S_DASH": S_DASH, "S_ACT": S_ACT}.items():
     print(f"{k}={v}")

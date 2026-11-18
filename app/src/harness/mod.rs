@@ -172,6 +172,9 @@ pub struct Harness {
     /// the session on screen when `vibe-acp` ended, or one the user clicked
     /// while it restarted (the latest of these wins).
     open_on_ready: Option<(PathBuf, String)>,
+    /// CLI `--activity`: bring the activity feed back after the
+    /// `--session` of the same start opens (open_session resets the view).
+    pub(crate) activity_on_ready: bool,
     /// Message to send once the agent (and the CLI's session) is ready.
     prompt_on_ready: Option<String>,
     /// Restarts since the last stable connection, and when it became ready.
@@ -317,6 +320,7 @@ impl Harness {
             folder_picker: None,
             remove_confirm: None,
             open_on_ready: None,
+            activity_on_ready: false,
             prompt_on_ready: None,
             artifacts_open: false,
             artifact_selected: None,
@@ -488,6 +492,10 @@ impl Harness {
                     // the CLI's `--session`, or the session that was open
                     // when the connection broke (Handoff 2.8.7)
                     self.open_session(cwd, &sid);
+                }
+                if self.activity_on_ready {
+                    self.activity_on_ready = false;
+                    self.ui.activity_open = true;
                 }
                 // learn the current model / thinking choices and defaults
                 // (an empty session: no model call, nothing stays on disk).

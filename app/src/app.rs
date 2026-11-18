@@ -10,6 +10,12 @@ use std::path::PathBuf;
 mod settings;
 use settings::SettingsNav;
 
+/// What to show when the app starts (`--open`, `--activity`).
+pub enum StartView {
+    Activity,
+    Preview { path: PathBuf, diff: bool },
+}
+
 pub struct App {
     settings: Settings,
     settings_open: bool,
@@ -31,6 +37,7 @@ impl App {
         open: Option<(String, Option<String>)>,
         prompt: Option<String>,
         lang: Option<crate::i18n::Lang>,
+        start_view: Option<StartView>,
     ) -> Self {
         // Everything under the config folder — settings, the chat
         // workspace with the agent's files, worktree checkouts — is the
@@ -98,6 +105,27 @@ impl App {
                     harness.open_when_ready(cwd, sid);
                 }
             }
+        }
+        // CLI `--open <file> [--preview-diff]` / `--activity`
+        match start_view {
+            Some(StartView::Activity) => {
+                harness.ui.activity_open = true;
+                // a `--session` opened once the agent is ready resets the
+                // view; the flag brings the feed back then
+                harness.activity_on_ready = true;
+            }
+            Some(StartView::Preview { path, diff }) => {
+                harness.ui.preview = Some(crate::harness::state::PreviewState {
+                    path: path.to_string_lossy().into_owned(),
+                    width: 380.0,
+                    mode: if diff {
+                        crate::harness::state::PreviewMode::Diff
+                    } else {
+                        crate::harness::state::PreviewMode::Code
+                    },
+                });
+            }
+            None => {}
         }
         harness.prompt_when_ready(prompt);
         let shot = screenshot_path.is_some();

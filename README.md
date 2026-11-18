@@ -37,6 +37,15 @@ A project's start screen:
 
 ![Start screen with the input field, model and thinking pickers and the recent sessions](docs/screenshots/start.png)
 
+The preview pane in Diff mode next to the transcript
+(`--project ~/my/project --session <id> --open analysis.py --preview-diff`):
+
+![The preview pane showing the red/green diff of analysis.py against the last commit, beside the session transcript](docs/screenshots/preview-diff.png)
+
+The activity feed with a waiting approval and a finished turn (`--activity`):
+
+![The activity feed with a waiting permission entry (Allow once, Deny) and a finished entry, the sidebar showing the waiting session and the unread badge](docs/screenshots/activity.png)
+
 </details>
 
 The screenshots show demo projects with prepared sessions
@@ -109,6 +118,11 @@ catwright --project ~/my/project --prompt -      # first message read from stdin
 CATWRIGHT_PROMPT="Hello" catwright --project ~/my/project
 catwright --settings                             # open the settings
 catwright --lang de                              # UI language for this run only
+catwright --project ~/my/project --session <id> --open analysis.py
+                                                 # open a file in the preview pane
+catwright --project ~/my/project --open analysis.py --preview-diff
+                                                 # ... in Diff mode (against the last commit)
+catwright --activity                             # open the activity feed
 ```
 
 `--prompt <text>` sits in the process arguments, which other local users

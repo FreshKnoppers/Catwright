@@ -19,6 +19,10 @@
 //!                                                frame is rasterized on the CPU (softrender.rs),
 //!                                                1360 × 860 points, or `--size WxH`
 //!   catwright --lang en|de                      UI language for this run (not saved)
+//!   catwright --project <dir> --open <file>     open this file in the preview pane
+//!                                                (relative to --project); with
+//!                                                `--preview-diff` in Diff mode
+//!   catwright --activity                        open the activity feed on start
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
 // acp is wired into the harness UI; not every pub item is used by the bin yet
@@ -65,6 +69,12 @@ struct Cli {
     /// `--size WxH`: headless screenshot size in points (default: the
     /// window's 1360x860).
     size: (u32, u32),
+    /// `--open <file>`: open this file in the preview pane on start
+    /// (relative to `--project`); `--preview-diff` picks Diff mode.
+    open_file: Option<String>,
+    preview_diff: bool,
+    /// `--activity`: open the activity feed on start.
+    activity: bool,
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -78,6 +88,9 @@ fn parse_cli(args: &[String]) -> Cli {
         frames: 120,
         headless: false,
         size: HEADLESS_SIZE,
+        open_file: None,
+        preview_diff: false,
+        activity: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -104,6 +117,18 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--headless" => {
                 cli.headless = true;
+                i += 1;
+            }
+            "--open" if i + 1 < args.len() => {
+                cli.open_file = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--preview-diff" => {
+                cli.preview_diff = true;
+                i += 1;
+            }
+            "--activity" => {
+                cli.activity = true;
                 i += 1;
             }
             "--lang" if i + 1 < args.len() => {
@@ -202,7 +227,29 @@ fn main() -> eframe::Result<()> {
     // removal is race-free.
     std::env::remove_var("CATWRIGHT_PROMPT");
     let lang = cli.lang;
+    let project_dir = cli.project.clone();
     let open = cli.project.map(|p| (p, cli.session));
+    // `--open <file> [--preview-diff]` or `--activity`: what to show on start
+    // (a relative `--open` path resolves against `--project`)
+    let start_view = if cli.activity {
+        Some(app::StartView::Activity)
+    } else {
+        cli.open_file.map(|f| {
+            let p = PathBuf::from(&f);
+            let path = if p.is_absolute() {
+                p
+            } else {
+                project_dir
+                    .as_deref()
+                    .map(|pr| PathBuf::from(pr).join(&f))
+                    .unwrap_or(p)
+            };
+            app::StartView::Preview {
+                path,
+                diff: cli.preview_diff,
+            }
+        })
+    };
     if cli.headless {
         // no window: the same App, driven frame by frame and rasterized on
         // the CPU, so screenshots work without X11/Wayland or a GPU
@@ -210,7 +257,7 @@ fn main() -> eframe::Result<()> {
             eprintln!("--headless needs --screenshot <png>");
             std::process::exit(2);
         }
-        let app = app::App::new(screenshot, settings, frames, open, prompt, lang);
+        let app = app::App::new(screenshot, settings, frames, open, prompt, lang, start_view);
         match app.run_headless([cli.size.0, cli.size.1]) {
             Ok(path) => {
                 eprintln!("screenshot saved to {}", path.display());
@@ -229,7 +276,7 @@ fn main() -> eframe::Result<()> {
             fonts::install_fallback_fonts(&cc.egui_ctx);
             theme::apply(&cc.egui_ctx);
             Ok(Box::new(app::App::new(
-                screenshot, settings, frames, open, prompt, lang,
+                screenshot, settings, frames, open, prompt, lang, start_view,
             )))
         }),
     )
@@ -257,6 +304,27 @@ mod tests {
     fn cli(args: &[&str]) -> Cli {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         parse_cli(&args)
+    }
+
+    #[test]
+    fn open_preview_diff_and_activity_flags_parse() {
+        let c = cli(&[
+            "--project",
+            "/tmp/p",
+            "--open",
+            "analysis.py",
+            "--preview-diff",
+        ]);
+        assert_eq!(c.open_file.as_deref(), Some("analysis.py"));
+        assert!(c.preview_diff);
+        assert!(!c.activity);
+        assert_eq!(c.project.as_deref(), Some("/tmp/p"));
+        let c = cli(&["--activity"]);
+        assert!(c.activity);
+        assert!(c.open_file.is_none());
+        assert!(!c.preview_diff);
+        let c = cli(&[]);
+        assert!(c.open_file.is_none() && !c.preview_diff && !c.activity);
     }
 
     #[test]
