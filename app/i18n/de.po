@@ -1802,3 +1802,6 @@ msgstr "Skriptfehler: Der Auswertungsprozess ist abgestürzt."
 
 msgid "The config folder is a symlink: {path}"
 msgstr "Der Konfigurationsordner ist ein Symlink: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"

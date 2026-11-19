@@ -62,6 +62,12 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         let trusted = h.trust.get(&cwd).is_some_and(|t| t.trusted);
                         if let Some(git) = h.watcher.git(&cwd, trusted).cloned() {
                             git_chip(h, ui, &git, &cwd);
+                        } else if !trusted {
+                            ui.label(
+                                RichText::new(tr("Git hidden until the folder is trusted"))
+                                    .size(12.0)
+                                    .color(theme::DIM),
+                            );
                         }
                     }
                     ui.allocate_ui_with_layout(

@@ -79,7 +79,9 @@ fn list_rows(h: &mut Harness, ctx: &egui::Context) -> Vec<ListRow> {
     let Some(cwd) = cwd else {
         return Vec::new();
     };
-    filter_files(h.watcher.files(&cwd), &query, LIST_ROWS)
+    // the file list is a git scan too: only in trusted folders
+    let trusted = h.trust.get(&cwd).is_some_and(|t| t.trusted);
+    filter_files(h.watcher.files(&cwd, trusted), &query, LIST_ROWS)
         .into_iter()
         .map(|rel| ListRow {
             title: format!("@{rel}"),

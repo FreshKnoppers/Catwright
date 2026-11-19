@@ -121,11 +121,10 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
                     .find(|a| a.path == path)
                     .map(|a| a.cwd.clone())
                     .or_else(|| h.current_project.clone());
+                // uncached on purpose: the badge re-checks every frame
                 let outside = base
                     .as_deref()
-                    .map(|b| {
-                        crate::render::outside_workspace_cached(b, std::path::Path::new(&path))
-                    })
+                    .map(|b| crate::render::is_outside_workspace(b, std::path::Path::new(&path)))
                     .unwrap_or(false);
                 preview(ui, &path, outside)
             }
@@ -248,7 +247,14 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                 .truncate(),
             )
             .on_hover_text(&p.path);
-            if p.outside_workspace {
+            // re-check every frame, not only at open: a symlink swapped in
+            // after the confirm must flip the badge (the read itself is
+            // capped and non-blocking, but it must not look trusted)
+            let mut outside = p.outside_workspace;
+            if let Some(b) = base.as_deref() {
+                outside = crate::render::is_outside_workspace(b, std::path::Path::new(&p.path));
+            }
+            if outside {
                 outside_workspace_badge(ui);
             }
             ui.add_space(4.0);

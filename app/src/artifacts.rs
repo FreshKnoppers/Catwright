@@ -383,6 +383,7 @@ mod tests {
                 raw_output: None,
                 meta: None,
                 first_seen: 0,
+                size_hint: 0,
                 last_update: 0,
             },
         )

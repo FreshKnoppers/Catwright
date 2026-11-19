@@ -5720,6 +5720,23 @@ fn safety_ui_screenshots() {
         update: agent_chunk("a2", &big_table),
     });
     shot(&mut h, "23-ui-table-truncated");
+
+    // 5) an untrusted folder: git scans stay off and the header says so
+    if let Some(t) = h.trust.get_mut(&dir) {
+        t.trusted = false;
+    }
+    h.watcher.invalidate_git(&dir);
+    let mut tries = 0;
+    while h.watcher.git(&dir, false).is_some() && tries < 100 {
+        h.watcher.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tries += 1;
+    }
+    assert!(h.watcher.git(&dir, false).is_none());
+    shot(&mut h, "24-git-hidden-untrusted");
+    if let Some(t) = h.trust.get_mut(&dir) {
+        t.trusted = true;
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -5936,7 +5953,7 @@ fn palette_lists_project_files_and_enter_opens_the_preview() {
     h.active = Some("s1".to_string());
     // the watcher lists the project's files in the background
     let mut tries = 0;
-    while h.watcher.files(&dir).is_empty() && tries < 100 {
+    while h.watcher.files(&dir, true).is_empty() && tries < 100 {
         h.watcher.poll();
         std::thread::sleep(std::time::Duration::from_millis(20));
         tries += 1;

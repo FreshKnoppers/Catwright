@@ -1802,3 +1802,6 @@ msgstr "Erro de script: o processo de avaliação morreu."
 
 msgid "The config folder is a symlink: {path}"
 msgstr "A pasta de configuração é um link simbólico: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git oculto até a pasta ser de confiança"

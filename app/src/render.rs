@@ -150,6 +150,10 @@ pub fn field_key(owner: &str, msg_idx: usize, block: usize, name: &str) -> Strin
 /// click within this window. The action text is agent-chosen, so one
 /// accidental click must not send it in the user's name.
 const ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+/// … and not before this minimum gap after arming, so a *double*-click
+/// (two `clicked()` events within egui's double-click time) cannot send
+/// either — an injected "double-click to continue" label must not pass.
+const MIN_ARM_GAP: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// Armed ui buttons, by widget id. Bounded: a wholesale clear at the cap
 /// (the ids are per-frame stable, so old entries expire on their next
@@ -160,12 +164,12 @@ fn armed_buttons() -> &'static std::sync::Mutex<HashMap<egui::Id, std::time::Ins
     ARMED.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Is `id` armed (second click within [`ARM_WINDOW`])? An expired arm is
-/// dropped here.
+/// Is `id` armed AND past the minimum gap (so the second click counts)?
+/// An expired arm is dropped here.
 fn button_armed(id: egui::Id) -> bool {
     let mut m = armed_buttons().lock().unwrap();
     match m.get(&id) {
-        Some(t) if t.elapsed() <= ARM_WINDOW => true,
+        Some(t) if t.elapsed() <= ARM_WINDOW => t.elapsed() >= MIN_ARM_GAP,
         _ => {
             m.remove(&id);
             false

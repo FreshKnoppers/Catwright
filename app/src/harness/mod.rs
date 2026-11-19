@@ -1434,8 +1434,10 @@ impl Harness {
 
     /// Worktrees of `project` without the main worktree (the sidebar list).
     pub fn worktrees_of(&mut self, project: &Path) -> Vec<watch::WorktreeInfo> {
+        // a git scan: only in folders Vibe reported as trusted
+        let trusted = self.trust.get(project).is_some_and(|t| t.trusted);
         self.watcher
-            .worktrees(project)
+            .worktrees(project, trusted)
             .iter()
             .filter(|w| !w.main && w.path != project)
             .cloned()

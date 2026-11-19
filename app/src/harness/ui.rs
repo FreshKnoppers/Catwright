@@ -684,14 +684,18 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
             ),
             tr("Delete all"),
         ),
-        Confirm::PreviewOutside { path, .. } => (
-            tr("Open file outside the workspace?"),
-            trf(
-                "Show “{path}” in the preview? The path lies outside the session's workspace.",
-                &[("path", &path.to_string_lossy())],
-            ),
-            tr("Show"),
-        ),
+        Confirm::PreviewOutside { path, .. } => {
+            // show where the path really points now (symlinks resolved)
+            let shown = path.canonicalize().unwrap_or_else(|_| path.clone());
+            (
+                tr("Open file outside the workspace?"),
+                trf(
+                    "Show “{path}” in the preview? The path lies outside the session's workspace.",
+                    &[("path", &shown.to_string_lossy())],
+                ),
+                tr("Show"),
+            )
+        }
     };
     match dialogs::confirm(ctx, "harness_confirm", title, &text, label, true) {
         Some(true) => {

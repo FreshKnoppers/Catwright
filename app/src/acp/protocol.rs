@@ -382,6 +382,11 @@ pub struct ToolCall {
     /// Client-side arrival of the last update (epoch seconds).
     #[serde(skip)]
     pub last_update: u64,
+    /// Cached retained size in bytes (recomputed in `apply`/`bounded_clone`),
+    /// so the per-update `trim_front` budget does not re-serialize every
+    /// retained tool call on every streamed chunk.
+    #[serde(skip)]
+    pub size_hint: usize,
 }
 
 impl ToolCall {
@@ -414,12 +419,13 @@ impl ToolCall {
         if upd.meta.is_some() {
             self.meta = upd.meta.as_ref().map(bounded_raw).or(upd.meta.clone());
         }
+        self.size_hint = self.compute_size_hint();
     }
 
     /// A copy whose raw input/output obey the retention bound: the first
     /// takeover goes through this cap too, not only updates of an entry.
     pub fn bounded_clone(&self) -> ToolCall {
-        ToolCall {
+        let mut tc = ToolCall {
             raw_input: self.raw_input.as_ref().map(bounded_raw),
             raw_output: self.raw_output.as_ref().map(bounded_raw),
             tool_call_id: self.tool_call_id.clone(),
@@ -431,24 +437,39 @@ impl ToolCall {
             meta: self.meta.as_ref().map(bounded_raw),
             first_seen: self.first_seen,
             last_update: self.last_update,
-        }
+            size_hint: 0,
+        };
+        tc.size_hint = tc.compute_size_hint();
+        tc
     }
 
-    /// Approximate retained size of this entry in bytes (the flood bound in
-    /// `SessionView::trim_front` works on estimates, not exact serializations).
+    /// Recompute the cached retained size (called when fields change, not on
+    /// every read): the flood bound in `SessionView::trim_front` runs per
+    /// streamed chunk and must not re-serialize every retained entry then.
+    fn compute_size_hint(&self) -> usize {
+        let raw = |v: &Option<Value>| {
+            v.as_ref()
+                .map(|v| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0))
+                .unwrap_or(0)
+        };
+        self.title.len()
+            + 8 // kind: small enum, flat estimate
+            + self.tool_call_id.len()
+            + raw(&self.raw_input)
+            + raw(&self.raw_output)
+            + raw(&self.meta)
+            + self
+                .locations
+                .iter()
+                .map(|l| l.path.len() + 8)
+                .sum::<usize>()
+            + self.content.iter().map(content_entry_bytes).sum::<usize>()
+    }
+
+    /// The cached retained size of this entry in bytes (see
+    /// [`Self::compute_size_hint`]).
     pub fn approx_bytes(&self) -> usize {
-        let raw = |v: &Value| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
-        let mut n = self.title.len() + 8 + self.tool_call_id.len(); // kind: small enum, flat estimate
-        n += self.raw_input.as_ref().map(raw).unwrap_or(0);
-        n += self.raw_output.as_ref().map(raw).unwrap_or(0);
-        n += self.meta.as_ref().map(raw).unwrap_or(0);
-        n += self
-            .locations
-            .iter()
-            .map(|l| l.path.len() + 8)
-            .sum::<usize>();
-        n += self.content.iter().map(content_entry_bytes).sum::<usize>();
-        n
+        self.size_hint
     }
 
     /// Client-side duration in seconds: last update minus first arrival; a
@@ -1308,6 +1329,7 @@ mod tests {
             meta: None,
             first_seen: 0,
             last_update: 0,
+            size_hint: 0,
         };
         // only status present: everything else stays
         let upd: ToolCallUpdate =
@@ -1433,6 +1455,7 @@ mod tests {
             meta: None,
             first_seen: 0,
             last_update: 0,
+            size_hint: 0,
         };
         // an update's oversized output is capped by the marker object
         let upd: ToolCallUpdate =

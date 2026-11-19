@@ -109,6 +109,13 @@ The screenshots show demo projects with prepared sessions
   the project, never the session title, the prompt or the answer.
 - File chips only check whether a mentioned file exists; the file is read
   only when you open it.
+- Catwright runs its own `git` lookups (branch/dirty count, file list) only
+  in folders Vibe reported as trusted, and neutralizes any `filter.*`
+  drivers a shipped `.git/config` (zip/tarball) might define — `git status`
+  would otherwise execute them. Until a folder is trusted, the git chip
+  stays hidden.
+- Previewing a path outside the session's workspace asks first; preview
+  reads are capped (2 MiB) and never block on special files.
 - Voice input and output are off by default. When you use them, audio and
   text go to Mistral through Vibe, as described in the next section.
 

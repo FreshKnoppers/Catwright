@@ -437,7 +437,12 @@ impl SessionView {
                 }
             }
             SessionUpdate::Plan(p) => {
-                self.plan = p.entries.clone();
+                // the agent drives the entry list: cap it (keep the latest)
+                let mut entries = p.entries.clone();
+                if entries.len() > Self::MAX_PLAN_ENTRIES {
+                    entries.drain(..entries.len() - Self::MAX_PLAN_ENTRIES);
+                }
+                self.plan = entries;
                 let plan_since_user = self
                     .items
                     .iter()
@@ -496,6 +501,8 @@ impl SessionView {
     const RETAINED_KEEP_ITEMS: usize = 2_000;
     /// Total approximate bytes the retained transcript may hold.
     const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
+    /// How many plan entries are kept (the agent drives the list).
+    const MAX_PLAN_ENTRIES: usize = 256;
 
     /// Approximate retained size of the transcript in bytes (estimates:
     /// text lengths plus each tool call's [`ToolCall::approx_bytes`]).
@@ -974,6 +981,7 @@ fn tool_call_from_update(u: &ToolCallUpdate) -> ToolCall {
         meta: u.meta.clone(),
         first_seen: 0,
         last_update: 0,
+        size_hint: 0,
     }
 }
 
