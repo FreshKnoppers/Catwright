@@ -20,7 +20,7 @@ application menu or with `catwright`.
 **Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
 newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
 installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.0
-to 3.1.2.
+to 3.1.3.
 
 **What's new:**
 

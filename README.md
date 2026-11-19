@@ -95,7 +95,7 @@ The screenshots show demo projects with prepared sessions
 - Linux (Wayland or X11). Other systems are untested.
 - [Mistral Vibe](https://github.com/mistralai/mistral-vibe) installed and
   signed in: run `vibe` once in a terminal and follow the login. Tested with
-  Vibe 3.1.0 to 3.1.2.
+  Vibe 3.1.0 to 3.1.3.
 - To build: a current stable Rust toolchain (`rustup`).
 
 ## Known limits
@@ -104,7 +104,7 @@ The screenshots show demo projects with prepared sessions
   function. When Vibe starts further `vibe -p` processes instead (for
   example to give an agent a different model), those are separate sessions
   with no link to the original one.
-- Tested on Linux only, with Vibe 3.1.0 to 3.1.2.
+- Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
 ## Build and install
 
