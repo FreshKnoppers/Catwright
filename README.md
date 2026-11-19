@@ -73,6 +73,8 @@ The screenshots show demo projects with prepared sessions
   it ran
 - Optional desktop notifications when a turn finishes or needs an approval
   while the window is in the background (Settings → General, off by default)
+- Routines: a prompt Vibe repeats on an interval (`30m`, `2h`, `1d`) while
+  the session is open
 - Subagents with status bars (and a small pixel cat)
 - Context usage as Vibe reports it (the same numbers as the CLI footer), with
   Vibe's own estimate of what fills it
@@ -89,6 +91,10 @@ The screenshots show demo projects with prepared sessions
 - No telemetry. Network traffic only comes from Vibe itself, and only when
   you trigger something.
 - Settings live locally in `~/.config/catwright/`.
+- Desktop notifications are off by default. When turned on, they name only
+  the project, never the session title, the prompt or the answer.
+- File chips only check whether a mentioned file exists; the file is read
+  only when you open it.
 
 ## Requirements
 
@@ -96,6 +102,7 @@ The screenshots show demo projects with prepared sessions
 - [Mistral Vibe](https://github.com/mistralai/mistral-vibe) installed and
   signed in: run `vibe` once in a terminal and follow the login. Tested with
   Vibe 3.1.0 to 3.1.3.
+- Optional: `notify-send` (libnotify) for desktop notifications.
 - To build: a current stable Rust toolchain (`rustup`).
 
 ## Known limits
@@ -104,9 +111,24 @@ The screenshots show demo projects with prepared sessions
   function. When Vibe starts further `vibe -p` processes instead (for
   example to give an agent a different model), those are separate sessions
   with no link to the original one.
+- Routines run only while their session is open in Catwright and idle;
+  Vibe's ACP interface takes intervals only, no cron expressions.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
+## Download
+
+Each [release](https://github.com/FreshKnoppers/Catwright/releases) has a
+ready-built archive for Linux x86_64 (glibc 2.39 or newer):
+
+```sh
+tar xzf catwright-v0.3.0-x86_64-linux.tar.gz
+cd catwright-v0.3.0-x86_64-linux
+./dist/install.sh
+```
+
 ## Build and install
+
+To build it yourself instead:
 
 ```sh
 cd app
