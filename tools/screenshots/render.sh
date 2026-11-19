@@ -11,7 +11,12 @@ repo="$here/../.."
 out="${1:-$repo/docs/screenshots}"
 mkdir -p "$out"
 out=$(CDPATH= cd -- "$out" && pwd)
-D=$(mktemp -d)
+# A fixed folder rather than mktemp: the project icons are derived from the
+# project path, so the same path gives the same icons on every run and
+# machine. mkdir fails (and set -e stops) if someone else holds the name.
+D=/tmp/catwright-screenshots
+rm -rf "$D"
+mkdir -m 700 "$D"
 eval "$(python3 -I "$here/build.py" "$D")"
 mkdir -p "$D/bin" && cp "$here/vibe-acp" "$D/bin/vibe-acp" && chmod +x "$D/bin/vibe-acp"
 (cd "$repo/app" && cargo build --release)
