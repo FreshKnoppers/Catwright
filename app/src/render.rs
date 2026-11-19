@@ -2,11 +2,17 @@
 //! (```ui fenced JSON blocks render as native widgets).
 
 use crate::i18n::{self, tr, trf};
+use crate::icons::{self, Icon};
 use crate::markdown::{MdBlock, MdInline};
 use crate::model::{parse_ui_blocks, UiEvent, UiNode};
 use crate::script::{ActionOutcome, ScriptTool};
+use crate::theme;
+use crate::widgets::{line_galley, paint_line};
 use egui::{Color32, RichText};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 pub const ACCENT: Color32 = crate::theme::ORANGE;
 pub const CODE_BG: Color32 = crate::theme::CARD;
@@ -68,6 +74,20 @@ pub struct RenderCtx<'a> {
     /// script cannot spawn itself (a tool printing its own source as a new
     /// ```ui-js block re-ran until the stack overflowed).
     pub depth: u8,
+    /// File chips while painting an agent answer: path-like words and inline
+    /// code that name an existing file of the session's workspace render as
+    /// clickable chips (click opens the preview pane). `None` outside the
+    /// transcript (artifact previews, the chat view).
+    pub file_chips: Option<FileChips<'a>>,
+}
+
+/// File-chip state of one agent message: the workspace to resolve against
+/// and where clicked paths go.
+pub struct FileChips<'a> {
+    pub cwd: &'a Path,
+    /// Absolute paths of clicked chips; the caller drains this after the
+    /// message is painted and opens each in the preview pane.
+    pub open: &'a mut Vec<String>,
 }
 
 /// Deepest nesting of `text` nodes that is still rendered as markdown.
@@ -89,6 +109,7 @@ impl<'a> RenderCtx<'a> {
             block_offset: 0,
             scroll_salt: 0,
             depth: 0,
+            file_chips: None,
         }
     }
 
@@ -673,11 +694,12 @@ pub fn render_blocks(ui: &mut egui::Ui, blocks: &[MdBlock], msg_idx: usize, ctx:
                         bold: true,
                         ..InlineStyle::BODY
                     },
+                    ctx.file_chips.as_mut(),
                 );
                 ui.add_space(4.0);
             }
             MdBlock::Para(inl) => {
-                paragraph(ui, inl, InlineStyle::BODY);
+                paragraph(ui, inl, InlineStyle::BODY, ctx.file_chips.as_mut());
                 ui.add_space(8.0);
             }
             MdBlock::Code { lang, code, closed } => {
@@ -716,7 +738,9 @@ pub fn render_blocks(ui: &mut egui::Ui, blocks: &[MdBlock], msg_idx: usize, ctx:
                             0.0,
                             ACCENT,
                         );
-                        ui.vertical(|ui| paragraph(ui, item, InlineStyle::BODY));
+                        ui.vertical(|ui| {
+                            paragraph(ui, item, InlineStyle::BODY, ctx.file_chips.as_mut())
+                        });
                     });
                 }
                 ui.add_space(8.0);
@@ -735,6 +759,7 @@ pub fn render_blocks(ui: &mut egui::Ui, blocks: &[MdBlock], msg_idx: usize, ctx:
                                     color: DIM,
                                     ..InlineStyle::BODY
                                 },
+                                ctx.file_chips.as_mut(),
                             );
                         });
                     });
@@ -749,7 +774,7 @@ pub fn render_blocks(ui: &mut egui::Ui, blocks: &[MdBlock], msg_idx: usize, ctx:
             }
             MdBlock::Table { columns, rows } => {
                 let id = egui::Id::new(("md_tbl", msg_idx, block_idx, columns.len(), rows.len()));
-                render_table_grid(ui, id, columns, rows);
+                render_table_grid(ui, id, columns, rows, ctx.file_chips.as_mut());
                 ui.add_space(10.0);
             }
             MdBlock::Hr => {
@@ -948,6 +973,7 @@ pub(crate) fn render_table_grid(
     id: egui::Id,
     columns: &[Vec<MdInline>],
     rows: &[Vec<Vec<MdInline>>],
+    mut chips: Option<&mut FileChips>,
 ) {
     const PADDING: f32 = 20.0;
     const MINIMUM: f32 = 48.0;
@@ -992,7 +1018,7 @@ pub(crate) fn render_table_grid(
         .show(ui, |ui| {
             ui.set_max_width(total);
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-            let table_row =
+            let mut table_row =
                 |ui: &mut egui::Ui, cells: &[Vec<MdInline>], st: InlineStyle, index: usize| {
                     let bg = ui.painter().add(egui::Shape::Noop);
                     let row = ui.horizontal_top(|ui| {
@@ -1007,7 +1033,7 @@ pub(crate) fn render_table_grid(
                                     frame.show(ui, |ui| {
                                         ui.set_width(*width);
                                         if let Some(cell) = cells.get(col) {
-                                            render_table_cell(ui, cell, st);
+                                            render_table_cell(ui, cell, st, chips.as_deref_mut());
                                         }
                                     });
                                 },
@@ -1037,10 +1063,15 @@ pub(crate) fn render_table_grid(
 
 /// One grid cell: a horizontal run of inline markdown, with zero item
 /// spacing so several snippets look like one line of text.
-fn render_table_cell(ui: &mut egui::Ui, cell: &[MdInline], st: InlineStyle) {
+fn render_table_cell(
+    ui: &mut egui::Ui,
+    cell: &[MdInline],
+    st: InlineStyle,
+    chips: Option<&mut FileChips>,
+) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        render_inline_styled(ui, cell, st);
+        render_inline_styled(ui, cell, st, chips);
     });
 }
 
@@ -1134,13 +1165,180 @@ fn append_inline(job: &mut egui::text::LayoutJob, inl: &[MdInline], st: InlineSt
     }
 }
 
+// ---------------------------------------------------------------------------
+// File chips: path-like words in an answer that name an existing file of the
+// session's workspace become clickable chips (click opens the preview pane)
+// ---------------------------------------------------------------------------
+
+/// How long a cached existence answer stays valid, so a file that appears or
+/// disappears is picked up without a stat per token per frame.
+const FILE_EXISTS_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// path -> (is a file, checked at). Existence only; file contents are never
+/// read for chips.
+fn file_exists_cached(p: &Path) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (bool, Instant)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut c = cache.lock().unwrap();
+    if let Some((v, at)) = c.get(p) {
+        if at.elapsed() < FILE_EXISTS_TTL {
+            return *v;
+        }
+    }
+    let v = std::fs::metadata(p).map(|m| m.is_file()).unwrap_or(false);
+    if c.len() > 8192 {
+        c.clear();
+    }
+    c.insert(p.to_path_buf(), (v, Instant::now()));
+    v
+}
+
+/// Canonical workspace root, cached (a syscall per token otherwise).
+fn canonical_cwd(cwd: &Path) -> PathBuf {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut c = cache.lock().unwrap();
+    if let Some(v) = c.get(cwd) {
+        return v.clone();
+    }
+    let v = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    c.insert(cwd.to_path_buf(), v.clone());
+    v
+}
+
+/// Lexical normalization (`.` and `..` resolved without touching the disk).
+fn normalize_lexically(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve one token (an inline-code span or a path-like word) to an
+/// existing file inside the workspace `cwd`. Absolute paths must live under
+/// `cwd`; relative ones resolve against it. Only existence is checked
+/// (cached) — contents are never read. Function names and symbols never
+/// match: without a slash or a file extension the token is not a candidate.
+pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
+    let t = chip_core(token);
+    if t.is_empty() || t.chars().any(|c| c.is_whitespace()) {
+        return None;
+    }
+    let looks_like_path = t.contains('/') || {
+        let name = t.rsplit('/').next().unwrap_or(t);
+        match name.rsplit_once('.') {
+            Some((stem, ext)) => {
+                !stem.is_empty()
+                    && (1..=5).contains(&ext.len())
+                    && ext.chars().all(|c| c.is_ascii_alphanumeric())
+            }
+            None => false,
+        }
+    };
+    if !looks_like_path {
+        return None;
+    }
+    // relative tokens resolve against the canonical root; an absolute one
+    // may be spelled through the workspace path as given (a symlinked
+    // folder) or through its canonical form
+    let root = canonical_cwd(cwd);
+    let raw = Path::new(t);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        root.join(raw)
+    };
+    let abs = normalize_lexically(&joined);
+    if !abs.starts_with(&root) && !abs.starts_with(normalize_lexically(cwd)) {
+        return None;
+    }
+    if file_exists_cached(&abs) {
+        Some(abs)
+    } else {
+        None
+    }
+}
+
+/// The path-like core of a token: surrounding quotes and brackets, list
+/// punctuation and sentence-ending marks stripped (`(src/main.rs),` and
+/// `analysis.py.` both give the file name).
+fn chip_core(token: &str) -> &str {
+    const WRAP: [char; 12] = ['`', '"', '\'', '(', ')', '[', ']', '{', '}', ',', ';', ':'];
+    token
+        .trim()
+        .trim_matches(WRAP)
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(['"', '\'', ')', ']', '}'])
+}
+
+/// True when any inline of the run resolves to a workspace file.
+fn has_file_chip(inl: &[MdInline], chips: Option<&FileChips>) -> bool {
+    let Some(chips) = chips else { return false };
+    inl.iter().any(|item| match item {
+        MdInline::Text(t) => t
+            .split_whitespace()
+            .any(|w| resolve_workspace_file(chips.cwd, w).is_some()),
+        MdInline::Code(c) => resolve_workspace_file(chips.cwd, c).is_some(),
+        MdInline::Bold(inner) | MdInline::Italic(inner) => has_file_chip(inner, Some(chips)),
+        MdInline::Link { .. } => false,
+    })
+}
+
+/// One file chip: file icon + the token as typed; the tooltip shows the
+/// absolute path, a click reports the path to `open`.
+fn file_chip(ui: &mut egui::Ui, token: &str, path: &Path, size: f32, open: &mut Vec<String>) {
+    let g = line_galley(
+        ui,
+        token,
+        egui::FontId::monospace(size - 2.0),
+        CODE_TEXT,
+        220.0,
+    );
+    let h = size + 6.0;
+    let w = g.size().x + 24.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let fill = if resp.hovered() {
+        theme::HOVER
+    } else {
+        CODE_BG
+    };
+    ui.painter().rect(
+        rect,
+        3.0,
+        fill,
+        egui::Stroke::new(1.0_f32, theme::BORDER_SOFT),
+    );
+    icons::paint(
+        ui.painter(),
+        Icon::File,
+        egui::pos2(rect.left() + 6.0, rect.center().y - 4.5),
+        0.9,
+        theme::DIM,
+    );
+    paint_line(ui, rect.left() + 17.0, rect.center().y, g);
+    let clicked = resp.clicked();
+    resp.on_hover_text(path.to_string_lossy());
+    if clicked {
+        open.push(path.to_string_lossy().into_owned());
+    }
+}
+
 /// One paragraph-like block. A single layout job wraps cleanly and selects
-/// as one text; a run with links keeps the widget path (links are clickable).
-fn paragraph(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
-    if has_link(inl) {
+/// as one text; a run with links or file chips keeps the widget path (both
+/// are clickable).
+fn paragraph(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle, chips: Option<&mut FileChips>) {
+    if has_link(inl) || has_file_chip(inl, chips.as_deref()) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            render_inline_styled(ui, inl, st);
+            render_inline_styled(ui, inl, st, chips);
         });
         return;
     }
@@ -1150,7 +1348,12 @@ fn paragraph(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
     ui.add(egui::Label::new(job).wrap());
 }
 
-fn render_inline_styled(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
+fn render_inline_styled(
+    ui: &mut egui::Ui,
+    inl: &[MdInline],
+    st: InlineStyle,
+    mut chips: Option<&mut FileChips>,
+) {
     for item in inl {
         match item {
             MdInline::Text(t) => {
@@ -1159,18 +1362,61 @@ fn render_inline_styled(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
                     if i > 0 {
                         ui.end_row();
                     }
-                    if !seg.is_empty() {
+                    if seg.is_empty() {
+                        continue;
+                    }
+                    let Some(ch) = chips.as_deref_mut() else {
                         ui.label(st.apply(RichText::new(seg).color(st.color)));
+                        continue;
+                    };
+                    // path-like words that name a workspace file become chips
+                    for piece in seg.split_inclusive(char::is_whitespace) {
+                        if piece.chars().all(|c| c.is_whitespace()) {
+                            ui.label(st.apply(RichText::new(piece).color(st.color)));
+                            continue;
+                        }
+                        let core = chip_core(piece);
+                        if let Some(path) = resolve_workspace_file(ch.cwd, core) {
+                            // the punctuation and the space around the path
+                            // stay text, so the sentence keeps its spacing
+                            let at = piece.find(core).unwrap_or(0);
+                            let (before, after) = (&piece[..at], &piece[at + core.len()..]);
+                            if !before.is_empty() {
+                                ui.label(st.apply(RichText::new(before).color(st.color)));
+                            }
+                            file_chip(ui, core, &path, st.size, ch.open);
+                            if !after.is_empty() {
+                                ui.label(st.apply(RichText::new(after).color(st.color)));
+                            }
+                        } else {
+                            ui.label(st.apply(RichText::new(piece).color(st.color)));
+                        }
                     }
                 }
             }
             MdInline::Bold(inner) => {
-                render_inline_styled(ui, inner, InlineStyle { bold: true, ..st });
+                render_inline_styled(
+                    ui,
+                    inner,
+                    InlineStyle { bold: true, ..st },
+                    chips.as_deref_mut(),
+                );
             }
             MdInline::Italic(inner) => {
-                render_inline_styled(ui, inner, InlineStyle { italic: true, ..st });
+                render_inline_styled(
+                    ui,
+                    inner,
+                    InlineStyle { italic: true, ..st },
+                    chips.as_deref_mut(),
+                );
             }
             MdInline::Code(c) => {
+                if let Some(ch) = chips.as_deref_mut() {
+                    if let Some(path) = resolve_workspace_file(ch.cwd, c) {
+                        file_chip(ui, chip_core(c), &path, st.size, ch.open);
+                        continue;
+                    }
+                }
                 ui.label(
                     RichText::new(c)
                         .monospace()
@@ -1308,7 +1554,7 @@ pub fn render_ui_node(
                 })
                 .collect();
             let id = egui::Id::new(("tbl", msg_idx, columns.len(), rows.len()));
-            render_table_grid(ui, id, &header, &cells);
+            render_table_grid(ui, id, &header, &cells, None);
             ui.add_space(6.0);
         }
         UiNode::Form { submit, fields } => {
@@ -2667,5 +2913,70 @@ mod tests {
             with_nested, 1,
             "only the outer block numbered at the top level"
         );
+    }
+
+    #[test]
+    fn workspace_file_resolution_resolves_only_existing_files_inside_cwd() {
+        let dir = std::env::temp_dir().join(format!("cw-chips-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("analysis.py"), "x").unwrap();
+        std::fs::write(dir.join("src").join("main.rs"), "x").unwrap();
+        let cwd = dir.canonicalize().unwrap();
+        // relative paths and inline-code punctuation resolve
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "analysis.py").unwrap(),
+            cwd.join("analysis.py")
+        );
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "`analysis.py`").unwrap(),
+            cwd.join("analysis.py")
+        );
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "src/main.rs").unwrap(),
+            cwd.join("src").join("main.rs")
+        );
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "./analysis.py").unwrap(),
+            cwd.join("analysis.py")
+        );
+        // an absolute path inside the workspace resolves
+        let abs = cwd.join("analysis.py");
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, abs.to_str().unwrap()).unwrap(),
+            abs
+        );
+        // outside the workspace stays plain text
+        assert!(super::resolve_workspace_file(&cwd, "/etc/passwd").is_none());
+        assert!(super::resolve_workspace_file(&cwd, "../outside.py").is_none());
+        // function names and symbols are not candidates
+        assert!(super::resolve_workspace_file(&cwd, "daily_stats").is_none());
+        assert!(super::resolve_workspace_file(&cwd, "load(path)").is_none());
+        // path-like but not existing stays plain text
+        assert!(super::resolve_workspace_file(&cwd, "missing.py").is_none());
+        // sentence and list punctuation around a path is not part of it
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "analysis.py.").unwrap(),
+            cwd.join("analysis.py")
+        );
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "(src/main.rs),").unwrap(),
+            cwd.join("src").join("main.rs")
+        );
+        assert_eq!(super::chip_core("(src/main.rs),"), "src/main.rs");
+        assert_eq!(super::chip_core("analysis.py. "), "analysis.py");
+        // a workspace opened through a symlink resolves the same files
+        let link = std::env::temp_dir().join(format!("cw-chips-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&cwd, &link).unwrap();
+        assert_eq!(
+            super::resolve_workspace_file(&link, "analysis.py").unwrap(),
+            cwd.join("analysis.py")
+        );
+        let via_link = link.join("analysis.py");
+        assert!(super::resolve_workspace_file(&link, via_link.to_str().unwrap()).is_some());
+        let _ = std::fs::remove_file(&link);
+        assert!(super::resolve_workspace_file(&cwd, "2.5").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

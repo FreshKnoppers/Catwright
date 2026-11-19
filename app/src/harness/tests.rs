@@ -3263,6 +3263,26 @@ fn session_closed_drops_the_view() {
 }
 
 #[test]
+fn dropped_files_attach_deduplicated_like_the_plus_picker() {
+    let dir = std::env::temp_dir().join(format!("cw-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    let a = dir.join("a.png");
+    let b = dir.join("notes.txt");
+    std::fs::write(&a, "x").unwrap();
+    std::fs::write(&b, "x").unwrap();
+    // a drop may list several files, a repeated path attaches only once
+    crate::harness::ui::composer::attach_dropped(&mut h, vec![a.clone(), b.clone(), a.clone()]);
+    assert_eq!(h.attachments, vec![a.clone(), b.clone()]);
+    // and they go out on send exactly like picker attachments
+    let blocks = prompt_blocks("hi", &h.attachments, false);
+    assert_eq!(blocks.len(), 3, "text first, then both files as links");
+    assert!(matches!(blocks[1], PromptBlock::ResourceLink { .. }));
+    assert!(matches!(blocks[2], PromptBlock::ResourceLink { .. }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn prompt_blocks_text_and_resource_links() {
     let f = std::env::temp_dir().join(format!("harness-pb-{}.txt", std::process::id()));
     std::fs::write(&f, "x").unwrap();
@@ -4010,7 +4030,7 @@ fn create_worktree_adds_the_copy_as_its_own_workspace() {
     .is_some());
     let (mut h, _agent) = setup(vec![], "ask");
     h.current_project = Some(repo.clone());
-    h.create_worktree();
+    h.create_worktree(None);
     assert!(h.worktree_running(), "the checkout runs in the background");
     for _ in 0..1500 {
         h.poll();
@@ -4930,6 +4950,7 @@ fn a_loaded_session_asks_for_its_review_state_again() {
                 .to_string(),
         );
     }
+
     assert!(methods.contains(&"_loops/list".to_string()));
     assert!(methods.contains(&"_review/state".to_string()));
     h.handle_event(AcpEvent::ExtResult {
@@ -5084,7 +5105,7 @@ fn failed_worktree_is_cleaned_up_and_explained() {
     // a repository without any commit: there is no HEAD to check out
     assert!(crate::harness::watch::git_output(&repo, &["init", "-q"]).is_some());
     let target = base.join("wt").join("repo-1");
-    let err = make_worktree(&repo, &target).expect_err("no HEAD, no worktree");
+    let err = make_worktree(&repo, &target, None).expect_err("no HEAD, no worktree");
     assert!(!err.is_empty());
     let branches = crate::harness::watch::git_output(&repo, &["branch", "--list"]).unwrap();
     assert!(!branches.contains("catwright/"), "{branches}");
@@ -5264,6 +5285,7 @@ fn feature_screenshots() {
     let shot = |h: &mut Harness, name: &str| {
         let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
             let _ = crate::harness::ui::show(h, ctx);
+            crate::harness::ui::show_dialogs(h, ctx);
         });
         // the frame is not blank
         let bg = crate::theme::BG;
@@ -5314,6 +5336,125 @@ fn feature_screenshots() {
     for level in ["compact", "standard", "detailed", "verbose"] {
         h.ui.transcript_detail = level.to_string();
         shot(&mut h, &format!("05-detail-{level}"));
+    }
+    // file chips: an agent answer naming files of the workspace (and one
+    // that does not exist, which stays plain text)
+    h.ui.transcript_detail = "standard".to_string();
+    h.handle_event(update(agent_chunk(
+        "a2",
+        "Updated `analysis.py` — see analysis.py for the table; `missing.py` is not here.",
+    )));
+    shot(&mut h, "07-file-chips");
+    // a folded round with its detail panel open (tool calls, status, duration)
+    {
+        let rounds = h.sessions["s1"].folded_rounds();
+        let rk = crate::acp::session::round_key("s1", &rounds[0]);
+        h.open_groups.insert(format!("detail::{rk}"));
+        shot(&mut h, "12-round-detail");
+        h.open_groups.remove(&format!("detail::{rk}"));
+    }
+    // drag-over hint on the composer (hovered files injected into the input)
+    {
+        let h = &mut h;
+        let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+            ctx.input_mut(|i| {
+                i.raw.hovered_files.push(egui::HoveredFile {
+                    path: Some(std::path::PathBuf::from("/tmp/demo.png")),
+                    mime: "image/png".to_string(),
+                });
+            });
+            let _ = crate::harness::ui::show(h, ctx);
+        });
+        assert!(img.pixels().any(|p| p.0[..3]
+            != [
+                crate::theme::BG.r(),
+                crate::theme::BG.g(),
+                crate::theme::BG.b()
+            ]));
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            img.save(std::path::Path::new(&out).join("08-drop-hint.png"))
+                .unwrap();
+        }
+    }
+    // routines card with two loops and its "Delete all" button, then the
+    // confirmation dialog for _loops/clear
+    h.loops.insert(
+        "s1".to_string(),
+        vec![
+            crate::harness::extras::LoopInfo {
+                id: "l1".to_string(),
+                prompt: "Daily summary\nSummarise the day.".to_string(),
+                interval_seconds: Some(86400),
+                cron: None,
+                next_fire_at: crate::harness::extras::now_epoch() as f64 + 3600.0,
+            },
+            crate::harness::extras::LoopInfo {
+                id: "l2".to_string(),
+                prompt: "Weekly report\nReport on Monday.".to_string(),
+                interval_seconds: None,
+                cron: Some("0 9 * * 1".to_string()),
+                next_fire_at: crate::harness::extras::now_epoch() as f64 + 90000.0,
+            },
+        ],
+    );
+    h.ui.panel_sections.insert("routines", true);
+    shot(&mut h, "09-routines");
+    h.ui.confirm = Some(crate::harness::state::Confirm::ClearRoutines {
+        session_id: "s1".to_string(),
+        count: 2,
+    });
+    shot(&mut h, "10-confirm-clear-routines");
+    h.ui.confirm = None;
+    // the command palette (Ctrl K) with a file query: project files listed
+    h.ui.palette = Some(crate::harness::state::PaletteState {
+        query: "analysis".to_string(),
+        selected: 0,
+        scroll_to_selected: false,
+    });
+    shot(&mut h, "11-palette-files");
+    h.ui.palette = None;
+    // a worktree of the project shows in the sidebar; the delete dialog warns
+    {
+        let wt = std::env::temp_dir().join(format!("cw-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        crate::harness::watch::git_output(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "catwright/demo",
+                &wt.to_string_lossy(),
+                "HEAD",
+            ],
+        );
+        h.watcher.invalidate_git(&dir); // re-read now, not after the 6 s interval
+        let mut tries = 0;
+        while h.worktrees_of(&dir).is_empty() && tries < 100 {
+            h.watcher.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            tries += 1;
+        }
+        shot(&mut h, "13-worktrees");
+        let w = h
+            .worktrees_of(&dir)
+            .into_iter()
+            .next()
+            .expect("one worktree");
+        std::fs::write(w.path.join("dirty.txt"), "x").unwrap();
+        h.ui.worktree_delete = Some(crate::harness::state::WorktreeDelete {
+            project: dir.clone(),
+            path: w.path.clone(),
+            branch: w.branch.clone(),
+            dirty: Harness::worktree_dirty(&w.path),
+            delete_branch: false,
+        });
+        shot(&mut h, "14-worktree-delete");
+        h.ui.worktree_delete = None;
+        crate::harness::watch::git_output(
+            &dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -5411,5 +5552,443 @@ fn compact_round_keeps_the_changed_file_card() {
         texts.iter().any(|t| t == "analysis.py"),
         "the changed-file card stays:\n{texts:#?}"
     );
+}
+
+#[test]
+fn clear_loops_sends_loops_clear_and_refreshes_the_list() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    h.clear_loops("s1");
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], json!("_loops/clear"));
+    assert_eq!(msg["params"]["sessionId"], json!("s1"));
+    // the answer refreshes the list
+    h.handle_event(AcpEvent::ExtResult {
+        kind: ExtKind::LoopsClear {
+            session_id: "s1".to_string(),
+        },
+        result: json!({}),
+    });
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], json!("_loops/list"));
+}
+
+#[test]
+fn desktop_notifications_queue_only_when_unfocused_and_opted_in() {
+    let dir = std::env::temp_dir().join(format!("cw-notify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    let done: proto::PromptResult =
+        serde_json::from_value(json!({"stopReason": "end_turn"})).unwrap();
+    let mut finish = |h: &mut Harness| {
+        h.handle_event(AcpEvent::PromptFinished {
+            session_id: "s1".to_string(),
+            result: done.clone(),
+        });
+        agent.read_msg(); // the list refresh after the turn
+    };
+
+    // opted in, window unfocused: a finished turn queues a notification that
+    // names the project only (never title, prompt or answer)
+    h.notify_events = true;
+    h.window_focused = false;
+    finish(&mut h);
+    let notes = h.take_pending_notifications();
+    assert_eq!(notes.len(), 1, "one notification per finished turn");
+    assert!(
+        notes[0].contains("Vibe is done in"),
+        "generic text: {}",
+        notes[0]
+    );
+    assert!(
+        notes[0].contains(&project_name(&dir)),
+        "names the project: {}",
+        notes[0]
+    );
+
+    // window focused: nothing is queued
+    h.window_focused = true;
+    finish(&mut h);
+    assert!(h.take_pending_notifications().is_empty());
+
+    // opted out: nothing is queued even when unfocused
+    h.notify_events = false;
+    h.window_focused = false;
+    finish(&mut h);
+    assert!(h.take_pending_notifications().is_empty());
+
+    // a waiting approval queues the approval text
+    h.notify_events = true;
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    let notes = h.take_pending_notifications();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("approval"), "approval text: {}", notes[0]);
+    assert!(notes[0].contains(&project_name(&dir)));
+
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn palette_lists_project_files_and_enter_opens_the_preview() {
+    let dir = std::env::temp_dir().join(format!("cw-pal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("analysis.py"), "x").unwrap();
+    std::fs::write(dir.join("src").join("main.rs"), "x").unwrap();
+    crate::harness::watch::git_output(&dir, &["init", "-q"]);
+    crate::harness::watch::git_output(&dir, &["add", "."]);
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    // the watcher lists the project's files in the background
+    let mut tries = 0;
+    while h.watcher.files(&dir).is_empty() && tries < 100 {
+        h.watcher.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tries += 1;
+    }
+    use crate::harness::ui::palette::{apply, entries, Action};
+    let file_hits = |list: &[crate::harness::ui::palette::Entry]| -> Vec<String> {
+        list.iter()
+            .filter_map(|e| match &e.action {
+                Action::File(_, rel) => Some(rel.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // without a query the palette keeps to actions and sessions
+    let all = entries(&mut h, "");
+    assert!(file_hits(&all).is_empty(), "files: {:?}", file_hits(&all));
+    // a query lists the matching project files
+    let files = file_hits(&entries(&mut h, "a"));
+    assert!(files.iter().any(|f| f == "analysis.py"), "files: {files:?}");
+    assert!(files.iter().any(|f| f == "src/main.rs"), "files: {files:?}");
+    // fuzzy query narrows them
+    let hits = entries(&mut h, "main");
+    assert!(
+        hits.iter()
+            .any(|e| matches!(&e.action, Action::File(_, r) if r == "src/main.rs")),
+        "fuzzy hit for 'main'"
+    );
+    // Enter on a file opens the preview pane with the resolved path
+    let mut out = crate::harness::ui::HarnessAction::None;
+    apply(
+        &mut h,
+        Action::File(dir.clone(), "analysis.py".to_string()),
+        &mut out,
+    );
+    let preview = h.ui.preview.expect("preview opens on Enter");
+    assert!(
+        preview.path.ends_with("analysis.py"),
+        "path: {}",
+        preview.path
+    );
+    assert_eq!(preview.mode, crate::harness::state::PreviewMode::Code);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_call_arrival_timestamps_drive_the_round_duration() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1"); // consumes session/list
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    let call = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Writing analysis.py",
+        "kind": "edit",
+        "status": "in_progress",
+    }))
+    .unwrap();
+    h.handle_event(update(call));
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let tc = &h.sessions["s1"].tool_calls["t1"];
+    assert!(tc.first_seen > 0, "first arrival stamped");
+    assert!(tc.last_update >= tc.first_seen);
+    // still running: duration measures up to now
+    assert_eq!(tc.duration_secs(now()), Some(now() - tc.first_seen));
+    let upd = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "status": "completed",
+    }))
+    .unwrap();
+    h.handle_event(update(upd));
+    let tc = &h.sessions["s1"].tool_calls["t1"];
+    assert_eq!(tc.status, crate::acp::protocol::ToolStatus::Completed);
+    assert!(tc.last_update >= tc.first_seen, "last update stamped");
+    assert!(tc.duration_secs(now() + 60) >= tc.duration_secs(now()));
+}
+
+#[test]
+fn worktree_porcelain_parsing_marks_the_main_worktree() {
+    let out = "worktree /home/u/proj\nHEAD abc123\nbranch refs/heads/main\n\nworktree /cfg/worktrees/proj-1\nHEAD def456\nbranch refs/heads/catwright/proj-1\n";
+    let wts = crate::harness::watch::parse_worktrees(out);
+    assert_eq!(wts.len(), 2);
+    assert!(wts[0].main, "the first entry is the main worktree");
+    assert!(!wts[1].main);
+    assert_eq!(wts[0].branch, "main");
+    assert_eq!(wts[1].branch, "catwright/proj-1");
+    assert_eq!(
+        wts[1].path,
+        std::path::PathBuf::from("/cfg/worktrees/proj-1")
+    );
+}
+
+#[test]
+fn delete_worktree_removes_it_and_the_branch_only_when_asked() {
+    use crate::harness::watch::run_git;
+    let base = std::env::temp_dir().join(format!("cw-wtdel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(
+        &repo,
+        &["init", "-q", "-b", "main"],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    std::fs::write(repo.join("f.txt"), "x").unwrap();
+    run_git(&repo, &["add", "."], Duration::from_secs(30)).unwrap();
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "c1",
+        ],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let wt = base.join("wt1");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt-branch",
+            &wt.to_string_lossy(),
+            "HEAD",
+        ],
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    assert!(wt.exists());
+
+    let (mut h, _agent) = setup(vec![repo.clone()], "ask");
+    // without the branch option: worktree gone, branch stays
+    h.delete_worktree(&repo, &wt, "wt-branch", false);
+    let mut tries = 0;
+    while (wt.exists() || !h.status.contains("Worktree deleted.")) && tries < 200 {
+        h.poll();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        tries += 1;
+    }
+    assert!(!wt.exists(), "worktree removed");
+    let branches = run_git(&repo, &["branch", "--list"], Duration::from_secs(30)).unwrap();
+    assert!(
+        branches.contains("wt-branch"),
+        "branch kept by default: {branches}"
+    );
+
+    // with the option: branch deleted too
+    let wt2 = base.join("wt2");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt-branch2",
+            &wt2.to_string_lossy(),
+            "HEAD",
+        ],
+        Duration::from_secs(60),
+    )
+    .unwrap();
+    h.delete_worktree(&repo, &wt2, "wt-branch2", true);
+    let mut tries = 0;
+    while (wt2.exists() || !h.status.contains("Worktree deleted.")) && tries < 200 {
+        h.poll();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        tries += 1;
+    }
+    assert!(!wt2.exists());
+    let branches = run_git(&repo, &["branch", "--list"], Duration::from_secs(30)).unwrap();
+    assert!(
+        !branches.contains("wt-branch2"),
+        "branch deleted on request: {branches}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A start ref names where the worktree's own branch begins: `main`, which
+/// is checked out in the main worktree, must work (git refuses to check
+/// out one branch twice), and the new branch is `catwright/<name>`.
+#[test]
+fn worktree_with_a_start_ref_gets_its_own_branch_from_that_ref() {
+    let base = std::env::temp_dir().join(format!(
+        "od-wtr-{}-{:x}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| crate::harness::watch::git_output(&repo, args);
+    assert!(git(&["init", "-q", "-b", "main"]).is_some());
+    let commit = |msg: &str| {
+        git(&[
+            "-c",
+            "user.name=Catwright",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            msg,
+            "--allow-empty",
+        ])
+    };
+    assert!(commit("first").is_some());
+    let first = git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    assert!(commit("second").is_some());
+    // the branch checked out in the main worktree as start ref
+    let target = base.join("wt").join("repo-1");
+    make_worktree(&repo, &target, Some("main")).expect("worktree from main");
+    let wt = |args: &[&str]| crate::harness::watch::git_output(&target, args);
+    assert_eq!(
+        wt(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap().trim(),
+        "catwright/repo-1"
+    );
+    // a commit as start ref: the new branch starts there
+    let target2 = base.join("wt").join("repo-2");
+    make_worktree(&repo, &target2, Some(&first)).expect("worktree from a commit");
+    assert_eq!(
+        crate::harness::watch::git_output(&target2, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim(),
+        first
+    );
+    // option-like input never reaches git
+    let target3 = base.join("wt").join("repo-3");
+    assert!(make_worktree(&repo, &target3, Some("--detach")).is_err());
+    assert!(!target3.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The history a `session/load` replays carries no timing: its tool calls
+/// get no client-side timestamps, so the per-round view shows no made-up
+/// duration. Calls of a live turn afterwards are timed again.
+#[test]
+fn replayed_tool_calls_have_no_duration() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    h.open_session(dir.clone(), "s1");
+    assert_eq!(agent.read_msg()["method"], "session/load");
+    assert!(h.sessions["s1"].replaying, "the load replays the history");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    let call = |id: &str, status: &str| {
+        serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "Reading analysis.py",
+            "kind": "read",
+            "status": status,
+        }))
+        .unwrap()
+    };
+    h.handle_event(update(call("old", "completed")));
+    h.handle_event(AcpEvent::SessionLoaded {
+        session_id: "s1".to_string(),
+        result: serde_json::from_value(json!({})).unwrap(),
+    });
+    assert!(!h.sessions["s1"].replaying);
+    let old = &h.sessions["s1"].tool_calls["old"];
+    assert_eq!(old.first_seen, 0);
+    assert_eq!(old.duration_secs(u64::MAX), None, "no duration for history");
+    // a later update of the replayed call does not invent a start either
+    let upd = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "old",
+        "status": "completed",
+    }))
+    .unwrap();
+    h.handle_event(update(upd));
+    assert_eq!(h.sessions["s1"].tool_calls["old"].duration_secs(0), None);
+    // a live call is timed
+    h.handle_event(update(call("new", "in_progress")));
+    let new = &h.sessions["s1"].tool_calls["new"];
+    assert!(new.first_seen > 0);
+    assert!(new.duration_secs(new.first_seen + 3) == Some(3));
+}
+
+/// A waiting feed entry leaves the feed (and the badge) once its approval
+/// is answered — it no longer waits for anything.
+#[test]
+fn answered_approval_leaves_the_waiting_feed() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(7),
+        request: permission_request("s1"),
+    });
+    let waiting: Vec<_> = h
+        .activity
+        .iter()
+        .filter(|e| e.kind == ActivityKind::Waiting)
+        .cloned()
+        .collect();
+    assert_eq!(waiting.len(), 1);
+    assert!(h.activity_shown(&waiting[0]));
+    let before = h.activity_unseen();
+    assert!(before >= 1);
+    h.answer_permission("s1", &json!(7), "allow_once");
+    assert!(
+        !h.activity_shown(&waiting[0]),
+        "answered: no longer waiting"
+    );
+    assert_eq!(h.activity_unseen(), before - 1, "the badge drops it too");
+}
+
+/// The feed keeps the newest 100 entries; the read marker moves with the
+/// dropped front, so new entries still count as unseen.
+#[test]
+fn activity_read_marker_survives_the_bound() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    for _ in 0..100 {
+        h.push_activity(ActivityKind::Finished, "s1", "done".to_string(), None);
+    }
+    h.ui.activity_seen = h.activity.len();
+    assert_eq!(h.activity_unseen(), 0);
+    h.push_activity(ActivityKind::Finished, "s1", "new".to_string(), None);
+    assert_eq!(h.activity.len(), 100);
+    assert_eq!(h.activity_unseen(), 1, "the new entry is unseen");
 }

@@ -604,6 +604,7 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     };
     let mut delete: Option<String> = None;
     let mut create = false;
+    let mut clear_all = false;
     let form = &mut h.ui.loop_form;
     card(
         &mut h.ui.panel_sections,
@@ -669,15 +670,35 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     );
                 });
                 ui.horizontal(|ui| {
-                    if widgets::button(ui, tr("Create"), ButtonKind::Primary).clicked() {
+                    // Vibe needs both: without them the button stays off and
+                    // says why, instead of a click that does nothing
+                    let ready = !form.prompt.trim().is_empty() && !form.interval.trim().is_empty();
+                    let resp = ui
+                        .add_enabled_ui(ready, |ui| {
+                            widgets::button(ui, tr("Create"), ButtonKind::Primary)
+                        })
+                        .inner;
+                    if resp
+                        .on_disabled_hover_text(tr("Enter a task and an interval first."))
+                        .clicked()
+                    {
                         create = true;
                     }
                     if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
                         form.open = false;
                     }
                 });
-            } else if widgets::button(ui, tr("New routine"), ButtonKind::Secondary).clicked() {
-                form.open = true;
+            } else {
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("New routine"), ButtonKind::Secondary).clicked() {
+                        form.open = true;
+                    }
+                    if !loops.is_empty()
+                        && widgets::button(ui, tr("Delete all"), ButtonKind::Secondary).clicked()
+                    {
+                        clear_all = true;
+                    }
+                });
             }
         },
     );
@@ -693,6 +714,12 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     }
     if let Some(id) = delete {
         h.delete_loop(sid, &id);
+    }
+    if clear_all {
+        h.ui.confirm = Some(Confirm::ClearRoutines {
+            session_id: sid.to_string(),
+            count: loops.len(),
+        });
     }
 }
 

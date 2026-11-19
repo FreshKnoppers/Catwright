@@ -144,6 +144,10 @@ pub enum ExtKind {
         session_id: String,
         loop_id: String,
     },
+    /// Delete every routine of a session (`_loops/clear`).
+    LoopsClear {
+        session_id: String,
+    },
     /// The agent's file changes in this session.
     ReviewState {
         session_id: String,
@@ -238,6 +242,9 @@ impl ExtKind {
                 "_loops/delete",
                 json!({ "sessionId": session_id, "loopId": loop_id }),
             ),
+            ExtKind::LoopsClear { session_id } => {
+                ("_loops/clear", json!({ "sessionId": session_id }))
+            }
             ExtKind::ReviewState { session_id } => {
                 ("_review/state", json!({ "sessionId": session_id }))
             }

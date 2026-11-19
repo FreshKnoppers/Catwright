@@ -306,6 +306,9 @@ msgstr "Anhang entfernen"
 msgid "Attach a file (or type @)"
 msgstr "Datei anhängen (oder @ tippen)"
 
+msgid "Drop to attach"
+msgstr "Loslassen zum Anhängen"
+
 msgid "Stop (Esc)"
 msgstr "Stopp (Esc)"
 
@@ -638,6 +641,15 @@ msgstr "Wiederkehrende Aufträge in dieser Sitzung. Sie laufen nur, solange sie 
 
 msgid "Delete routine"
 msgstr "Routine löschen"
+
+msgid "Delete all routines"
+msgstr "Alle Routinen löschen"
+
+msgid "Delete all {count} routines of this session? They will not run again."
+msgstr "Alle {count} Routinen dieser Sitzung löschen? Sie laufen nicht mehr."
+
+msgid "Delete all"
+msgstr "Alle löschen"
 
 msgid "Every"
 msgstr "Alle"
@@ -1625,3 +1637,63 @@ msgstr "Alle als gelesen markieren"
 
 msgid "FAILED"
 msgstr "FEHLGESCHLAGEN"
+
+msgid "Desktop notifications"
+msgstr "Desktop-Benachrichtigungen"
+
+msgid "When a turn finishes or Vibe needs an approval — but only while the window is not focused. Uses notify-send when it is installed."
+msgstr "Wenn eine Runde fertig ist oder Vibe eine Freigabe braucht — aber nur solange das Fenster nicht fokussiert ist. Nutzt notify-send, falls installiert."
+
+msgid "Vibe is done in {project}"
+msgstr "Vibe ist fertig in {project}"
+
+msgid "Vibe needs your approval in {project}"
+msgstr "Vibe braucht deine Freigabe in {project}"
+
+msgid "Round details"
+msgstr "Runden-Details"
+
+msgid "Pending"
+msgstr "Ausstehend"
+
+msgid "Running"
+msgstr "Läuft"
+
+msgid "Worktrees"
+msgstr "Worktrees"
+
+msgid "Create worktree"
+msgstr "Worktree erstellen"
+
+msgid "Delete worktree"
+msgstr "Worktree löschen"
+
+msgid "A new worktree of the current project, as its own workspace with its own sessions."
+msgstr "Ein neuer Worktree des aktuellen Projekts, als eigener Arbeitsbereich mit eigenen Sitzungen."
+
+msgid "Start ref (branch, tag or commit) for the new branch — empty: HEAD"
+msgstr "Start-Ref (Branch, Tag oder Commit) für den neuen Branch — leer: HEAD"
+
+msgid "Not a valid start ref."
+msgstr "Keine gültige Start-Ref."
+
+msgid "Delete the worktree “{name}”? The files in the main project stay untouched."
+msgstr "Worktree „{name}“ löschen? Die Dateien im Hauptprojekt bleiben unberührt."
+
+msgid "The worktree has uncommitted changes — they are lost."
+msgstr "Der Worktree hat ungespeicherte Änderungen — sie gehen verloren."
+
+msgid "Also delete the branch “{branch}”"
+msgstr "Auch den Branch „{branch}“ löschen"
+
+msgid "Deleting worktree …"
+msgstr "Worktree wird gelöscht …"
+
+msgid "Worktree deleted."
+msgstr "Worktree gelöscht."
+
+msgid "The worktree could not be deleted: {error}"
+msgstr "Der Worktree konnte nicht gelöscht werden: {error}"
+
+msgid "Enter a task and an interval first."
+msgstr "Erst einen Auftrag und ein Intervall eingeben."

@@ -219,6 +219,11 @@ pub struct Settings {
     /// account is only read when the user opens it.
     #[serde(default)]
     pub auto_account: bool,
+    /// Desktop notifications (notify-send) when a turn finishes or Vibe
+    /// needs an approval — only while the window has no focus. Off by
+    /// default.
+    #[serde(default)]
+    pub notify_turn_events: bool,
     /// Pinned session ids: they sort to the top of their workspace's list.
     #[serde(default)]
     pub pinned_sessions: Vec<String>,
@@ -273,6 +278,7 @@ impl Default for Settings {
             sidebar_collapsed: false,
             panel_closed: false,
             auto_account: false,
+            notify_turn_events: false,
             pinned_sessions: Vec::new(),
             transcript_detail: default_transcript_detail(),
             archived_sessions: Vec::new(),

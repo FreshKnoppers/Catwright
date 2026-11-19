@@ -364,6 +364,7 @@ fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
                     egui::Id::new(("artifact_csv", path)),
                     &columns,
                     &body,
+                    None,
                 );
             }
             ArtifactKind::Html => crate::render::render_code_block(ui, code_id, "html", text),

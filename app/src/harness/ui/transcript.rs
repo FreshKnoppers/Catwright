@@ -286,8 +286,23 @@ fn render_items(
         round_tops.push(ui.cursor().top());
         let key = round_key(sid, round);
         let expanded = open_groups.contains(&key);
-        if round.shows_summary() && round_summary(ui, &s.items, round, expanded) {
-            toggle_key(open_groups, key);
+        let detail_key = format!("detail::{key}");
+        if round.shows_summary() {
+            let (fold, detail) = round_summary(
+                ui,
+                &s.items,
+                round,
+                expanded,
+                open_groups.contains(&detail_key),
+            );
+            if detail {
+                toggle_key(open_groups, detail_key.clone());
+            } else if fold {
+                toggle_key(open_groups, key.clone());
+            }
+        }
+        if open_groups.contains(&detail_key) {
+            round_detail(ui, s, round);
         }
         // compact mode: the running round's tool calls collapse into one
         // line at their position in the round — busy marker, tool count,
@@ -516,9 +531,21 @@ fn render_range(
             Item::Agent { text, .. } => {
                 let blocks = crate::markdown::parse_cached(text);
                 let top = ui.cursor().top();
-                let mut rctx = RenderCtx::new(ctx.ui_events, ctx.form_values, ctx.sid)
-                    .with_scripts(ctx.scripts);
-                crate::render::render_blocks(ui, &blocks, i, &mut rctx);
+                // path-like words naming a file of the session's workspace
+                // render as chips; a click opens the preview pane
+                let mut chip_opens: Vec<String> = Vec::new();
+                {
+                    let mut rctx = RenderCtx::new(ctx.ui_events, ctx.form_values, ctx.sid)
+                        .with_scripts(ctx.scripts);
+                    rctx.file_chips = Some(crate::render::FileChips {
+                        cwd: ctx.cwd,
+                        open: &mut chip_opens,
+                    });
+                    crate::render::render_blocks(ui, &blocks, i, &mut rctx);
+                }
+                for p in chip_opens {
+                    ctx.ops.push(MessageOp::OpenFile(p));
+                }
                 agent_actions(ui, top, text);
             }
             Item::Thought { text, message_id } => {
@@ -627,6 +654,61 @@ pub(crate) fn thought_key(sid: &str, message_id: Option<&str>, index: usize) -> 
     }
 }
 
+/// The per-round detail view: every tool call of the round with its status
+/// and client-side duration (arrival timestamps, ToolCall::first_seen /
+/// last_update).
+fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
+    let now = extras::now_epoch().max(0) as u64;
+    indented(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for it in &s.items[round.range.clone()] {
+            let Item::Tool(id) = it else { continue };
+            let Some(call) = s.tool_calls.get(id) else {
+                continue;
+            };
+            ui.horizontal(|ui| {
+                let (r, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                let color = theme::status_color(&call.status);
+                let square =
+                    Rect::from_min_size(pos2(r.left() + 4.0, r.center().y - 3.0), vec2(6.0, 6.0));
+                if call.status == ToolStatus::Pending {
+                    ui.painter()
+                        .rect_stroke(square, 0.0, Stroke::new(1.0_f32, color));
+                } else {
+                    ui.painter().rect_filled(square, 0.0, color);
+                }
+                icons::paint(
+                    ui.painter(),
+                    kind_icon(call),
+                    pos2(r.left() + 16.0, r.center().y - 3.5),
+                    1.0,
+                    theme::DIM,
+                );
+                let status = match call.status {
+                    ToolStatus::Pending => tr("Pending"),
+                    ToolStatus::InProgress => tr("Running"),
+                    ToolStatus::Completed => tr("Done"),
+                    ToolStatus::Failed => tr("Failed"),
+                    ToolStatus::Other => tr("Done"),
+                };
+                let dur = call
+                    .duration_secs(now)
+                    .map(extras::human_duration)
+                    .unwrap_or_else(|| "–".to_string());
+                let g = line_galley(ui, &call.title, mono(12.0), theme::MUTED, r.width() - 200.0);
+                paint_line(ui, r.left() + 30.0, r.center().y, g);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(dur).monospace().size(10.5).color(theme::DIM));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(status).size(10.5).color(color));
+                });
+            });
+        }
+    });
+    ui.add_space(4.0);
+}
+
 /// Key of one attachment row's fold state: the message's id (the index as
 /// the fallback) plus the image's slot inside that message.
 pub(crate) fn attachment_key(
@@ -651,9 +733,16 @@ pub(crate) fn output_scroll_id(owner: &str, call_id: &str, slot: usize) -> egui:
 }
 
 /// The one line that stands for a folded round: the user message shortened
-/// plus how many tool calls it took. Clicking expands or folds it again.
-/// Returns true on click.
-fn round_summary(ui: &mut egui::Ui, items: &[Item], round: &Round, expanded: bool) -> bool {
+/// plus how many tool calls it took. Clicking expands or folds it again; a
+/// small button on the right opens the per-round detail (tool calls with
+/// status and duration). Returns (fold clicked, detail clicked).
+fn round_summary(
+    ui: &mut egui::Ui,
+    items: &[Item],
+    round: &Round,
+    expanded: bool,
+    detail_open: bool,
+) -> (bool, bool) {
     let title = items
         .get(round.range.start)
         .and_then(|i| match i {
@@ -664,14 +753,18 @@ fn round_summary(ui: &mut egui::Ui, items: &[Item], round: &Round, expanded: boo
             _ => None,
         })
         .unwrap_or_default();
-    let mut label = if title.is_empty() {
+    let label = if title.is_empty() {
         tr("Round").to_string()
     } else {
         trf("“{title}”", &[("title", &shorten(&title, 90))])
     };
-    if round.tool_calls > 0 {
-        label.push_str(&tool_calls_suffix(round.tool_calls));
-    }
+    // the tool count is its own run: a long message shortens, the count
+    // always stays readable
+    let suffix = if round.tool_calls > 0 {
+        tool_calls_suffix(round.tool_calls)
+    } else {
+        String::new()
+    };
     // a quiet card (fill + 1 px edge + accent strip), so a folded round
     // reads as something to open at first glance, not as plain text
     ui.add_space(2.0);
@@ -705,17 +798,54 @@ fn round_summary(ui: &mut egui::Ui, items: &[Item], round: &Round, expanded: boo
     } else {
         theme::MUTED
     };
-    let g = line_galley(ui, &label, widgets::font(13.5), color, rect.width() - 70.0);
+    // room on the right: the fold chevron, plus the detail button when the
+    // round has tool calls
+    let reserve = if round.tool_calls > 0 { 100.0 } else { 70.0 };
+    let tail = line_galley(ui, &suffix, widgets::font(13.5), color, rect.width());
+    let g = line_galley(
+        ui,
+        &label,
+        widgets::font(13.5),
+        color,
+        (rect.width() - reserve - tail.size().x).max(40.0),
+    );
     let r = paint_line(ui, rect.left() + 30.0, rect.center().y, g);
+    let r = if suffix.is_empty() {
+        r
+    } else {
+        paint_line(ui, r.right(), rect.center().y, tail)
+    };
     chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), expanded);
+    // right side: the per-round detail toggle (real widget over the row)
+    let mut detail_clicked = false;
+    if round.tool_calls > 0 {
+        let b = widgets::place(
+            ui,
+            Rect::from_min_size(
+                pos2(rect.right() - 30.0, rect.center().y - 10.0),
+                vec2(24.0, 24.0),
+            ),
+            IconButton::new(Icon::List, tr("Round details"))
+                .side(20.0)
+                .color(if detail_open {
+                    theme::ORANGE
+                } else {
+                    theme::DIM
+                }),
+        );
+        detail_clicked = b.clicked();
+    }
     ui.add_space(6.0);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    let fold = resp
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(if expanded {
             tr("Fold round")
         } else {
             tr("Unfold round")
         })
         .clicked()
+        && !detail_clicked;
+    (fold, detail_clicked)
 }
 
 /// `text` shortened to at most `max` characters, with an ellipsis.

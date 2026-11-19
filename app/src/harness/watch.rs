@@ -36,9 +36,45 @@ pub fn parse_git(branch: &str, status: &str) -> GitInfo {
     }
 }
 
+/// One `git worktree list --porcelain` entry. `main` marks the repository's
+/// own worktree (the first entry), which is never listed for deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeInfo {
+    pub path: PathBuf,
+    pub branch: String,
+    pub main: bool,
+}
+
+/// Parse `git worktree list --porcelain` output.
+pub fn parse_worktrees(out: &str) -> Vec<WorktreeInfo> {
+    let mut list = Vec::new();
+    let mut cur: Option<WorktreeInfo> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() {
+                list.push(w);
+            }
+            cur = Some(WorktreeInfo {
+                path: PathBuf::from(p.trim()),
+                branch: String::new(),
+                main: list.is_empty(),
+            });
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if let Some(w) = &mut cur {
+                w.branch = b.trim().trim_start_matches("refs/heads/").to_string();
+            }
+        }
+    }
+    if let Some(w) = cur.take() {
+        list.push(w);
+    }
+    list
+}
+
 enum Found {
     Git(PathBuf, GitInfo),
     Files(PathBuf, Vec<String>),
+    Worktrees(PathBuf, Vec<WorktreeInfo>),
 }
 
 /// Runs the lookups and keeps their latest results.
@@ -49,6 +85,8 @@ pub struct Watcher {
     git_asked: HashMap<PathBuf, Instant>,
     files: HashMap<PathBuf, Vec<String>>,
     files_asked: HashMap<PathBuf, Instant>,
+    worktrees: HashMap<PathBuf, Vec<WorktreeInfo>>,
+    worktrees_asked: HashMap<PathBuf, Instant>,
 }
 
 impl Default for Watcher {
@@ -61,6 +99,8 @@ impl Default for Watcher {
             git_asked: HashMap::new(),
             files: HashMap::new(),
             files_asked: HashMap::new(),
+            worktrees: HashMap::new(),
+            worktrees_asked: HashMap::new(),
         }
     }
 }
@@ -75,6 +115,9 @@ impl Watcher {
                 }
                 Found::Files(dir, files) => {
                     self.files.insert(dir, files);
+                }
+                Found::Worktrees(dir, wts) => {
+                    self.worktrees.insert(dir, wts);
                 }
             }
         }
@@ -102,9 +145,31 @@ impl Watcher {
         self.git.get(dir)
     }
 
+    /// The project's worktrees (main one included); re-read in the
+    /// background when stale. Empty until the first lookup has finished.
+    pub fn worktrees(&mut self, dir: &Path) -> &[WorktreeInfo] {
+        let stale = self
+            .worktrees_asked
+            .get(dir)
+            .is_none_or(|t| t.elapsed() >= GIT_INTERVAL);
+        if stale {
+            self.worktrees_asked
+                .insert(dir.to_path_buf(), Instant::now());
+            let (tx, dir_owned) = (self.tx.clone(), dir.to_path_buf());
+            std::thread::spawn(move || {
+                let wts = git_output(&dir_owned, &["worktree", "list", "--porcelain"])
+                    .map(|o| parse_worktrees(&o))
+                    .unwrap_or_default();
+                let _ = tx.send(Found::Worktrees(dir_owned, wts));
+            });
+        }
+        self.worktrees.get(dir).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// Forget the throttle so the next `git` call re-reads (after a turn).
     pub fn invalidate_git(&mut self, dir: &Path) {
         self.git_asked.remove(dir);
+        self.worktrees_asked.remove(dir);
     }
 
     /// The project's relative file paths; refreshed in the background when

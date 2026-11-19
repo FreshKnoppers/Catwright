@@ -37,6 +37,15 @@ A project's start screen:
 
 ![Start screen with the input field, model and thinking pickers and the recent sessions](docs/screenshots/start.png)
 
+The preview pane in Diff mode next to the transcript
+(`--project ~/my/project --session <id> --open analysis.py --preview-diff`):
+
+![The preview pane showing the red/green diff of analysis.py against the last commit, beside the session transcript](docs/screenshots/preview-diff.png)
+
+The activity feed with a waiting approval and a finished turn (`--activity`):
+
+![The activity feed with a waiting permission entry (Allow once, Deny) and a finished entry, the sidebar showing the waiting session and the unread badge](docs/screenshots/activity.png)
+
 </details>
 
 The screenshots show demo projects with prepared sessions
@@ -49,6 +58,21 @@ The screenshots show demo projects with prepared sessions
 - Vibe's approvals and questions as cards; mode and model picker, thinking
   level per model
 - Diffs, review of a turn's changes, rewind to an earlier state
+- Review comments on diff lines, sent to Vibe as one message ("Send to Vibe")
+- Preview pane beside the transcript: code with line numbers or the diff
+  against the last commit (Code/Diff switch, `--open <file>` on start)
+- Transcript detail levels (Compact/Standard/Detailed/Verbose) while a turn runs
+- Activity feed across all sessions: answer a waiting approval right there,
+  finished and failed turns at a glance, unread badge and archiving
+- File chips in answers: mentioning a workspace file opens the preview on click
+- Drag & drop files onto the composer to attach them
+- Worktrees: create one from any start ref as its own workspace, see and
+  delete a project's worktrees in the sidebar
+- Command palette (Ctrl K) finds sessions, actions and the project's files
+- Per-round detail: every tool call of a round with its status and how long
+  it ran
+- Optional desktop notifications when a turn finishes or needs an approval
+  while the window is in the background (Settings → General, off by default)
 - Subagents with status bars (and a small pixel cat)
 - Context usage as Vibe reports it (the same numbers as the CLI footer), with
   Vibe's own estimate of what fills it
@@ -71,7 +95,7 @@ The screenshots show demo projects with prepared sessions
 - Linux (Wayland or X11). Other systems are untested.
 - [Mistral Vibe](https://github.com/mistralai/mistral-vibe) installed and
   signed in: run `vibe` once in a terminal and follow the login. Tested with
-  Vibe 3.1.0 to 3.1.2.
+  Vibe 3.1.0 to 3.1.3.
 - To build: a current stable Rust toolchain (`rustup`).
 
 ## Known limits
@@ -80,7 +104,7 @@ The screenshots show demo projects with prepared sessions
   function. When Vibe starts further `vibe -p` processes instead (for
   example to give an agent a different model), those are separate sessions
   with no link to the original one.
-- Tested on Linux only, with Vibe 3.1.0 to 3.1.2.
+- Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
 ## Build and install
 
@@ -109,6 +133,11 @@ catwright --project ~/my/project --prompt -      # first message read from stdin
 CATWRIGHT_PROMPT="Hello" catwright --project ~/my/project
 catwright --settings                             # open the settings
 catwright --lang de                              # UI language for this run only
+catwright --project ~/my/project --session <id> --open analysis.py
+                                                 # open a file in the preview pane
+catwright --project ~/my/project --open analysis.py --preview-diff
+                                                 # ... in Diff mode (against the last commit)
+catwright --activity                             # open the activity feed
 ```
 
 `--prompt <text>` sits in the process arguments, which other local users

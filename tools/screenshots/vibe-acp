@@ -17,6 +17,7 @@ def result(rid, res):
 def update(sid, upd):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": upd}})
 
+perm_n = [0]
 COMMANDS = [{"name": n, "description": d} for n, d in [
     ("compact", "Compact the conversation"), ("help", "Show help"), ("retry", "Retry")]]
 
@@ -53,6 +54,31 @@ for line in sys.stdin:
         result(rid, {"modes": s["modes"], "configOptions": s["configOptions"],
                      "_meta": {"workspace_trust": {"status": "trusted", "details": None}}})
         update(p["sessionId"], {"sessionUpdate": "available_commands_update", "availableCommands": COMMANDS})
+    elif method == "session/prompt":
+        live = sc.get("live")
+        if not live:
+            result(rid, {})
+        else:
+            # scripted live turn for the screenshots: updates, a permission
+            # request that stays open, then the prompt finishes (or fails)
+            sid = p.get("sessionId", "")
+            for act in live.get("on_prompt", []):
+                if "update" in act:
+                    update(sid, act["update"])
+                elif act.get("permission"):
+                    perm_n[0] += 1
+                    send({"jsonrpc": "2.0", "id": 900 + perm_n[0], "method": "session/request_permission",
+                          "params": {"sessionId": sid,
+                                     "toolCall": {"toolCallId": f"call-live-{perm_n[0]}", "title": act.get("title", "Editing analysis.py"), "kind": "edit", "status": "pending"},
+                                     "options": [{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                                                 {"optionId": "reject_once", "name": "Deny", "kind": "reject_once"}]}})
+                elif "finish" in act:
+                    # answered at its position in the script, so later actions
+                    # (e.g. a fresh permission request) land after the turn
+                    if act["finish"] == "error":
+                        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -31001, "message": "rate limited"}})
+                    else:
+                        result(rid, {"stopReason": "end_turn"})
     elif method == "session/resume":
         result(rid, {})
     elif method == "_account/read":

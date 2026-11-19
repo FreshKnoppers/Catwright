@@ -7,9 +7,9 @@
 mod activity;
 mod artifacts;
 mod cards;
-mod composer;
+pub(crate) mod composer;
 mod header;
-mod palette;
+pub(crate) mod palette;
 mod panel;
 mod sidebar;
 /// The transcript renderer; `pub(crate)` so the harness tests can check
@@ -422,6 +422,122 @@ pub fn show_dialogs(h: &mut Harness, ctx: &egui::Context) {
     rename_dialog(h, ctx);
     rewind_dialog(h, ctx);
     confirm_dialog(h, ctx);
+    worktree_dialogs(h, ctx);
+}
+
+/// The worktree dialogs: create (with the optional start ref) and delete
+/// (confirmation, warning on uncommitted changes, branch option default OFF).
+fn worktree_dialogs(h: &mut Harness, ctx: &egui::Context) {
+    if let Some(mut d) = h.ui.worktree_dialog.take() {
+        let mut done = false;
+        let mut create = false;
+        let (_r, close) = dialogs::modal(
+            ctx,
+            "harness_worktree_create",
+            tr("Create worktree"),
+            |ui| {
+                ui.set_min_width(440.0);
+                ui.label(
+                    RichText::new(tr(
+                        "A new worktree of the current project, as its own workspace with its own sessions.",
+                    ))
+                    .color(theme::TEXT)
+                    .size(13.5),
+                );
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(tr(
+                        "Start ref (branch, tag or commit) for the new branch — empty: HEAD",
+                    ))
+                    .color(theme::DIM)
+                    .size(12.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut d.start_ref)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("main"),
+                );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                        done = true;
+                    }
+                    if widgets::button(ui, tr("Create"), ButtonKind::Primary).clicked() {
+                        create = true;
+                    }
+                });
+            },
+        );
+        if create {
+            let r = d.start_ref.trim().to_string();
+            h.create_worktree(if r.is_empty() { None } else { Some(r) });
+        } else if !done && close == ModalClose::Open {
+            h.ui.worktree_dialog = Some(d);
+        }
+    }
+    if let Some(mut d) = h.ui.worktree_delete.take() {
+        let mut done = false;
+        let mut delete = false;
+        let (_r, close) = dialogs::modal(
+            ctx,
+            "harness_worktree_delete",
+            tr("Delete worktree"),
+            |ui| {
+                ui.set_min_width(460.0);
+                let name = d
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| d.path.to_string_lossy().into_owned());
+                ui.label(
+                    RichText::new(trf(
+                        "Delete the worktree “{name}”? The files in the main project stay untouched.",
+                        &[("name", &name)],
+                    ))
+                    .color(theme::TEXT)
+                    .size(13.5),
+                );
+                if d.dirty {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(tr("The worktree has uncommitted changes — they are lost."))
+                            .color(theme::RED_TEXT)
+                            .size(12.5),
+                    );
+                }
+                if !d.branch.is_empty() {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if widgets::toggle(ui, d.delete_branch, "").clicked() {
+                            d.delete_branch = !d.delete_branch;
+                        }
+                        ui.label(
+                            RichText::new(trf(
+                                "Also delete the branch “{branch}”",
+                                &[("branch", &d.branch)],
+                            ))
+                            .color(theme::MUTED)
+                            .size(12.5),
+                        );
+                    });
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                        done = true;
+                    }
+                    if widgets::button(ui, tr("Delete"), ButtonKind::Danger).clicked() {
+                        delete = true;
+                    }
+                });
+            },
+        );
+        if delete {
+            h.delete_worktree(&d.project, &d.path, &d.branch, d.delete_branch);
+        } else if !done && close == ModalClose::Open {
+            h.ui.worktree_delete = Some(d);
+        }
+    }
 }
 
 fn rename_dialog(h: &mut Harness, ctx: &egui::Context) {
@@ -555,6 +671,14 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
                 .to_string(),
             tr("Automatic"),
         ),
+        Confirm::ClearRoutines { count, .. } => (
+            tr("Delete all routines"),
+            trf(
+                "Delete all {count} routines of this session? They will not run again.",
+                &[("count", count)],
+            ),
+            tr("Delete all"),
+        ),
     };
     match dialogs::confirm(ctx, "harness_confirm", title, &text, label, true) {
         Some(true) => {
@@ -573,6 +697,7 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
                     Some(sid) => h.set_mode(&sid, "auto-approve"),
                     None => h.start_mode = "auto-approve".to_string(),
                 },
+                Confirm::ClearRoutines { session_id, .. } => h.clear_loops(&session_id),
             }
         }
         Some(false) => h.ui.confirm = None,

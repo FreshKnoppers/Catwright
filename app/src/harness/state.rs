@@ -103,6 +103,27 @@ pub enum Confirm {
     AutoApprove {
         session_id: Option<String>,
     },
+    /// `_loops/clear`: delete every routine of the session.
+    ClearRoutines {
+        session_id: String,
+        count: usize,
+    },
+}
+
+/// The worktree-create dialog: optional start ref (branch, tag or commit).
+pub struct WorktreeDialog {
+    pub start_ref: String,
+}
+
+/// The worktree-delete confirmation: the main worktree never gets here.
+pub struct WorktreeDelete {
+    pub project: PathBuf,
+    pub path: PathBuf,
+    pub branch: String,
+    /// Uncommitted changes in the worktree — warned about in the dialog.
+    pub dirty: bool,
+    /// Also delete the branch: the user's own choice, default OFF.
+    pub delete_branch: bool,
 }
 
 /// The command palette while it is open.
@@ -243,6 +264,10 @@ pub struct UiState {
     pub rename: Option<RenameDialog>,
     pub rewind: Option<RewindDialog>,
     pub confirm: Option<Confirm>,
+    /// The worktree-create dialog (optional start ref), if open.
+    pub worktree_dialog: Option<WorktreeDialog>,
+    /// The worktree-delete confirmation, if open.
+    pub worktree_delete: Option<WorktreeDelete>,
     pub file_picker: Option<FilePicker>,
     pub loop_form: LoopForm,
     pub composer_popup: ComposerPopup,
@@ -289,6 +314,8 @@ impl Default for UiState {
             rename: None,
             rewind: None,
             confirm: None,
+            worktree_dialog: None,
+            worktree_delete: None,
             file_picker: None,
             loop_form: LoopForm::default(),
             composer_popup: ComposerPopup::default(),

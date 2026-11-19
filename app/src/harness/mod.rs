@@ -129,6 +129,10 @@ pub struct Harness {
     pending_setup: Vec<SetupStep>,
     /// A `git worktree add` running in the background (`create_worktree`).
     worktree_job: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+    /// A `git worktree remove` running in the background (`delete_worktree`),
+    /// with the project whose worktree list is re-read when it is done and
+    /// the worktree's path.
+    worktree_delete_job: Option<WorktreeDeleteJob>,
     client: Option<AcpClient>,
     rx: Option<mpsc::Receiver<AcpEvent>>,
     pub conn: Conn,
@@ -172,6 +176,17 @@ pub struct Harness {
     /// the session on screen when `vibe-acp` ended, or one the user clicked
     /// while it restarted (the latest of these wins).
     open_on_ready: Option<(PathBuf, String)>,
+    /// Mirror of Settings::notify_turn_events, refreshed by the app shell
+    /// every frame.
+    pub notify_events: bool,
+    /// Whether the window has focus (refreshed by the app shell every
+    /// frame). Notifications only fire while it does not.
+    pub window_focused: bool,
+    /// Notification bodies waiting to be sent (drained by the app shell).
+    pending_notify: Vec<String>,
+    /// CLI `--activity`: bring the activity feed back after the
+    /// `--session` of the same start opens (open_session resets the view).
+    pub(crate) activity_on_ready: bool,
     /// Message to send once the agent (and the CLI's session) is ready.
     prompt_on_ready: Option<String>,
     /// Restarts since the last stable connection, and when it became ready.
@@ -299,6 +314,7 @@ impl Harness {
             start_thinking: None,
             pending_setup: Vec::new(),
             worktree_job: None,
+            worktree_delete_job: None,
             client: None,
             rx: None,
             conn: Conn::Off,
@@ -317,6 +333,10 @@ impl Harness {
             folder_picker: None,
             remove_confirm: None,
             open_on_ready: None,
+            activity_on_ready: false,
+            notify_events: false,
+            window_focused: true,
+            pending_notify: Vec::new(),
             prompt_on_ready: None,
             artifacts_open: false,
             artifact_selected: None,
@@ -442,6 +462,7 @@ impl Harness {
     pub fn poll(&mut self) {
         self.watcher.poll();
         self.poll_worktree();
+        self.poll_worktree_delete();
         // Start watchdog (review M6): a child that lives but never answers
         // `initialize` produces no exit event, so `connection_lost` would
         // never run on its own. Killing it here feeds the normal reconnect
@@ -488,6 +509,10 @@ impl Harness {
                     // the CLI's `--session`, or the session that was open
                     // when the connection broke (Handoff 2.8.7)
                     self.open_session(cwd, &sid);
+                }
+                if self.activity_on_ready {
+                    self.activity_on_ready = false;
+                    self.ui.activity_open = true;
                 }
                 // learn the current model / thinking choices and defaults
                 // (an empty session: no model call, nothing stays on disk).
@@ -723,6 +748,7 @@ impl Harness {
             }
             AcpEvent::SessionLoaded { session_id, result } => {
                 if let Some(v) = self.sessions.get_mut(&session_id) {
+                    v.replaying = false;
                     v.set_session_info(result.modes, result.config_options.clone());
                     if let Some(modes) = &v.modes {
                         self.known_modes = modes.available_modes.clone();
@@ -818,6 +844,7 @@ impl Harness {
                     .to_string();
                 }
                 self.push_activity(ActivityKind::Waiting, &sid, text, Some(request_id));
+                self.maybe_notify(&sid, false);
             }
             AcpEvent::PromptFinished { session_id, result } => {
                 // the turn is over: no text to restore for it anymore
@@ -835,6 +862,7 @@ impl Harness {
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| tr("Turn finished").to_string());
                     self.push_activity(ActivityKind::Finished, &session_id, text, None);
+                    self.maybe_notify(&session_id, true);
                 }
                 let mut cwd = None;
                 if let Some(v) = self.sessions.get_mut(&session_id) {
@@ -1142,7 +1170,7 @@ impl Harness {
     /// workspace (Handoff Ideenliste 6): `session/list` matches cwd
     /// exactly, so every worktree is its own workspace with its own
     /// sessions. The branch is `catwright/<worktree name>`.
-    pub fn create_worktree(&mut self) {
+    pub fn create_worktree(&mut self, start_ref: Option<String>) {
         // The checkout runs on a background thread (a big repository takes
         // a while, and the UI must not freeze); `poll` picks the result up.
         // A failed or timed-out checkout is cleaned up again, so no half
@@ -1165,7 +1193,7 @@ impl Harness {
             .unwrap_or_default();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(make_worktree(&project, &dir));
+            let _ = tx.send(make_worktree(&project, &dir, start_ref.as_deref()));
         });
         self.worktree_job = Some(rx);
         self.status = trf("Creating worktree “{name}” …", &[("name", &name)]);
@@ -1199,6 +1227,98 @@ impl Harness {
             Err(e) => {
                 self.status = trf(
                     "The worktree could not be created: {error}",
+                    &[("error", &e)],
+                );
+            }
+        }
+    }
+
+    /// Worktrees of `project` without the main worktree (the sidebar list).
+    pub fn worktrees_of(&mut self, project: &Path) -> Vec<watch::WorktreeInfo> {
+        self.watcher
+            .worktrees(project)
+            .iter()
+            .filter(|w| !w.main && w.path != project)
+            .cloned()
+            .collect()
+    }
+
+    /// Uncommitted changes in a worktree (warns in the delete dialog).
+    pub fn worktree_dirty(path: &Path) -> bool {
+        watch::git_output(path, &["status", "--porcelain"])
+            .map(|o| !o.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Delete a worktree in the background; its branch only when
+    /// `delete_branch` is set (the dialog's default-off option). The main
+    /// worktree is never passed here (the sidebar does not list it).
+    pub fn delete_worktree(
+        &mut self,
+        project: &Path,
+        path: &Path,
+        branch: &str,
+        delete_branch: bool,
+    ) {
+        if self.worktree_delete_job.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let project = project.to_path_buf();
+        let job_project = project.clone();
+        let path = path.to_path_buf();
+        let job_path = path.clone();
+        let branch = branch.to_string();
+        std::thread::spawn(move || {
+            let res = watch::run_git(
+                &project,
+                &["worktree", "remove", &path.to_string_lossy()],
+                WORKTREE_TIMEOUT,
+            );
+            let res = match res {
+                Ok(_) => {
+                    if delete_branch && !branch.is_empty() {
+                        let _ =
+                            watch::run_git(&project, &["branch", "-D", &branch], WORKTREE_TIMEOUT);
+                    }
+                    let _ = watch::run_git(&project, &["worktree", "prune"], WORKTREE_TIMEOUT);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(res);
+        });
+        self.worktree_delete_job = Some((job_project, job_path, rx));
+        self.status = tr("Deleting worktree …").to_string();
+    }
+
+    /// Take the result of a finished worktree deletion, if any.
+    fn poll_worktree_delete(&mut self) {
+        let Some((project, path, rx)) = &self.worktree_delete_job else {
+            return;
+        };
+        let done = match rx.try_recv() {
+            Ok(done) => done,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err("git".to_string()),
+        };
+        // the sidebar list must not show the removed worktree until the
+        // next periodic re-read
+        let (project, path) = (project.clone(), path.clone());
+        self.watcher.invalidate_git(&project);
+        self.worktree_delete_job = None;
+        match done {
+            Ok(()) => {
+                // a worktree made here was added as its own project: that
+                // entry would now point at a folder that no longer exists
+                if self.projects.contains(&path) {
+                    self.remove_project(&path);
+                }
+                self.status = tr("Worktree deleted.").to_string();
+            }
+            Err(e) => {
+                self.status = trf(
+                    "The worktree could not be deleted: {error}",
                     &[("error", &e)],
                 );
             }
@@ -1676,6 +1796,8 @@ impl Harness {
         }
         let mut view = SessionView::new(session_id.to_string(), cwd.clone());
         view.reset_items();
+        // what arrives until `session/load` answers is the replayed history
+        view.replaying = true;
         self.sessions.insert(session_id.to_string(), view);
         // requests orphaned while this session was unknown migrate into
         // the new view (Handoff 2.2)
@@ -1790,6 +1912,40 @@ impl Harness {
         self.archived.remove(session_id);
     }
 
+    /// Queue a desktop notification for a finished turn (`done`) or a
+    /// waiting approval, but only when the setting is on and the window has
+    /// no focus. The body names the project only — never the session title,
+    /// the prompt or the answer.
+    fn maybe_notify(&mut self, sid: &str, done: bool) {
+        if !self.notify_events || self.window_focused {
+            return;
+        }
+        let cwd = self.sessions.get(sid).map(|v| v.cwd.clone()).or_else(|| {
+            self.listed
+                .values()
+                .flatten()
+                .find(|s| s.session_id == sid)
+                .map(|s| PathBuf::from(&s.cwd))
+        });
+        let Some(cwd) = cwd else { return };
+        let project = project_name(&cwd);
+        let body = if done {
+            trf("Vibe is done in {project}", &[("project", &project)])
+        } else {
+            trf(
+                "Vibe needs your approval in {project}",
+                &[("project", &project)],
+            )
+        };
+        self.pending_notify.push(body);
+    }
+
+    /// Notification bodies queued since the last call (the app shell sends
+    /// them via notify-send).
+    pub fn take_pending_notifications(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_notify)
+    }
+
     /// Append one entry to the activity feed (bounded to the newest 100).
     pub fn push_activity(
         &mut self,
@@ -1819,8 +1975,38 @@ impl Harness {
             at: extras::now_epoch(),
         });
         if self.activity.len() > MAX {
-            self.activity.drain(..self.activity.len() - MAX);
+            let dropped = self.activity.len() - MAX;
+            self.activity.drain(..dropped);
+            // the read marker is an index: it moves with the dropped front,
+            // or every later entry would count as already seen
+            self.ui.activity_seen = self.ui.activity_seen.saturating_sub(dropped);
         }
+    }
+
+    /// Whether a feed entry still belongs in the feed: a waiting entry only
+    /// while its approval or question is open — once answered (here, in the
+    /// transcript or by the turn's end) nothing waits for the user anymore.
+    pub fn activity_shown(&self, e: &ActivityEvent) -> bool {
+        if e.kind != ActivityKind::Waiting {
+            return true;
+        }
+        let Some(rid) = &e.request_id else {
+            return true;
+        };
+        self.sessions
+            .get(&e.sid)
+            .is_some_and(|v| v.permissions.iter().any(|p| &p.request_id == rid))
+            || self.questions.iter().any(|q| &q.request_id == rid)
+    }
+
+    /// Feed entries added since the user last looked that are still shown
+    /// (the sidebar badge and "Mark all read").
+    pub fn activity_unseen(&self) -> usize {
+        self.activity
+            .iter()
+            .skip(self.ui.activity_seen)
+            .filter(|e| self.activity_shown(e))
+            .count()
     }
 
     /// Use `dir` (created if missing) as the chat workspace "Allgemein". It
@@ -2739,6 +2925,13 @@ impl Harness {
         });
     }
 
+    /// Delete every routine of the session (`_loops/clear`).
+    pub fn clear_loops(&mut self, session_id: &str) {
+        self.send_ext(ExtKind::LoopsClear {
+            session_id: session_id.to_string(),
+        });
+    }
+
     /// Mark changes as reviewed (`approve`) or undo them in the working
     /// tree. `target` is Vibe's review target, e.g. `{"kind":"all"}`.
     pub fn review_action(&mut self, session_id: &str, approve: bool, target: Value) {
@@ -2918,7 +3111,9 @@ impl Harness {
             ExtKind::LoopsList { session_id } => {
                 self.loops.insert(session_id, extras::parse_loops(&result));
             }
-            ExtKind::LoopsCreate { session_id, .. } | ExtKind::LoopsDelete { session_id, .. } => {
+            ExtKind::LoopsCreate { session_id, .. }
+            | ExtKind::LoopsDelete { session_id, .. }
+            | ExtKind::LoopsClear { session_id } => {
                 self.send_ext(ExtKind::LoopsList { session_id });
             }
             ExtKind::ReviewState { session_id } => {
@@ -2981,6 +3176,7 @@ impl Harness {
             ExtKind::TrustDecision { .. } => tr("Save trust"),
             ExtKind::LoopsCreate { .. } => tr("Create routine"),
             ExtKind::LoopsDelete { .. } => tr("Delete routine"),
+            ExtKind::LoopsClear { .. } => tr("Delete all routines"),
             ExtKind::ReviewMutate { .. } => tr("Apply changes"),
             ExtKind::ReviewTurnDiff {
                 session_id,
@@ -3023,11 +3219,23 @@ impl Harness {
 /// How long a worktree checkout may take (a big repository on a slow disk).
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// `git worktree add -b catwright/<name> <dir> HEAD` for `project`; on
-/// failure the half-made worktree and its branch are removed again. Runs
-/// on a background thread (see `Harness::create_worktree`).
-fn make_worktree(project: &Path, dir: &Path) -> Result<PathBuf, String> {
+/// A background `git worktree remove`: project, worktree path, result.
+type WorktreeDeleteJob = (PathBuf, PathBuf, mpsc::Receiver<Result<(), String>>);
+
+/// `git worktree add -b catwright/<name> <dir> <start>` for `project`, where
+/// `<start>` is the optional start ref (branch, tag or commit) or HEAD. The
+/// worktree always gets its own branch: checking out an existing branch
+/// directly fails for one that is already checked out (e.g. `main` in the
+/// main worktree). On failure the half-made worktree and its branch are
+/// removed again. Runs on a background thread (see
+/// `Harness::create_worktree`).
+fn make_worktree(project: &Path, dir: &Path, start_ref: Option<&str>) -> Result<PathBuf, String> {
     use crate::harness::watch::run_git;
+    let start = start_ref.map(str::trim).filter(|r| !r.is_empty());
+    // a ref never starts with '-'; such input would reach git as an option
+    if start.is_some_and(|r| r.starts_with('-')) {
+        return Err(tr("Not a valid start ref.").to_string());
+    }
     let name = dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -3036,7 +3244,14 @@ fn make_worktree(project: &Path, dir: &Path) -> Result<PathBuf, String> {
     let dir_str = dir.to_string_lossy().into_owned();
     let added = run_git(
         project,
-        &["worktree", "add", "-b", &branch, &dir_str, "HEAD"],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &dir_str,
+            start.unwrap_or("HEAD"),
+        ],
         WORKTREE_TIMEOUT,
     );
     match added {

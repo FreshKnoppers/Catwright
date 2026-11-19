@@ -8,7 +8,8 @@ use crate::icons;
 use crate::widgets::{line_galley, paint_line};
 use egui::{pos2, Id, Rect, Sense};
 
-enum Action {
+pub(crate) enum Action {
+    File(PathBuf, String),
     NewSession,
     ToggleSidebar,
     TogglePanel,
@@ -22,14 +23,14 @@ enum Action {
     Worktree,
 }
 
-struct Entry {
-    icon: Icon,
-    label: String,
-    detail: String,
-    action: Action,
+pub(crate) struct Entry {
+    pub icon: Icon,
+    pub label: String,
+    pub detail: String,
+    pub action: Action,
 }
 
-fn entries(h: &Harness, query: &str) -> Vec<Entry> {
+pub(crate) fn entries(h: &mut Harness, query: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     let mut push = |icon, label: &str, detail: &str, action| {
         if matches_query(label, query) || matches_query(detail, query) {
@@ -92,6 +93,27 @@ fn entries(h: &Harness, query: &str) -> Vec<Entry> {
             Action::Command(c.name.clone()),
         );
     }
+    // files of the current project (git ls-files, cached by the watcher;
+    // fuzzy match like the @-mention in the composer) — only while
+    // searching: unfiltered, a dozen arbitrary files would push the
+    // sessions down
+    let cwd = h
+        .active
+        .as_deref()
+        .and_then(|s| h.sessions.get(s))
+        .map(|s| s.cwd.clone())
+        .or_else(|| h.current_project.clone());
+    if let Some(cwd) = cwd.as_ref().filter(|_| !query.trim().is_empty()) {
+        let name = h.workspace_name(cwd);
+        for rel in crate::harness::watch::filter_files(h.watcher.files(cwd), query, 12) {
+            out.push(Entry {
+                icon: Icon::File,
+                label: rel.to_string(),
+                detail: name.clone(),
+                action: Action::File(cwd.clone(), rel.to_string()),
+            });
+        }
+    }
     // the sessions of every workspace ("Allgemein" first, then the
     // projects); while searching they come before the actions
     let actions = std::mem::take(&mut out);
@@ -133,15 +155,34 @@ fn entries(h: &Harness, query: &str) -> Vec<Entry> {
     }
 }
 
-fn apply(h: &mut Harness, action: Action, out: &mut HarnessAction) {
+pub(crate) fn apply(h: &mut Harness, action: Action, out: &mut HarnessAction) {
     match action {
+        Action::File(cwd, rel) => {
+            // Enter opens the preview: beside the transcript in the session,
+            // in the Artifacts view when no session is open
+            if let Some(sid) = h.active.clone() {
+                h.open_preview(&sid, &rel);
+            } else {
+                h.artifacts_open = true;
+                h.artifact_selected = Some(cwd.join(&rel).to_string_lossy().into_owned());
+            }
+        }
         Action::NewSession => h.new_session_view(),
         Action::ToggleSidebar => h.ui.sidebar_collapsed = !h.ui.sidebar_collapsed,
         Action::TogglePanel => toggle_panel(h),
         Action::Settings => *out = HarnessAction::OpenSettings,
         Action::Artifacts => h.artifacts_open = true,
         Action::Fork => h.fork_active_session(),
-        Action::Worktree => h.create_worktree(),
+        Action::Worktree => {
+            // create dialog with the optional start ref
+            if h.current_project.is_some() {
+                h.ui.worktree_dialog = Some(crate::harness::state::WorktreeDialog {
+                    start_ref: String::new(),
+                });
+            } else {
+                h.status = tr("No project open.").to_string();
+            }
+        }
         Action::Open(cwd, sid) => h.open_session(cwd, &sid),
         Action::Project(p) => {
             h.select_workspace(p);

@@ -235,6 +235,43 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
             ui.add_space(4.0);
             toolbar(h, ui, sid.as_deref(), running, &mut send_now);
         });
+    // drag & drop onto the composer: dropped files attach exactly like the
+    // "+" picker (PNG as image when the agent takes images, else a
+    // resource_link); while files are dragged over the window the composer
+    // shows a hint
+    let (hovered, dropped) = ui.ctx().input(|i| {
+        (
+            !i.raw.hovered_files.is_empty(),
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+        )
+    });
+    attach_dropped(h, dropped);
+    if hovered {
+        let rect = frame.response.rect;
+        let painter = ui.painter();
+        painter.rect_filled(
+            rect,
+            egui::Rounding::same(6.0),
+            theme::ORANGE.gamma_multiply(0.12),
+        );
+        painter.rect(
+            rect,
+            egui::Rounding::same(6.0),
+            egui::Color32::TRANSPARENT,
+            Stroke::new(1.5_f32, theme::ORANGE),
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            tr("Drop to attach"),
+            widgets::font(15.0),
+            theme::ORANGE,
+        );
+    }
     if send_now {
         h.send();
         h.ui.focus_composer = true;
@@ -249,6 +286,17 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
     }
     if let Some(i) = accepted {
         accept_row(h, ui.ctx(), &rows[i]);
+    }
+}
+
+/// Attach dropped files, deduplicated by path — the same list the "+" picker
+/// and the @-mention fill, so `prompt_blocks` turns them into image /
+/// resource_link blocks on send.
+pub(crate) fn attach_dropped(h: &mut Harness, paths: Vec<std::path::PathBuf>) {
+    for p in paths {
+        if !h.attachments.contains(&p) {
+            h.attachments.push(p);
+        }
     }
 }
 

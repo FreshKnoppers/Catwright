@@ -185,6 +185,18 @@ pub struct SessionView {
     /// its first line; the authoritative history stays with Vibe, a
     /// rewind restores from there.
     pub trimmed_front: u32,
+    /// A `session/load` is replaying the history into this view. Replayed
+    /// tool calls get no client-side timestamps: their arrival says nothing
+    /// about how long they took, so the per-round view shows no duration.
+    pub replaying: bool,
+}
+
+/// Epoch seconds now (client-side timestamp for update arrivals).
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl SessionView {
@@ -195,6 +207,7 @@ impl SessionView {
         let mut fork = self.clone();
         fork.session_id = session_id.into();
         fork.turn = TurnState::Idle;
+        fork.replaying = false;
         fork.permissions = Vec::new();
         // frame counters belong to the fork's own pending permissions —
         // it starts without any
@@ -290,6 +303,7 @@ impl SessionView {
             turn: TurnState::Idle,
             turn_start: None,
             trimmed_front: 0,
+            replaying: false,
         }
     }
 
@@ -337,17 +351,42 @@ impl SessionView {
                 // Replay/duplicate: replace the entry, no second Item::Tool.
                 // The bounded copy caps the raws' size (audit N1).
                 let is_new = !self.tool_calls.contains_key(&id);
-                self.tool_calls.insert(id.clone(), tc.bounded_clone());
+                let mut tc = tc.bounded_clone();
+                // client-side arrival timestamps (per-round duration view);
+                // a duplicate keeps the first arrival of the call it replaces
+                if !self.replaying {
+                    let now = now_epoch_secs();
+                    tc.first_seen = self
+                        .tool_calls
+                        .get(&id)
+                        .map(|old| old.first_seen)
+                        .filter(|&t| t != 0)
+                        .unwrap_or(now);
+                    tc.last_update = now;
+                }
+                self.tool_calls.insert(id.clone(), tc);
                 if is_new {
                     self.items.push(Item::Tool(id));
                 }
             }
             SessionUpdate::ToolCallUpdate(u) => {
                 let id = u.tool_call_id.clone();
+                let stamp = (!self.replaying).then(now_epoch_secs);
                 match self.tool_calls.get_mut(&id) {
-                    Some(tc) => tc.apply(u),
+                    Some(tc) => {
+                        tc.apply(u);
+                        // a call first seen in a replay stays without a
+                        // start: a duration from here on would be too short
+                        if let Some(now) = stamp.filter(|_| tc.first_seen != 0) {
+                            tc.last_update = now;
+                        }
+                    }
                     None => {
-                        let tc = tool_call_from_update(u).bounded_clone();
+                        let mut tc = tool_call_from_update(u).bounded_clone();
+                        if let Some(now) = stamp {
+                            tc.first_seen = now;
+                            tc.last_update = now;
+                        }
                         self.tool_calls.insert(id.clone(), tc);
                         self.items.push(Item::Tool(id));
                     }
@@ -759,6 +798,8 @@ fn tool_call_from_update(u: &ToolCallUpdate) -> ToolCall {
         raw_input: u.raw_input.clone(),
         raw_output: u.raw_output.clone(),
         meta: u.meta.clone(),
+        first_seen: 0,
+        last_update: 0,
     }
 }
 
