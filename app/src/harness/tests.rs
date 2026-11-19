@@ -6146,3 +6146,49 @@ fn changed_files_open_as_a_commentable_preview_diff() {
     );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// vibe-acp sends only an id with a permission request — the call's entry
+/// id, or just the tool's name when it has none. A card whose call the
+/// session has not seen shows that id and says that no details came,
+/// instead of an empty card; once the call arrives it shows the call.
+#[test]
+fn permission_card_without_a_known_call_is_not_empty() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: serde_json::from_value(json!({
+            "sessionId": "s1",
+            "toolCall": {"toolCallId": "bash"},
+            "options": [
+                {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                {"optionId": "reject_once", "name": "Deny", "kind": "reject_once"}
+            ]
+        }))
+        .unwrap(),
+    });
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(all.contains("Run action"), "headline:\n{all}");
+    assert!(all.contains("bash"), "the tool Vibe named:\n{all}");
+    assert!(all.contains("Vibe sent no details"), "the note:\n{all}");
+    assert!(all.contains("Allow once"), "still answerable:\n{all}");
+
+    // the call arrives: the card shows it, the note goes
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "bash",
+            "title": "ls -la",
+            "kind": "execute",
+            "status": "pending",
+            "rawInput": {"command": "ls -la"}
+        }))
+        .unwrap(),
+    });
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(all.contains("$ ls -la"), "the real call:\n{all}");
+    assert!(!all.contains("Vibe sent no details"), "no note:\n{all}");
+}

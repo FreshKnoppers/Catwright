@@ -31,6 +31,11 @@ Fixes:
 - `dist/install.sh` refreshes the icon cache, so a new app icon shows up.
 - The activity feed drops the "Mark all read" button: opening the feed
   already marks everything read.
+- An approval whose tool call Vibe had not reported (vibe-acp sends only an
+  id, sometimes just the tool's name) showed an empty card; it now shows the
+  tool or call id and says that Vibe sent no details.
+- The card for a subagent's approval and the loop warning were German in
+  the English UI.
 - The preview pane's diff found no committed version when the project is a
   sub-folder of its repository, and showed every line as new.
 

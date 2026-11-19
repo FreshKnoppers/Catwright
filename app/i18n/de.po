@@ -1709,3 +1709,12 @@ msgstr "Der Worktree konnte nicht gelöscht werden: {error}"
 
 msgid "Enter a task and an interval first."
 msgstr "Erst einen Auftrag und ein Intervall eingeben."
+
+msgid "Vibe sent no details for this approval — only the tool or call shown above."
+msgstr "Vibe hat zu dieser Freigabe keine Details geschickt – nur das Werkzeug bzw. den Aufruf oben."
+
+msgid "This request belongs to no open session — probably a subagent. Please answer, or Vibe waits forever."
+msgstr "Diese Anfrage gehört zu keinem geöffneten Verlauf – vermutlich ein Subagent. Bitte antworten, sonst wartet Vibe endlos."
+
+msgid "“{title}” has now run {n} times in a row with the same input. Vibe cannot stop itself — you can cancel the running turn here."
+msgstr "„{title}“ läuft zum {n}. Mal hintereinander mit denselben Eingaben. Vibe kann sich selbst nicht bremsen – du kannst den laufenden Turn hier abbrechen."

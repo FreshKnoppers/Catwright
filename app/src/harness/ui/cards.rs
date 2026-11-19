@@ -6,7 +6,7 @@ use super::*;
 use crate::acp::protocol::{PermissionKind, ToolCallContent, ToolKind};
 use crate::acp::session::{repeated_tool_call, PendingPermission, TurnState};
 use crate::harness::extras::{self, QuestionAnswer};
-use crate::i18n::tr;
+use crate::i18n::{tr, trf};
 use egui::Event;
 use serde_json::Value;
 
@@ -382,6 +382,8 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                                 });
                         }
                     }
+                } else {
+                    unknown_call(ui, &p.request.tool_call);
                 }
                 ui.add_space(4.0);
                 option_row(ui, p, idx == 0 && digits, &mut answers);
@@ -391,6 +393,65 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     }
     for (request_id, option_id) in answers {
         h.answer_permission(sid, &request_id, &option_id);
+    }
+}
+
+/// The body of a permission card whose tool call this session has not seen
+/// (yet): vibe-acp sends only an id with the request — the call's entry id,
+/// or just the tool's name (`bash`) when it has none. What the request
+/// itself carries is shown, plus an honest note; once the call arrives the
+/// card shows it in full on the next frame.
+fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) {
+    ui.label(
+        RichText::new(tr("Run action"))
+            .size(14.0)
+            .color(theme::TEXT),
+    );
+    let shown = call
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| call.tool_call_id.clone());
+    if !shown.trim().is_empty() {
+        egui::Frame::none()
+            .fill(theme::BG)
+            .rounding(egui::Rounding::same(3.0))
+            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(shown)
+                            .monospace()
+                            .size(12.5)
+                            .color(theme::TEXT),
+                    )
+                    .wrap(),
+                );
+            });
+    }
+    for (key, value) in permission_arguments(call.raw_input.as_ref(), false) {
+        ui.horizontal_top(|ui| {
+            ui.label(RichText::new(key).monospace().size(12.0).color(theme::DIM));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(value)
+                        .monospace()
+                        .size(12.0)
+                        .color(theme::TEXT),
+                )
+                .wrap(),
+            );
+        });
+    }
+    if call.title.is_none() && call.raw_input.is_none() {
+        ui.label(
+            RichText::new(tr(
+                "Vibe sent no details for this approval — only the tool or call shown above.",
+            ))
+            .size(12.0)
+            .color(theme::DIM),
+        );
     }
 }
 
@@ -493,10 +554,9 @@ fn orphan_cards(h: &mut Harness, ui: &mut egui::Ui) {
             ui.set_width(ui.available_width());
             theme::section_header(ui, tr("Approval required"), true);
             ui.label(
-                RichText::new(
-                    "Diese Anfrage gehört zu keinem geöffneten Verlauf – vermutlich ein \
-                     Subagent. Bitte antworten, sonst wartet Vibe endlos.",
-                )
+                RichText::new(tr(
+                    "This request belongs to no open session — probably a subagent. Please answer, or Vibe waits forever.",
+                ))
                 .size(13.0)
                 .color(theme::MUTED),
             );
@@ -545,10 +605,9 @@ fn loop_guard(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         theme::section_header(ui, tr("Agent repeats the same call — possible loop"), true);
         ui.add_space(2.0);
         ui.label(
-            RichText::new(format!(
-                "„{}“ läuft zum {}. Mal hintereinander mit denselben Eingaben. Vibe kann sich \
-                 selbst nicht bremsen – du kannst den laufenden Turn hier abbrechen.",
-                rep.title, rep.count
+            RichText::new(trf(
+                "“{title}” has now run {n} times in a row with the same input. Vibe cannot stop itself — you can cancel the running turn here.",
+                &[("title", &rep.title), ("n", &rep.count)],
             ))
             .size(13.0)
             .color(theme::MUTED),
