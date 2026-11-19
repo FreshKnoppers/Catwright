@@ -289,6 +289,14 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<St
         .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
+        // no fetching, ever: a shipped partial-clone config
+        // (`extensions.partialClone` + a promisor remote) would make git
+        // lazily fetch missing objects, and an ssh remote would run the
+        // repo's `core.sshCommand`. Command-line `-c` beats .git/config,
+        // and the env var disables lazy fetch itself (git >= 2.45).
+        .arg("-c")
+        .arg("protocol.allow=never")
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -377,14 +385,22 @@ pub(crate) fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
 const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Filter drivers that can execute code on a git scan or checkout, probed
-/// from every config scope a shipped `.git` can reach: `--includes` follows
-/// `include.path`/`includeIf` (a zip/tarball can ship the included file —
-/// PoC-verified that `git status` then runs its clean filter while a
-/// `--local`-only probe sees nothing), `--show-scope` reports where each key
-/// came from, and every scope other than system/global is the repo's own
-/// word. `git config --list` exits 0 in any repository, so `None` here means
+/// from every config scope a shipped `.git` can reach: `--includes` +
+/// `--show-scope` report where each key came from (a zip/tarball can ship
+/// an `include.path` target — PoC-verified that `git status` then runs its
+/// clean filter while a `--local`-only probe sees nothing), and every scope
+/// other than system/global is the repo's own word. A repo-scope
+/// `include.*`/`includeIf.*` fails the probe CLOSED instead (it can point
+/// at a FIFO a live attacker rewrites between probe and command).
+/// `git config --list` exits 0 in any repository, so `None` here means
 /// the probe itself failed — callers fail closed.
 pub fn probe_filter_drivers(dir: &Path) -> Option<Vec<String>> {
+    probe_filter_drivers_timeout(dir, GIT_TIMEOUT)
+}
+
+/// Same probe with a custom deadline — the diff preview calls git on the UI
+/// thread, so its budget is smaller than the watcher thread's.
+fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<String>> {
     // Tri-state gate, fail closed on anything ambiguous. `rev-parse
     // --git-dir` exits 0 in a repository and 128 outside one — but it READS
     // the repo config, so a shipped `include.path` pointing at a FIFO blocks
@@ -397,7 +413,7 @@ pub fn probe_filter_drivers(dir: &Path) -> Option<Vec<String>> {
     match git_raw(
         dir,
         &["rev-parse".to_string(), "--git-dir".to_string()],
-        GIT_TIMEOUT,
+        timeout,
         4096,
         &[],
     ) {
@@ -415,16 +431,49 @@ pub fn probe_filter_drivers(dir: &Path) -> Option<Vec<String>> {
                     "--list".to_string(),
                     "-z".to_string(),
                 ],
-                GIT_TIMEOUT,
+                timeout,
                 MAX_GIT_OUTPUT_BYTES,
                 &[],
             ) {
-                RawGit::Ok(out) => Some(parse_scoped_filter_list(&out)),
+                RawGit::Ok(out) => {
+                    // A repo-scope `include.*`/`includeIf.*` can point at a
+                    // FIFO or a file a live attacker rewrites between our
+                    // probe and the real command — probing first cannot fix
+                    // that race, so refuse to run git here at all.
+                    if repo_scoped_include(&out) {
+                        return None;
+                    }
+                    Some(parse_scoped_filter_list(&out))
+                }
                 _ => None,
             }
         }
         _ => None,
     }
+}
+
+/// True when the scoped config list contains an `include.*`/`includeIf.*`
+/// key from a repo scope (local/worktree/... — not system/global, those are
+/// the user's own). Such an include can redirect config reads to a file the
+/// repo controls, which makes probe-then-run racy, so callers fail closed.
+fn repo_scoped_include(out: &str) -> bool {
+    let parts: Vec<&str> = out.split('\0').collect();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        let scope = parts[i];
+        let key_value = parts[i + 1];
+        i += 2;
+        if scope == "system" || scope == "global" {
+            continue;
+        }
+        if let Some((key, _)) = key_value.split_once('\n') {
+            let k = key.to_ascii_lowercase();
+            if k.starts_with("include.") || k.starts_with("includeif.") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Parse `git config --show-scope --list -z` output (verified against
@@ -488,12 +537,9 @@ fn git_output_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Option<St
     git_raw_bounded(dir, &all, timeout, MAX_GIT_OUTPUT_BYTES, &neutral)
 }
 
-/// `git_output` with an explicit stdout cap (and the same filter probe).
-pub fn git_output_sized(dir: &Path, args: &[&str], max_bytes: usize) -> Option<String> {
-    let neutral = filter_neutralizers(&probe_filter_drivers(dir)?);
-    let all: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    git_raw_bounded(dir, &all, GIT_TIMEOUT, max_bytes, &neutral)
-}
+/// Deadline for git calls that run on the UI thread (the diff preview):
+/// probe + read together must stay well under a frame budget.
+const PREVIEW_GIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The committed content of `rel` at HEAD via PLUMBING (`cat-file blob`).
 /// Never use `git show HEAD:./rel` for this: when `rel` is a gitlink the
@@ -503,10 +549,17 @@ pub fn git_output_sized(dir: &Path, args: &[&str], max_bytes: usize) -> Option<S
 /// (RCE). `cat-file blob` applies no textconv and no filters and fails on
 /// non-blobs (gitlinks), which callers treat as "no old version".
 pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String> {
-    git_output_sized(
+    let neutral = filter_neutralizers(&probe_filter_drivers_timeout(dir, PREVIEW_GIT_TIMEOUT)?);
+    git_raw_bounded(
         dir,
-        &["cat-file", "blob", &format!("HEAD:./{rel}")],
+        &[
+            "cat-file".to_string(),
+            "blob".to_string(),
+            format!("HEAD:./{rel}"),
+        ],
+        PREVIEW_GIT_TIMEOUT,
         max_bytes,
+        &neutral,
     )
 }
 
@@ -547,6 +600,14 @@ fn git_raw(
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.fsmonitor=false")
+        // no fetching, ever: a shipped partial-clone config
+        // (`extensions.partialClone` + a promisor remote) would make git
+        // lazily fetch missing objects, and an ssh remote would run the
+        // repo's `core.sshCommand`. Command-line `-c` beats .git/config,
+        // and the env var disables lazy fetch itself (git >= 2.45).
+        .arg("-c")
+        .arg("protocol.allow=never")
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(dir)
         // never touch the repository's index: the agent's own git commands
@@ -1043,9 +1104,12 @@ mod tests {
 
     /// PoC variant: the driver comes from an `include.path` target shipped
     /// inside the tree — a `--local`-only probe would miss it, and plain
-    /// `git status` executes it (verified against git 2.56).
+    /// `git status` executes it (verified against git 2.56). Because an
+    /// include can also point at a FIFO that a live attacker rewrites
+    /// between probe and command, a repo-scope include now fails the
+    /// probe CLOSED: no git scan runs there at all.
     #[test]
-    fn status_scan_does_not_run_an_included_clean_filter() {
+    fn repo_scope_include_fails_the_probe_closed() {
         let base = tmp_base("filter-include");
         let repo = base.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -1075,17 +1139,31 @@ mod tests {
         git(&["add", ".gitattributes", "f.txt"]);
         let _ = std::fs::remove_file(&marker); // git add ran the filter already
 
-        let drivers = probe_filter_drivers(&repo).expect("probe succeeds");
-        assert_eq!(
-            drivers,
-            vec!["inc"],
-            "the --includes probe sees the included driver"
-        );
-        assert!(git_output(&repo, &["status", "--porcelain", "-z"]).is_some());
+        // sanity: plain git status WOULD run the included filter (the PoC)
+        let plain = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["status", "--porcelain"])
+            .output()
+            .unwrap();
+        let _ = plain.status;
         assert!(
-            !marker.exists(),
-            "the included clean filter must not have run on our scan"
+            marker.exists(),
+            "PoC premise: plain git status runs the included filter"
         );
+        let _ = std::fs::remove_file(&marker);
+
+        // our probe refuses the repo outright: include => fail closed
+        assert_eq!(
+            probe_filter_drivers(&repo),
+            None,
+            "a repo-scope include must fail the probe closed"
+        );
+        assert!(
+            git_output(&repo, &["status", "--porcelain", "-z"]).is_none(),
+            "no git scan may run in a repo with a repo-scope include"
+        );
+        assert!(!marker.exists(), "the included filter must never run");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1328,6 +1406,23 @@ mod tests {
             other => panic!("expected Ok in a repo, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `include.*`/`includeIf.*` from a repo scope fails the probe closed;
+    /// from system/global (the user's own) it must not.
+    #[test]
+    fn repo_scoped_include_detection() {
+        // scope\0 key\nvalue\0 pairs, as `git config --show-scope --list -z` emits
+        let with_include = "local\0include.path\n../evil.conf\0worktree\0filter.x.clean\ncat\0";
+        assert!(repo_scoped_include(with_include));
+        let with_include_if = "local\0includeIf.gitdir:/x/.path\ny\0";
+        assert!(repo_scoped_include(with_include_if));
+        let capitalized = "local\0Include.Path\n../evil.conf\0";
+        assert!(repo_scoped_include(capitalized));
+        let user_scopes_only =
+            "global\0include.path\n~/ok.conf\0system\0includeIf.gitdir:/x/.path\ny\0local\0filter.x.clean\ncat\0";
+        assert!(!repo_scoped_include(user_scopes_only));
+        assert!(!repo_scoped_include(""));
     }
 
     /// The watcher must not run any git scan in a folder that is not

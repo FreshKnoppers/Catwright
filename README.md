@@ -111,13 +111,14 @@ The screenshots show demo projects with prepared sessions
   only when you open it.
 - Catwright runs its own `git` lookups (branch/dirty count, file list, diff
   previews) only in folders Vibe reported as trusted, and neutralizes any
-  `filter.*` drivers a shipped `.git/config` (zip/tarball, including
-  `include.path` targets) might define — `git status` would otherwise
-  execute them. The config probe fails closed when it cannot be read, and
-  committed blobs are read through plumbing (`git cat-file blob`), never
-  `git show`, so a shipped `diff.*.textconv` can never run. Until a folder
-  is trusted, the git chip stays hidden and the diff preview shows a notice
-  instead.
+  `filter.*` drivers a shipped `.git/config` (zip/tarball) might define —
+  `git status` would otherwise execute them. Any repo-scope
+  `include.*`/`includeIf.*` fails the config probe closed, fetching is
+  disabled outright (`protocol.allow=never`, no lazy fetch), the config
+  probe fails closed when it cannot be read, and committed blobs are read
+  through plumbing (`git cat-file blob`), never `git show`, so a shipped
+  `diff.*.textconv` can never run. Until a folder is trusted, the git chip
+  stays hidden and the diff preview shows a notice instead.
 - Previewing a path outside the session's workspace asks first; preview
   reads are capped (2 MiB) and never block on special files.
 - Voice input and output are off by default. When you use them, audio and

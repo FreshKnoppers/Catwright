@@ -189,6 +189,10 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
         .and_then(|sid| h.sessions.get(sid))
         .map(|v| v.cwd.clone())
         .or_else(|| h.current_project.clone());
+    // git for the diff runs in the workspace when the path is inside it,
+    // else in the file's own parent — and only when THAT folder is trusted
+    let git_dir = git_dir_for(&p.path, base.as_deref());
+    let git_trusted = h.trust.get(&git_dir).is_some_and(|t| t.trusted);
     let out = egui::SidePanel::right("harness_preview")
         .resizable(true)
         .default_width(p.width)
@@ -270,14 +274,11 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                             Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
                         // git scans (and so the diff's HEAD read) only run
                         // for folders the agent reported as trusted
-                        let trusted = base
-                            .as_deref()
-                            .is_some_and(|b| h.trust.get(b).is_some_and(|t| t.trusted));
                         diff_content(
                             ui,
                             &p.path,
                             base.as_deref(),
-                            trusted,
+                            git_trusted,
                             (&key, &mut comments, &mut ops),
                         );
                         comment_section(ui, &key, &shown, &mut comments, &mut ops);
@@ -311,6 +312,20 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
 /// the transcript's red/green line diff (not the raw `git diff` text). The
 /// HEAD blob and the file text are cached by path, mtime and size (git and
 /// the file read are subprocesses; they must not run every frame).
+/// The folder git runs in for a previewed path: the workspace when the
+/// path lies inside it, else the file's own parent (a changed file above a
+/// sub-folder project). The caller gates this folder on trust.
+fn git_dir_for(path: &str, base: Option<&std::path::Path>) -> std::path::PathBuf {
+    base.filter(|b| std::path::Path::new(path).starts_with(b))
+        .map(|b| b.to_path_buf())
+        .unwrap_or_else(|| {
+            std::path::Path::new(path)
+                .parent()
+                .unwrap_or(std::path::Path::new("/"))
+                .to_path_buf()
+        })
+}
+
 fn diff_content(
     ui: &mut egui::Ui,
     path: &str,
@@ -319,7 +334,7 @@ fn diff_content(
     comment: (&str, &mut Comments, &mut Vec<MessageOp>),
 ) {
     type DiffCache = std::sync::Mutex<
-        std::collections::HashMap<(String, Option<u64>, u64), (Option<String>, String)>,
+        std::collections::HashMap<(String, Option<u64>, u64, bool), (Option<String>, String)>,
     >;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -345,7 +360,9 @@ fn diff_content(
         );
         return;
     }
-    let key = (path.to_string(), mtime, len);
+    // the trust state is part of the key: a diff cached while the folder
+    // was untrusted must not survive trusting it (and vice versa)
+    let key = (path.to_string(), mtime, len, trusted);
     let (old, current) = {
         let mut c = cache.lock().unwrap();
         if let Some(t) = c.get(&key) {
@@ -354,15 +371,7 @@ fn diff_content(
             // git runs in the workspace, or next to the file when it lies
             // outside (a changed file above a sub-folder project); the
             // call neutralizes the repo's own filter drivers (watch.rs)
-            let dir = base
-                .filter(|b| std::path::Path::new(path).starts_with(b))
-                .map(|b| b.to_path_buf())
-                .unwrap_or_else(|| {
-                    std::path::Path::new(path)
-                        .parent()
-                        .unwrap_or(std::path::Path::new("/"))
-                        .to_path_buf()
-                });
+            let dir = git_dir_for(path, base);
             let rel = std::path::Path::new(path)
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())
