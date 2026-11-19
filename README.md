@@ -35,8 +35,9 @@ Subagents with the plan and their status bars in the side panel:
 ![Three subagents at work: two cats chase their balls of yarn, the third one is done and sits](docs/screenshots/subagents.png)
 
 Voice dictation while it runs (`--dictate`): the microphone is orange, and
-the text Mistral recognises streams into the composer; nothing is sent until
-you send it (see [Voice input and output](#voice-input-and-output)):
+the text Mistral recognises streams into the composer. The audio goes to
+Mistral for transcription right away, but nothing goes to the agent until you
+send the message (see [Voice input and output](#voice-input-and-output)):
 
 ![The composer with the orange microphone and a dictated sentence about a temperature chart](docs/screenshots/dictation.png)
 
