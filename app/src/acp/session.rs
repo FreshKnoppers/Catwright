@@ -680,8 +680,8 @@ impl SessionView {
     /// All subagents of this session, in the order of their `Item::Tool`
     /// entries. The state follows the real flow (docs/acp.md): a failed spawn
     /// is `Failed`, a pending/running spawn is `Running`, a completed spawn is
-    /// `Done` once a later `self.wait` call completed or the turn ended
-    /// without a cancel, and `Cancelled` for the subagents that were still
+    /// `Done` once a later `self.wait` call completed, the turn ended
+    /// without a cancel or a later turn began, and `Cancelled` for the subagents that were still
     /// unfinished when a turn ended cancelled — frozen in
     /// `cancelled_tools` at that moment, so it survives the next
     /// `begin_turn` (N5).
@@ -709,7 +709,10 @@ impl SessionView {
                     ToolStatus::Completed | ToolStatus::Other => {
                         let waited = self.waited_for(pos);
                         let turn_ended = self.turn == TurnState::Idle;
-                        if waited || turn_ended {
+                        // a spawn of an earlier turn: that turn is over, so
+                        // the next turn must not set its cat walking again
+                        let earlier_turn = self.turn_start.is_some_and(|start| pos < start);
+                        if waited || turn_ended || earlier_turn {
                             SubagentState::Done
                         } else {
                             SubagentState::Running
@@ -2266,6 +2269,23 @@ mod tests {
         assert_eq!(view.subagents()[0].state, SubagentState::Running);
         view.finish_turn(&cancelled_turn());
         assert_eq!(view.subagents()[0].state, SubagentState::Cancelled);
+    }
+
+    /// A completed spawn nobody waited for is Done once its turn ended; the
+    /// next turn must not set it walking again (manual test 0.3.0).
+    #[test]
+    fn finished_subagent_stays_done_in_the_next_turn() {
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&spawn_update("completed", json!({})));
+        view.finish_turn(&end_turn());
+        assert_eq!(view.subagents()[0].state, SubagentState::Done);
+        view.begin_turn();
+        assert_eq!(
+            view.subagents()[0].state,
+            SubagentState::Done,
+            "an earlier turn's subagent stays Done while the next turn runs"
+        );
     }
 
     /// N5: the Cancelled state is frozen per subagent, not re-derived from
