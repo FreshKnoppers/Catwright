@@ -1016,26 +1016,36 @@ pub(crate) struct SpeakerButton {
     pub pinned: bool,
 }
 
-/// Copy button in the top right corner of an agent answer while hovered, and
-/// left of it the speaker (with the setting on). Returns true when the
-/// speaker was clicked; the caller decides what that means.
+/// Height of the action row under every agent answer.
+const ANSWER_ACTIONS_H: f32 = 20.0;
+
+/// The action row under an agent answer: copy and, with the setting on, the
+/// speaker left of it, right-aligned at the END of the answer, so a long
+/// answer needs no scrolling back up. The row is always reserved (the
+/// buttons only show while the answer is hovered), so nothing below jumps
+/// when they appear; while the answer is read the speaker shows without
+/// hovering. Returns true when the speaker was clicked; the caller decides
+/// what that means.
 fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str, speaker: Option<SpeakerButton>) -> bool {
-    let bottom = ui.cursor().top();
-    let right = ui.max_rect().right();
-    let body = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(right, bottom));
+    let (row, _) = ui.allocate_exact_size(
+        vec2(ui.available_width(), ANSWER_ACTIONS_H),
+        egui::Sense::hover(),
+    );
+    let right = row.right();
+    let body = Rect::from_min_max(pos2(row.left(), top), pos2(right, row.bottom()));
     let hovered = ui.rect_contains_pointer(body);
+    let side = ANSWER_ACTIONS_H;
     let mut clicked = false;
     // The speaker keeps its place left of the copy button, so it does not
-    // jump away from the pointer when the hover actions appear; while the
-    // answer is read it is shown without hovering.
+    // jump away from the pointer when the hover actions appear.
     if let Some(speaker) = speaker {
         if hovered || speaker.pinned {
-            let r = Rect::from_min_size(pos2(right - 44.0, top), vec2(22.0, 22.0));
+            let r = Rect::from_min_size(pos2(right - 2.0 * side, row.top()), vec2(side, side));
             if widgets::place(
                 ui,
                 r,
                 IconButton::new(speaker.icon, speaker.tooltip)
-                    .side(22.0)
+                    .side(side)
                     .color(speaker.color)
                     .fill(theme::BG),
             )
@@ -1046,12 +1056,12 @@ fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str, speaker: Option<Speake
         }
     }
     if hovered {
-        let r = Rect::from_min_size(pos2(right - 22.0, top), vec2(22.0, 22.0));
+        let r = Rect::from_min_size(pos2(right - side, row.top()), vec2(side, side));
         if widgets::place(
             ui,
             r,
             IconButton::new(Icon::Copy, tr("Copy answer"))
-                .side(22.0)
+                .side(side)
                 .fill(theme::BG),
         )
         .clicked()

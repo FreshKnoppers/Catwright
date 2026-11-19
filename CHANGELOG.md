@@ -11,6 +11,8 @@ tag (`## v0.2.0`) as that release's description.
 - Read answers aloud (Settings → General): a speaker button on Vibe's answers
   has Vibe summarise and speak the answer, and an option reads every finished
   answer automatically.
+- The copy button of an answer (and the speaker) sit under the answer, at
+  its end: a long answer no longer needs scrolling back up.
 
 ## v0.4.0
 
