@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/FreshKnoppers/Catwright/security/advisories/new
+    about: Report vulnerabilities privately, not in a public issue.
+  - name: Problem in Mistral Vibe itself
+    url: https://github.com/mistralai/mistral-vibe/issues
+    about: Bugs in Vibe or vibe-acp that also happen without Catwright.

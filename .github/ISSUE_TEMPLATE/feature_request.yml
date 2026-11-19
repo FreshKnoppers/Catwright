@@ -1,0 +1,25 @@
+name: Feature request
+description: An idea for something Catwright could do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The situation and what is missing or awkward today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Catwright help?
+      description: Optional. Your idea for a solution, sketches welcome.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Optional. Workarounds you use now, or how other tools do it.
+    validations:
+      required: false

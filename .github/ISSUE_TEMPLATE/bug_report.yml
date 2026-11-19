@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in Catwright does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems do not belong here; see
+        [SECURITY.md](https://github.com/FreshKnoppers/Catwright/blob/main/SECURITY.md).
+        Do not paste API keys, private prompts or file contents you do not
+        want to publish.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project with …
+        2. Send a message that …
+        3. Click …
+    validations:
+      required: false
+  - type: input
+    id: catwright-version
+    attributes:
+      label: Catwright version
+      description: Output of `catwright --version`, or the release name.
+    validations:
+      required: true
+  - type: input
+    id: vibe-version
+    attributes:
+      label: Vibe version
+      description: Output of `vibe --version`.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Distribution and desktop session.
+      placeholder: Arch Linux, KDE Plasma 6 on Wayland
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, error messages
+      description: Optional. Remove anything private first.
+    validations:
+      required: false

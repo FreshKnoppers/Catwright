@@ -191,9 +191,9 @@ cargo fmt --check
 - `docs/design.md`: colours and pixel style
 - `AGENTS.md`: rules for coding agents working on the project
 
-Contributions are welcome. Code, comments and identifiers are English. UI
-text is written in English in the code (`tr("…")`); the German translation
-lives in `app/i18n/de.po`. New translations are welcome too.
+Contributions are welcome, translations too. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the rules and the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

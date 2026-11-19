@@ -8,6 +8,8 @@ tag (`## v0.2.0`) as that release's description.
 - Release archives carry a build provenance attestation; check one with
   `gh attestation verify <archive> --repo FreshKnoppers/Catwright`.
 - `SECURITY.md`: how to report vulnerabilities privately.
+- `CONTRIBUTING.md`, a code of conduct and forms for issues and pull
+  requests.
 
 ## v0.3.1
 
