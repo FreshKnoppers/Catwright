@@ -187,6 +187,10 @@ Vibe records the microphone and transcribes through Mistral; Catwright contains
 no audio code. It sends three extension requests and appends what comes back.
 None of them carries a `sessionId`: Vibe uses the first session open in its
 process, and without one it answers `{"ok":false,"error":"No active session"}`.
+On the start screen (no session open in vibe-acp) Catwright therefore starts
+the project's session first, as the first message would, and sends
+`_voice/transcribeStart` once `session/new` answers; a message sent meanwhile
+goes into that session.
 
 | method | params | result |
 |---|---|---|

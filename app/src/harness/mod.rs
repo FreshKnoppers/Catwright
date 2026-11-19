@@ -195,6 +195,10 @@ pub struct Harness {
     /// No `_voice/transcriptionDelta` arrived yet for the running dictation:
     /// its first piece is separated from the typed draft by one space.
     dictation_first_delta: bool,
+    /// The microphone was clicked on the start screen with no session open
+    /// in vibe-acp (Vibe's voice needs one): the session/new for this
+    /// project is in flight, and the transcription starts once it answers.
+    dictation_session: Option<PathBuf>,
     /// Whether the window has focus (refreshed by the app shell every
     /// frame). Notifications only fire while it does not.
     pub window_focused: bool,
@@ -354,6 +358,7 @@ impl Harness {
             voice_dictation: false,
             dictation: Dictation::Idle,
             dictation_first_delta: false,
+            dictation_session: None,
             window_focused: true,
             pending_notify: Vec::new(),
             prompt_on_ready: None,
@@ -742,6 +747,17 @@ impl Harness {
                 self.activate(sid.clone(), &cwd);
                 // a fresh session: its first prompt carries the UI hint
                 self.hint_pending.insert(sid.clone());
+                // the microphone asked for this session: now Vibe has one to
+                // record with
+                if self.dictation_session.as_ref() == Some(&cwd) {
+                    self.dictation_session = None;
+                    if self.dictation == Dictation::Starting {
+                        let language = crate::i18n::lang().code().to_string();
+                        if !self.send_ext(ExtKind::VoiceTranscribeStart { language }) {
+                            self.dictation = Dictation::Idle;
+                        }
+                    }
+                }
                 // a queued prompt for this cwd goes out — but only once the
                 // start mode is active: a fresh Vibe session defaults to
                 // accept-edits, which would allow file changes without asking
@@ -1121,6 +1137,10 @@ impl Harness {
                         }
                     }
                     RequestKind::NewSession { probe: false, .. } => {
+                        // a dictation waiting for this session is over
+                        if self.dictation_session.take().is_some() {
+                            self.dictation = Dictation::Idle;
+                        }
                         // the session never came to be: put the held prompt
                         // back into the composer of the start screen it was
                         // typed in — parked when another session is on
@@ -1588,7 +1608,9 @@ impl Harness {
             return;
         }
         // the message is going out: a running dictation stops here, so Vibe
-        // does not keep recording into the next draft
+        // does not keep recording into the next draft. A session/new the
+        // microphone started is still coming: the message goes into it.
+        let pending_session = self.dictation_session.clone();
         self.cancel_dictation();
         if self.client.is_none() {
             self.status = tr("Vibe is not connected.").to_string();
@@ -1632,13 +1654,19 @@ impl Harness {
                 self.status = tr("Please add a project on the left first.").to_string();
                 return;
             };
-            let res = self.client.as_ref().map(|c| c.new_session(&cwd));
-            match res {
-                Some(Ok(_)) => {
-                    self.queued = Some((cwd, blocks));
+            if pending_session.as_ref() == Some(&cwd) {
+                // the microphone already asked for this project's session:
+                // the message waits for it instead of starting a second one
+                self.queued = Some((cwd, blocks));
+            } else {
+                let res = self.client.as_ref().map(|c| c.new_session(&cwd));
+                match res {
+                    Some(Ok(_)) => {
+                        self.queued = Some((cwd, blocks));
+                    }
+                    Some(Err(e)) => self.status = e,
+                    None => self.status = tr("Vibe is not connected.").to_string(),
                 }
-                Some(Err(e)) => self.status = e,
-                None => self.status = tr("Vibe is not connected.").to_string(),
             }
         }
         self.draft.clear();
@@ -2730,6 +2758,24 @@ impl Harness {
     /// decides the next state.
     pub fn toggle_dictation(&mut self) {
         match self.dictation {
+            Dictation::Idle if self.sessions.is_empty() => {
+                // Vibe records with the first session open in its process,
+                // and the start screen has none: start the session the first
+                // message would start anyway, and record once it is there
+                let Some(cwd) = self.current_project.clone() else {
+                    self.status = tr("Please add a project on the left first.").to_string();
+                    return;
+                };
+                match self.client.as_ref().map(|c| c.new_session(&cwd)) {
+                    Some(Ok(_)) => {
+                        self.dictation_session = Some(cwd);
+                        self.dictation = Dictation::Starting;
+                        self.dictation_first_delta = true;
+                    }
+                    Some(Err(e)) => self.status = e,
+                    None => self.status = tr("Vibe is not connected.").to_string(),
+                }
+            }
             Dictation::Idle => {
                 let language = crate::i18n::lang().code().to_string();
                 if self.send_ext(ExtKind::VoiceTranscribeStart { language }) {
@@ -2750,6 +2796,12 @@ impl Harness {
     /// dictation is aborted, so Vibe does not keep recording into the next
     /// draft (and no recording is left without its button).
     pub(crate) fn cancel_dictation(&mut self) {
+        // still waiting for the session: nothing records yet, the session
+        // itself stays (a message may go into it)
+        if self.dictation_session.take().is_some() {
+            self.dictation = Dictation::Idle;
+            return;
+        }
         if matches!(self.dictation, Dictation::Starting | Dictation::Recording) {
             self.send_ext(ExtKind::VoiceTranscribeCancel);
             self.dictation = Dictation::Idle;

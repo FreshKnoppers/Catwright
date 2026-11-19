@@ -6430,3 +6430,84 @@ fn the_microphone_is_painted_only_with_the_setting_on() {
         "the microphone button is painted"
     );
 }
+
+/// On the start screen no session is open in vibe-acp, and Vibe's voice
+/// needs one: the microphone starts the project's session first and the
+/// transcription once it is there.
+#[test]
+fn dictation_on_the_start_screen_starts_the_session_first() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    h.current_project = Some(dir.clone());
+    h.voice_dictation = true;
+    h.toggle_dictation();
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "session/new");
+    assert_eq!(msg["params"]["cwd"], json!(dir.to_string_lossy()));
+    assert_eq!(h.dictation, Dictation::Starting);
+    // a second click while the session is coming does nothing
+    h.toggle_dictation();
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: dir.clone(),
+        result: new_session_result("s1"),
+    });
+    assert_eq!(h.active.as_deref(), Some("s1"));
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/transcribeStart");
+    assert_eq!(agent.read_msg()["method"], "session/list");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    assert_eq!(h.dictation, Dictation::Recording);
+}
+
+/// A message sent while the microphone's session is still coming goes into
+/// that session: no second session/new.
+#[test]
+fn sending_while_the_dictation_session_is_coming_uses_it() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    h.current_project = Some(dir.clone());
+    h.voice_dictation = true;
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "session/new");
+    h.draft = "Hallo Vibe".into();
+    h.send();
+    assert_eq!(h.dictation, Dictation::Idle);
+    assert!(h.queued.is_some(), "the message waits for the session");
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: dir.clone(),
+        result: new_session_result("s1"),
+    });
+    // the message goes out, no transcription starts (the dictation ended)
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "session/prompt");
+    assert_eq!(msg["params"]["sessionId"], json!("s1"));
+    assert_eq!(agent.read_msg()["method"], "session/list");
+}
+
+/// The microphone's session/new fails: the dictation is over.
+#[test]
+fn a_failed_dictation_session_ends_the_dictation() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    h.current_project = Some(dir.clone());
+    h.voice_dictation = true;
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "session/new");
+    h.handle_event(AcpEvent::RequestFailed {
+        request: RequestKind::NewSession {
+            cwd: dir.clone(),
+            probe: false,
+        },
+        error: rpc::RpcError {
+            code: -32603,
+            message: "boom".into(),
+            data: None,
+        },
+    });
+    assert_eq!(h.dictation, Dictation::Idle);
+}
