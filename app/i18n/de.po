@@ -1650,6 +1650,18 @@ msgstr "Vibe ist fertig in {project}"
 msgid "Vibe needs your approval in {project}"
 msgstr "Vibe braucht deine Freigabe in {project}"
 
+msgid "Vibe is done"
+msgstr "Vibe ist fertig"
+
+msgid "Vibe needs your approval"
+msgstr "Vibe braucht deine Freigabe"
+
+msgid "Vibe has a question in {project}"
+msgstr "Vibe hat eine Frage in {project}"
+
+msgid "Vibe has a question"
+msgstr "Vibe hat eine Frage"
+
 msgid "Round details"
 msgstr "Runden-Details"
 

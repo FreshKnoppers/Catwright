@@ -72,6 +72,14 @@ enum SetupStep {
     Config(String, String),
 }
 
+/// What a desktop notification reports (see `Harness::maybe_notify`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Notify {
+    Done,
+    Approval,
+    Question,
+}
+
 /// Where [`Harness::park_or_restore`] put a message: into the composer
 /// on screen, parked under the session that owns it (it shows up when
 /// the user opens that session, review H3/M13), or nothing to put back.
@@ -793,6 +801,7 @@ impl Harness {
                             tr("Vibe asks a question").to_string(),
                             Some(request_id.clone()),
                         );
+                        self.maybe_notify(&sid, Notify::Question);
                         self.questions.push(q);
                     }
                     None => {
@@ -844,7 +853,7 @@ impl Harness {
                     .to_string();
                 }
                 self.push_activity(ActivityKind::Waiting, &sid, text, Some(request_id));
-                self.maybe_notify(&sid, false);
+                self.maybe_notify(&sid, Notify::Approval);
             }
             AcpEvent::PromptFinished { session_id, result } => {
                 // the turn is over: no text to restore for it anymore
@@ -862,7 +871,7 @@ impl Harness {
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| tr("Turn finished").to_string());
                     self.push_activity(ActivityKind::Finished, &session_id, text, None);
-                    self.maybe_notify(&session_id, true);
+                    self.maybe_notify(&session_id, Notify::Done);
                 }
                 let mut cwd = None;
                 if let Some(v) = self.sessions.get_mut(&session_id) {
@@ -1912,11 +1921,13 @@ impl Harness {
         self.archived.remove(session_id);
     }
 
-    /// Queue a desktop notification for a finished turn (`done`) or a
-    /// waiting approval, but only when the setting is on and the window has
-    /// no focus. The body names the project only — never the session title,
-    /// the prompt or the answer.
-    fn maybe_notify(&mut self, sid: &str, done: bool) {
+    /// Queue a desktop notification for a finished turn, a waiting approval
+    /// or a question, but only when the setting is on and the window has no
+    /// focus. The body names the project only — never the session title,
+    /// the prompt or the answer. A session this client does not know (a
+    /// subagent's) still notifies, just without a project name: the turn
+    /// waits for the user either way.
+    fn maybe_notify(&mut self, sid: &str, kind: Notify) {
         if !self.notify_events || self.window_focused {
             return;
         }
@@ -1927,15 +1938,20 @@ impl Harness {
                 .find(|s| s.session_id == sid)
                 .map(|s| PathBuf::from(&s.cwd))
         });
-        let Some(cwd) = cwd else { return };
-        let project = project_name(&cwd);
-        let body = if done {
-            trf("Vibe is done in {project}", &[("project", &project)])
-        } else {
-            trf(
+        let body = match (kind, cwd.map(|c| project_name(&c))) {
+            (Notify::Done, Some(project)) => {
+                trf("Vibe is done in {project}", &[("project", &project)])
+            }
+            (Notify::Done, None) => tr("Vibe is done").to_string(),
+            (Notify::Approval, Some(project)) => trf(
                 "Vibe needs your approval in {project}",
                 &[("project", &project)],
-            )
+            ),
+            (Notify::Approval, None) => tr("Vibe needs your approval").to_string(),
+            (Notify::Question, Some(project)) => {
+                trf("Vibe has a question in {project}", &[("project", &project)])
+            }
+            (Notify::Question, None) => tr("Vibe has a question").to_string(),
         };
         self.pending_notify.push(body);
     }

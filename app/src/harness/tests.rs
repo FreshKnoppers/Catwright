@@ -5630,6 +5630,31 @@ fn desktop_notifications_queue_only_when_unfocused_and_opted_in() {
     assert!(notes[0].contains("approval"), "approval text: {}", notes[0]);
     assert!(notes[0].contains(&project_name(&dir)));
 
+    // a question waits for the user just like an approval
+    h.handle_event(AcpEvent::QuestionAsked {
+        request_id: json!(9),
+        params: json!({"sessionId": "s1", "requestedSchema": {"properties": {
+            "q0": {"type": "string", "description": "Format?",
+                   "oneOf": [{"const": "CSV", "title": "CSV"}]}
+        }}}),
+    });
+    let notes = h.take_pending_notifications();
+    assert_eq!(notes.len(), 1, "a question notifies");
+    assert!(notes[0].contains("question"), "question text: {}", notes[0]);
+    assert!(notes[0].contains(&project_name(&dir)));
+
+    // an approval of a session this client does not know (a subagent's)
+    // still notifies, without a project name
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(1),
+        request: permission_request("child-of-s1"),
+    });
+    assert_eq!(
+        h.take_pending_notifications(),
+        vec!["Vibe needs your approval".to_string()],
+        "unknown session: generic approval text"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
