@@ -1695,6 +1695,9 @@ msgstr "Worktree „{name}“ löschen? Die Dateien im Hauptprojekt bleiben unbe
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "Der Worktree hat ungespeicherte Änderungen — sie gehen verloren."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "Der Worktree konnte nicht auf Änderungen geprüft werden — Dateien können verloren gehen.
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Auch den Branch „{branch}“ löschen"
 
@@ -1766,3 +1769,45 @@ msgstr "Außerhalb des Workspaces"
 
 msgid "This file lies outside the session's workspace."
 msgstr "Diese Datei liegt außerhalb des Workspaces der Sitzung."
+
+msgid "Open file outside the workspace?"
+msgstr "Datei außerhalb des Workspace öffnen?"
+
+msgid "Show “{path}” in the preview? The path lies outside the session's workspace."
+msgstr "„{path}“ in der Vorschau anzeigen? Der Pfad liegt außerhalb des Workspaces der Sitzung."
+
+msgid "Show"
+msgstr "Anzeigen"
+
+msgid "Table truncated: {rows} more rows, {cols} more columns not shown."
+msgstr "Tabelle gekürzt: {rows} weitere Zeilen, {cols} weitere Spalten nicht angezeigt."
+
+msgid "Click again to send “{action}”"
+msgstr "Erneut klicken, um „{action}“ zu senden"
+
+msgid "Sends: {action}"
+msgstr "Sendet: {action}"
+
+msgid "Click again to send “{submit}”"
+msgstr "Erneut klicken, um „{submit}“ zu senden"
+
+msgid "On submit, the values above are sent to the agent."
+msgstr "Beim Absenden werden die obigen Werte an den Agenten geschickt."
+
+msgid "Arguments ({n})"
+msgstr "Argumente ({n})"
+
+msgid "… {n} values cut to {chars} characters"
+msgstr "… {n} Werte auf {chars} Zeichen gekürzt"
+
+msgid "Script error: the evaluation process died."
+msgstr "Skriptfehler: Der Auswertungsprozess ist abgestürzt."
+
+msgid "The config folder is a symlink: {path}"
+msgstr "Der Konfigurationsordner ist ein Symlink: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "Die Diff-Vorschau braucht einen vertrauten Ordner."

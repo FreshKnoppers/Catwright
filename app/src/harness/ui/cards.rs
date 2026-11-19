@@ -323,33 +323,63 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         });
                     // what the tool will actually be called with: the title
                     // is Vibe's summary ("Reading README.md"), the arguments
-                    // are the truth (full paths, URLs, patterns)
+                    // are the truth (full paths, URLs, patterns). ALL of
+                    // them are shown — this card is the user's only
+                    // safeguard when approving, so an argument that sits
+                    // next to `command` (cwd, env, …) must not be hidden.
                     let has_diff = t
                         .content
                         .iter()
                         .any(|c| matches!(c, ToolCallContent::Diff { .. }));
-                    let args = if command.is_some() {
-                        Vec::new()
+                    let (args, cut) = permission_arguments(t.raw_input.as_ref(), has_diff);
+                    // the command itself is the headline above; its key
+                    // stays out of the argument list
+                    let args: Vec<(String, String)> = if command.is_some() {
+                        args.into_iter().filter(|(k, _)| k != "command").collect()
                     } else {
-                        permission_arguments(t.raw_input.as_ref(), has_diff)
+                        args
                     };
                     if !args.is_empty() {
                         ui.add_space(2.0);
-                        for (key, value) in &args {
-                            ui.horizontal_top(|ui| {
-                                ui.label(
-                                    RichText::new(key).monospace().size(12.0).color(theme::DIM),
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(value)
-                                            .monospace()
-                                            .size(12.0)
-                                            .color(theme::TEXT),
-                                    )
-                                    .wrap(),
-                                );
+                        ui.label(
+                            RichText::new(trf("Arguments ({n})", &[("n", &args.len())]))
+                                .size(12.0)
+                                .color(theme::DIM),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt(("permission_args", idx))
+                            .max_height(140.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (key, value) in &args {
+                                    ui.horizontal_top(|ui| {
+                                        ui.label(
+                                            RichText::new(key)
+                                                .monospace()
+                                                .size(12.0)
+                                                .color(theme::DIM),
+                                        );
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(value)
+                                                    .monospace()
+                                                    .size(12.0)
+                                                    .color(theme::TEXT),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                                }
                             });
+                        if cut > 0 {
+                            ui.label(
+                                RichText::new(trf(
+                                    "… {n} values cut to {chars} characters",
+                                    &[("n", &cut), ("chars", &MAX_ARGUMENT_CHARS)],
+                                ))
+                                .size(11.0)
+                                .color(theme::DIM),
+                            );
                         }
                     }
                     for content in &t.content {
@@ -430,7 +460,7 @@ fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) 
                 );
             });
     }
-    for (key, value) in permission_arguments(call.raw_input.as_ref(), false) {
+    for (key, value) in permission_arguments(call.raw_input.as_ref(), false).0 {
         ui.horizontal_top(|ui| {
             ui.label(RichText::new(key).monospace().size(12.0).color(theme::DIM));
             ui.add(
@@ -460,29 +490,23 @@ fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) 
 /// AND reject — stays behind a deliberate click (Bug 6, Handoff
 /// 2026-11-09: "lasting options only by click"). The digit is the option's
 /// position among the eligible ones, not its place in Vibe's list.
-/// Most arguments a permission card lists, and the longest value shown.
-const MAX_SHOWN_ARGUMENTS: usize = 8;
+/// The longest argument value shown on a permission card; longer ones are
+/// cut with "…" (and counted, so the card can say how many were cut).
 const MAX_ARGUMENT_CHARS: usize = 300;
 
 /// The tool call's arguments as (key, value) rows for the permission card,
-/// sorted by key (serde_json's map order). A file body that the card
-/// already shows as a diff is left out (`content`, `new_string`, …); long
-/// values are cut with "…".
-fn permission_arguments(raw: Option<&Value>, has_diff: bool) -> Vec<(String, String)> {
+/// sorted by key (serde_json's map order) — ALL of them, not just the
+/// first eight: the card is the user's only safeguard when approving, and
+/// an argument that sorts late must not be invisible. A file body that the
+/// card already shows as a diff is left out (`content`, `new_string`, …);
+/// long values are cut with "…" and the second return value counts the cuts.
+fn permission_arguments(raw: Option<&Value>, has_diff: bool) -> (Vec<(String, String)>, usize) {
     const DIFF_BODIES: [&str; 5] = ["content", "new_string", "old_string", "newText", "oldText"];
     let Some(Value::Object(map)) = raw else {
-        return Vec::new();
-    };
-    let cut = |text: String| -> String {
-        if text.chars().count() > MAX_ARGUMENT_CHARS {
-            let mut t: String = text.chars().take(MAX_ARGUMENT_CHARS).collect();
-            t.push('…');
-            t
-        } else {
-            text
-        }
+        return (Vec::new(), 0);
     };
     let mut out = Vec::new();
+    let mut cut_count = 0;
     for (key, value) in map {
         if has_diff && DIFF_BODIES.contains(&key.as_str()) {
             continue;
@@ -492,12 +516,16 @@ fn permission_arguments(raw: Option<&Value>, has_diff: bool) -> Vec<(String, Str
             Value::Null => continue,
             other => other.to_string(),
         };
-        out.push((key.clone(), cut(text)));
-        if out.len() == MAX_SHOWN_ARGUMENTS {
-            break;
+        if text.chars().count() > MAX_ARGUMENT_CHARS {
+            let mut t: String = text.chars().take(MAX_ARGUMENT_CHARS).collect();
+            t.push('…');
+            cut_count += 1;
+            out.push((key.clone(), t));
+        } else {
+            out.push((key.clone(), text));
         }
     }
-    out
+    (out, cut_count)
 }
 
 fn option_digit(kind: PermissionKind, eligible_before: usize) -> Option<usize> {
@@ -693,7 +721,7 @@ mod tests {
             "flags": ["-r"]
         });
         assert_eq!(
-            permission_arguments(Some(&raw), false),
+            permission_arguments(Some(&raw), false).0,
             vec![
                 (
                     "filePath".to_string(),
@@ -704,13 +732,27 @@ mod tests {
             ]
         );
         // the body a diff already shows stays out; long values are cut
+        // and counted
         let raw = serde_json::json!({"filePath": "a.txt", "content": "x".repeat(5000)});
-        assert_eq!(permission_arguments(Some(&raw), true).len(), 1);
-        let long = permission_arguments(Some(&raw), false);
+        assert_eq!(permission_arguments(Some(&raw), true).0.len(), 1);
+        let (long, cut) = permission_arguments(Some(&raw), false);
         let body = &long.iter().find(|(k, _)| k == "content").unwrap().1;
         assert!(body.ends_with('…') && body.chars().count() == 301);
-        assert!(permission_arguments(None, false).is_empty());
-        assert!(permission_arguments(Some(&serde_json::json!("x")), false).is_empty());
+        assert_eq!(cut, 1);
+        assert!(permission_arguments(None, false).0.is_empty());
+        assert!(permission_arguments(Some(&serde_json::json!("x")), false)
+            .0
+            .is_empty());
+        // no 8-key cap: all arguments come back
+        let many: serde_json::Map<String, Value> = (0..30)
+            .map(|i| (format!("k{i:02}"), Value::from(i)))
+            .collect();
+        assert_eq!(
+            permission_arguments(Some(&Value::Object(many)), false)
+                .0
+                .len(),
+            30
+        );
     }
 
     use super::*;

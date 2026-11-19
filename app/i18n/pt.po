@@ -1695,6 +1695,9 @@ msgstr "Eliminar o worktree «{name}»? Os ficheiros no projeto principal ficam 
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "O worktree tem alterações sem commit — vão perder-se."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "Não foi possível verificar as alterações do worktree — arquivos podem ser perdidos.
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Eliminar também a branch «{branch}»"
 
@@ -1766,3 +1769,45 @@ msgstr "Fora do espaço de trabalho"
 
 msgid "This file lies outside the session's workspace."
 msgstr "Este ficheiro está fora do espaço de trabalho da sessão."
+
+msgid "Open file outside the workspace?"
+msgstr "Abrir um ficheiro fora da área de trabalho?"
+
+msgid "Show “{path}” in the preview? The path lies outside the session's workspace."
+msgstr "Mostrar «{path}» na pré-visualização? O caminho está fora da área de trabalho da sessão."
+
+msgid "Show"
+msgstr "Mostrar"
+
+msgid "Table truncated: {rows} more rows, {cols} more columns not shown."
+msgstr "Tabela truncada: mais {rows} linhas e {cols} colunas não mostradas."
+
+msgid "Click again to send “{action}”"
+msgstr "Clique novamente para enviar «{action}»"
+
+msgid "Sends: {action}"
+msgstr "Envia: {action}"
+
+msgid "Click again to send “{submit}”"
+msgstr "Clique novamente para enviar «{submit}»"
+
+msgid "On submit, the values above are sent to the agent."
+msgstr "Ao submeter, os valores acima são enviados ao agente."
+
+msgid "Arguments ({n})"
+msgstr "Argumentos ({n})"
+
+msgid "… {n} values cut to {chars} characters"
+msgstr "… {n} valores cortados para {chars} caracteres"
+
+msgid "Script error: the evaluation process died."
+msgstr "Erro de script: o processo de avaliação morreu."
+
+msgid "The config folder is a symlink: {path}"
+msgstr "A pasta de configuração é um link simbólico: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git oculto até a pasta ser de confiança"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "A pré-visualização de diff precisa de uma pasta de confiança."

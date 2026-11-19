@@ -1695,6 +1695,9 @@ msgstr "Eliminare il worktree «{name}»? I file nel progetto principale restano
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "Il worktree ha modifiche non committate — andranno perse."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "Impossibile verificare le modifiche del worktree — dei file potrebbero andare persi.
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Elimina anche il branch «{branch}»"
 
@@ -1766,3 +1769,45 @@ msgstr "Fuori dallo spazio di lavoro"
 
 msgid "This file lies outside the session's workspace."
 msgstr "Questo file è al di fuori dello spazio di lavoro della sessione."
+
+msgid "Open file outside the workspace?"
+msgstr "Aprire un file fuori dallo spazio di lavoro?"
+
+msgid "Show “{path}” in the preview? The path lies outside the session's workspace."
+msgstr "Mostrare «{path}» nell'anteprima? Il percorso è fuori dallo spazio di lavoro della sessione."
+
+msgid "Show"
+msgstr "Mostra"
+
+msgid "Table truncated: {rows} more rows, {cols} more columns not shown."
+msgstr "Tabella troncata: {rows} righe e {cols} colonne in più non mostrate."
+
+msgid "Click again to send “{action}”"
+msgstr "Clicca di nuovo per inviare «{action}»"
+
+msgid "Sends: {action}"
+msgstr "Invia: {action}"
+
+msgid "Click again to send “{submit}”"
+msgstr "Clicca di nuovo per inviare «{submit}»"
+
+msgid "On submit, the values above are sent to the agent."
+msgstr "All'invio, i valori sopra vengono inviati all'agente."
+
+msgid "Arguments ({n})"
+msgstr "Argomenti ({n})"
+
+msgid "… {n} values cut to {chars} characters"
+msgstr "… {n} valori tagliati a {chars} caratteri"
+
+msgid "Script error: the evaluation process died."
+msgstr "Errore di script: il processo di valutazione è morto."
+
+msgid "The config folder is a symlink: {path}"
+msgstr "La cartella di configurazione è un collegamento simbolico: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git nascosto finché la cartella non è attendibile"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "L’anteprima della diff richiede una cartella attendibile."

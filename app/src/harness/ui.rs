@@ -502,13 +502,28 @@ fn worktree_dialogs(h: &mut Harness, ctx: &egui::Context) {
                     .color(theme::TEXT)
                     .size(13.5),
                 );
-                if d.dirty {
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(tr("The worktree has uncommitted changes — they are lost."))
+                match d.dirty {
+                    Some(true) => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(tr(
+                                "The worktree has uncommitted changes — they are lost.",
+                            ))
                             .color(theme::RED_TEXT)
                             .size(12.5),
-                    );
+                        );
+                    }
+                    None => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(tr(
+                                "The worktree could not be checked for changes — files may be lost.",
+                            ))
+                            .color(theme::YELLOW)
+                            .size(12.5),
+                        );
+                    }
+                    Some(false) => {}
                 }
                 if !d.branch.is_empty() {
                     ui.add_space(10.0);
@@ -684,6 +699,18 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
             ),
             tr("Delete all"),
         ),
+        Confirm::PreviewOutside { path, .. } => {
+            // show where the path really points now (symlinks resolved)
+            let shown = path.canonicalize().unwrap_or_else(|_| path.clone());
+            (
+                tr("Open file outside the workspace?"),
+                trf(
+                    "Show “{path}” in the preview? The path lies outside the session's workspace.",
+                    &[("path", &shown.to_string_lossy())],
+                ),
+                tr("Show"),
+            )
+        }
     };
     match dialogs::confirm(ctx, "harness_confirm", title, &text, label, true) {
         Some(true) => {
@@ -703,6 +730,19 @@ fn confirm_dialog(h: &mut Harness, ctx: &egui::Context) {
                     None => h.start_mode = "auto-approve".to_string(),
                 },
                 Confirm::ClearRoutines { session_id, .. } => h.clear_loops(&session_id),
+                Confirm::PreviewOutside {
+                    session_id,
+                    path,
+                    diff,
+                    artifacts,
+                } => {
+                    if artifacts {
+                        h.artifact_selected = Some(path.to_string_lossy().into_owned());
+                        h.artifacts_open = true;
+                    } else {
+                        h.preview_now(session_id.as_deref(), &path, diff);
+                    }
+                }
             }
         }
         Some(false) => h.ui.confirm = None,

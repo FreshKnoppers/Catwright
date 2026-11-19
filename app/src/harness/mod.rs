@@ -27,8 +27,8 @@ use extras::{
 };
 use serde_json::{json, Value};
 use state::{
-    ActivityEvent, ActivityKind, Dictation, Narration, NarrationTarget, PreviewMode, PreviewState,
-    QueuedPrompt, TurnDiffView, TurnDiffs, UiState,
+    ActivityEvent, ActivityKind, Confirm, Dictation, Narration, NarrationTarget, PreviewMode,
+    PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs, UiState,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -48,6 +48,14 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How many pages of one `session/list` the harness asks for before it
 /// ends the chain itself (audit N2: the cursor chain is the agent's word).
 const MAX_LIST_PAGES: u32 = 200;
+/// How many listed sessions one workspace keeps (the agent drives the
+/// pages; each entry is small, but the total must still have a bound).
+const MAX_LISTED_SESSIONS: usize = 2_000;
+/// Flood bounds for the agent-driven pending collections: past the cap the
+/// oldest is answered (cancelled/declined), never grown into.
+const MAX_PENDING_PERMISSIONS: usize = 64;
+const MAX_PENDING_QUESTIONS: usize = 32;
+const MAX_RETRYING: usize = 64;
 
 /// Connection state to the `vibe-acp` child process.
 #[derive(Debug, Clone, PartialEq)]
@@ -616,12 +624,17 @@ impl Harness {
                 if cursor.is_some() {
                     let list = self.listed.entry(p.clone()).or_default();
                     for s in result.sessions {
+                        if list.len() >= MAX_LISTED_SESSIONS {
+                            break;
+                        }
                         if !list.iter().any(|e| e.session_id == s.session_id) {
                             list.push(s);
                         }
                     }
                 } else {
-                    self.listed.insert(p.clone(), result.sessions);
+                    let mut sessions = result.sessions;
+                    sessions.truncate(MAX_LISTED_SESSIONS);
+                    self.listed.insert(p.clone(), sessions);
                 }
                 // Vibe pages `session/list` (nextCursor): fetch the rest —
                 // but the harness drives the loop, so it also ends it: an
@@ -867,6 +880,14 @@ impl Harness {
                         );
                         self.maybe_notify(&sid, Notify::Question);
                         self.questions.push(q);
+                        // flood bound: past the cap the oldest is declined
+                        // (an honest answer, not a silent drop)
+                        while self.questions.len() > MAX_PENDING_QUESTIONS {
+                            let old = self.questions.remove(0);
+                            if let Some(c) = &self.client {
+                                let _ = c.respond_question(&old.request_id, "decline", None);
+                            }
+                        }
                     }
                     None => {
                         // not renderable as a form: an honest "declined"
@@ -948,6 +969,12 @@ impl Harness {
                 category,
                 detail,
             } => {
+                if self.retrying.len() >= MAX_RETRYING {
+                    // flood bound: evict an arbitrary entry before inserting
+                    if let Some(k) = self.retrying.keys().next().cloned() {
+                        self.retrying.remove(&k);
+                    }
+                }
                 self.retrying
                     .insert(session_id, retry_note(&category, &detail));
             }
@@ -964,6 +991,14 @@ impl Harness {
                     .unwrap_or_else(|| tr("Permission request").to_string());
                 if let Some(v) = self.sessions.get_mut(&request.session_id) {
                     v.add_permission(request_id.clone(), request);
+                    // flood bound: past the cap the oldest is answered
+                    // "cancelled" — a dropped request would hang its turn
+                    while v.permissions.len() > MAX_PENDING_PERMISSIONS {
+                        let old = v.permissions.remove(0);
+                        if let Some(c) = &self.client {
+                            let _ = c.respond_permission(&old.request_id, None);
+                        }
+                    }
                 } else {
                     // Handoff 2.2: never silently drop. The turn blocks
                     // until an answer arrives, and the answer goes over the
@@ -975,6 +1010,13 @@ impl Harness {
                         request_id: request_id.clone(),
                         request,
                     });
+                    // flood bound, same as for session permissions
+                    while self.orphan_permissions.len() > MAX_PENDING_PERMISSIONS {
+                        let old = self.orphan_permissions.remove(0);
+                        if let Some(c) = &self.client {
+                            let _ = c.respond_permission(&old.request_id, None);
+                        }
+                    }
                     self.status = tr(
                         "A permission of an unknown session was requested (maybe a subagent) – please answer on its card.",
                     )
@@ -1392,8 +1434,10 @@ impl Harness {
 
     /// Worktrees of `project` without the main worktree (the sidebar list).
     pub fn worktrees_of(&mut self, project: &Path) -> Vec<watch::WorktreeInfo> {
+        // a git scan: only in folders Vibe reported as trusted
+        let trusted = self.trust.get(project).is_some_and(|t| t.trusted);
         self.watcher
-            .worktrees(project)
+            .worktrees(project, trusted)
             .iter()
             .filter(|w| !w.main && w.path != project)
             .cloned()
@@ -1401,10 +1445,22 @@ impl Harness {
     }
 
     /// Uncommitted changes in a worktree (warns in the delete dialog).
-    pub fn worktree_dirty(path: &Path) -> bool {
-        watch::git_output(path, &["status", "--porcelain"])
-            .map(|o| !o.trim().is_empty())
-            .unwrap_or(false)
+    /// Only in a trusted folder, with a short deadline (this runs on the UI
+    /// thread) and without submodule recursion (a nested repo's own config
+    /// must not be read). The filter probe still runs in the worktree itself.
+    /// `None` = no trustworthy answer (untrusted folder, failed filter probe,
+    /// or over the deadline): deletion uses `--force`, so the dialog must
+    /// warn instead of silently discarding data.
+    pub fn worktree_dirty(path: &Path, trusted: bool) -> Option<bool> {
+        if !trusted {
+            return None;
+        }
+        watch::git_output_timeout(
+            path,
+            &["status", "--porcelain", "--ignore-submodules=all"],
+            std::time::Duration::from_secs(2),
+        )
+        .map(|o| !o.trim().is_empty())
     }
 
     /// Delete a worktree in the background; its branch only when
@@ -1427,16 +1483,25 @@ impl Harness {
         let job_path = path.clone();
         let branch = branch.to_string();
         std::thread::spawn(move || {
+            // `--force`: without it git runs its own cleanliness check
+            // INSIDE the worktree, reading that worktree's own config
+            // (config.worktree) — filters there are not covered by the
+            // probe, which ran in `project`. Our own dirty check already
+            // ran (worktree_dirty, probed in the worktree) before this.
             let res = watch::run_git(
                 &project,
-                &["worktree", "remove", &path.to_string_lossy()],
+                &["worktree", "remove", "--force", &path.to_string_lossy()],
                 WORKTREE_TIMEOUT,
             );
             let res = match res {
                 Ok(_) => {
                     if delete_branch && !branch.is_empty() {
-                        let _ =
-                            watch::run_git(&project, &["branch", "-D", &branch], WORKTREE_TIMEOUT);
+                        // `--` so a shipped ref name can never become an option
+                        let _ = watch::run_git(
+                            &project,
+                            &["branch", "-D", "--", &branch],
+                            WORKTREE_TIMEOUT,
+                        );
                     }
                     let _ = watch::run_git(&project, &["worktree", "prune"], WORKTREE_TIMEOUT);
                     Ok(())
@@ -1484,7 +1549,10 @@ impl Harness {
 
     /// Open `path` in the preview pane beside the transcript (a clicked
     /// path in a tool row, diff chip or changes row). Relative paths
-    /// resolve against the session's workspace.
+    /// resolve against the session's workspace. A path that resolves
+    /// outside the workspace is not opened right away — the agent names
+    /// these paths, and reading e.g. a key file into the UI wants an
+    /// explicit user decision (see `Confirm::PreviewOutside`).
     pub fn open_preview(&mut self, sid: &str, path: &str) {
         let session_cwd = self.sessions.get(sid).map(|v| v.cwd.clone());
         let resolved = if Path::new(path).is_absolute() {
@@ -1493,26 +1561,49 @@ impl Harness {
             session_cwd.as_ref().map(|c| c.join(path))
         };
         if let Some(p) = resolved {
-            // The path may come from the agent (tool rows, diff chips): a
-            // `..` or a symlink can lead outside the workspace, so resolve
-            // it canonically and flag it — the header shows a badge then.
             let outside_workspace = session_cwd
                 .as_deref()
                 .map(|c| crate::render::is_outside_workspace(c, &p))
                 .unwrap_or(false);
-            self.ui.preview = Some(PreviewState {
-                path: p.to_string_lossy().into_owned(),
-                width: 380.0,
-                mode: PreviewMode::Code,
-                outside_workspace,
-            });
+            if outside_workspace {
+                self.ui.confirm = Some(Confirm::PreviewOutside {
+                    session_id: Some(sid.to_string()),
+                    path: p,
+                    diff: false,
+                    artifacts: false,
+                });
+            } else {
+                self.preview_now(Some(sid), &p, false);
+            }
         }
+    }
+
+    /// Actually show `path` in the preview pane (called directly for
+    /// workspace paths, after the confirm dialog for outside ones).
+    pub(crate) fn preview_now(&mut self, sid: Option<&str>, path: &Path, diff: bool) {
+        let session_cwd = sid
+            .and_then(|s| self.sessions.get(s).map(|v| v.cwd.clone()))
+            .or_else(|| self.current_project.clone());
+        let outside_workspace = session_cwd
+            .as_deref()
+            .map(|c| crate::render::is_outside_workspace(c, path))
+            .unwrap_or(false);
+        let width = self.ui.preview.as_ref().map_or(380.0, |p| p.width);
+        self.ui.preview = Some(PreviewState {
+            path: path.to_string_lossy().into_owned(),
+            width,
+            mode: if diff {
+                PreviewMode::Diff
+            } else {
+                PreviewMode::Code
+            },
+            outside_workspace,
+        });
     }
 
     /// Show the absolute `path` in the preview pane as its diff against the
     /// last commit (the header's list of changed files).
     pub fn open_preview_diff(&mut self, path: &Path) {
-        let width = self.ui.preview.as_ref().map_or(380.0, |p| p.width);
         let base = self
             .active
             .as_deref()
@@ -1523,6 +1614,16 @@ impl Harness {
             .as_deref()
             .map(|c| crate::render::is_outside_workspace(c, path))
             .unwrap_or(false);
+        if outside_workspace {
+            self.ui.confirm = Some(Confirm::PreviewOutside {
+                session_id: self.active.clone(),
+                path: path.to_path_buf(),
+                diff: true,
+                artifacts: false,
+            });
+            return;
+        }
+        let width = self.ui.preview.as_ref().map_or(380.0, |p| p.width);
         self.ui.preview = Some(PreviewState {
             path: path.to_string_lossy().into_owned(),
             width,

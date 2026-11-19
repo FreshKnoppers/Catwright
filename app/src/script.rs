@@ -534,14 +534,56 @@ pub struct ScriptTool {
     /// renderer feeds this in after painting, `set_dragging`).
     dragging: bool,
     eval: EvalFn,
+    /// A background evaluation in flight (production): the paint thread
+    /// only spawns and polls, it never waits for the worker — one hostile
+    /// block near the loop limit must not freeze the UI for `EVAL_TIMEOUT`
+    /// on every first paint (N blocks would be N x 2 s). The answer lands
+    /// on this channel and is picked up by a later `nodes_at`.
+    pending: Option<PendingEval>,
+    /// Generation counter: bumped by every spawn AND every state change
+    /// (`set_value`, `on_action`). A result whose generation is stale is
+    /// dropped instead of overwriting newer state (race: state changed
+    /// while the worker was running).
+    gen: u64,
+    /// Tests evaluate synchronously (`with_eval`), so their virtual-clock
+    /// assertions stay deterministic; production (`new`) goes async.
+    sync: bool,
+}
+
+/// Concurrent ui-js workers allowed app-wide: each is a process with a boa
+/// engine. The per-harness tool cap bounds the total; this bounds the
+/// in-flight evaluations.
+const MAX_CONCURRENT_WORKERS: usize = 4;
+
+fn workers_running() -> &'static std::sync::atomic::AtomicUsize {
+    static W: std::sync::OnceLock<std::sync::atomic::AtomicUsize> = std::sync::OnceLock::new();
+    W.get_or_init(|| std::sync::atomic::AtomicUsize::new(0))
+}
+
+/// The receiver of a pending evaluation plus the generation it was spawned
+/// at; dropping releases the worker slot (even if the tool goes away).
+struct PendingEval {
+    rx: std::sync::mpsc::Receiver<Result<WorkerResponse, String>>,
+    gen: u64,
+}
+
+impl Drop for PendingEval {
+    fn drop(&mut self) {
+        workers_running().fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl ScriptTool {
     pub fn new(source: &str) -> Self {
-        Self::with_eval(source, eval_in_worker)
+        Self::with_eval_mode(source, eval_in_worker, false)
     }
 
+    #[cfg(test)]
     fn with_eval(source: &str, eval: EvalFn) -> Self {
+        Self::with_eval_mode(source, eval, true)
+    }
+
+    fn with_eval_mode(source: &str, eval: EvalFn, sync: bool) -> Self {
         Self {
             source: source.to_string(),
             state: Value::Object(Default::default()),
@@ -552,6 +594,9 @@ impl ScriptTool {
             retry_available: false,
             dragging: false,
             eval,
+            pending: None,
+            gen: 0,
+            sync,
         }
     }
 
@@ -567,36 +612,89 @@ impl ScriptTool {
     /// The same, with the clock passed in (pure enough to unit-test the
     /// throttle without sleeping).
     fn nodes_at(&mut self, now: Instant) -> &Result<Vec<UiNode>, String> {
-        if should_evaluate(self.dirty, self.last_eval, now, self.dragging) {
-            self.dirty = false;
-            self.last_eval = Some(now);
-            self.last = self.render_now();
-            // a failed evaluation (transient or not) earns one bounded
-            // retry; a success spends the budget (M2)
-            self.retry_available = self.last.is_err();
-        } else if should_retry(
-            self.last.is_err(),
-            self.retry_available,
-            self.last_eval,
-            now,
-        ) {
-            // the bounded wakeup of M2: a transient error (timeout, spawn
-            // failure) must not leave the tool dead until a reconnect —
-            // after the cooldown, the next paint makes one more attempt;
-            // it spends the budget regardless of the outcome, so this can
+        if self.sync {
+            // test path: evaluate inline so the clock assertions below
+            // stay deterministic
+            if should_evaluate(self.dirty, self.last_eval, now, self.dragging) {
+                self.dirty = false;
+                self.last_eval = Some(now);
+                self.last = self.render_now();
+                // a failed evaluation (transient or not) earns one bounded
+                // retry; a success spends the budget (M2)
+                self.retry_available = self.last.is_err();
+            } else if should_retry(
+                self.last.is_err(),
+                self.retry_available,
+                self.last_eval,
+                now,
+            ) {
+                self.last_eval = Some(now);
+                self.retry_available = false;
+                self.last = self.render_now();
+            }
+            return &self.last;
+        }
+        // production path: poll a running background evaluation, never
+        // block the paint thread on it
+        if let Some(p) = self.pending.take() {
+            match p.rx.try_recv() {
+                Ok(res) => {
+                    if p.gen == self.gen {
+                        self.last = self.finish_render(res);
+                        self.retry_available = self.last.is_err();
+                    }
+                    // else: stale — the state changed while the worker ran;
+                    // the answer is dropped, the change re-evaluates below
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // still running: put the receiver back, the caller
+                    // repaints (eval_pending) and a later frame polls again
+                    self.pending = Some(p);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if p.gen == self.gen {
+                        self.last =
+                            Err(tr("Script error: the evaluation process died.").to_string());
+                        self.retry_available = true;
+                    }
+                }
+            }
+        }
+        if self.pending.is_none() && should_evaluate(self.dirty, self.last_eval, now, self.dragging)
+        {
+            if let Some(p) = self.spawn_render() {
+                self.dirty = false;
+                self.last_eval = Some(now);
+                self.pending = Some(p);
+                self.retry_available = false;
+            }
+            // else: worker cap reached — stay dirty, the next frame retries
+        } else if self.pending.is_none()
+            && should_retry(
+                self.last.is_err(),
+                self.retry_available,
+                self.last_eval,
+                now,
+            )
+        {
+            // the bounded wakeup of M2, same rule as the sync path: one
+            // retry per failure, never before RETRY_COOLDOWN, and it can
             // never become a per-frame respawn loop
-            self.last_eval = Some(now);
-            self.retry_available = false;
-            self.last = self.render_now();
+            if let Some(p) = self.spawn_render() {
+                self.last_eval = Some(now);
+                self.retry_available = false;
+                self.pending = Some(p);
+            }
         }
         &self.last
     }
 
     /// A changed state could not be evaluated yet (throttled away during
-    /// a drag): the caller should request a repaint so the update is
-    /// applied as soon as the gap allows, and never stays stale.
+    /// a drag, or a background evaluation still runs): the caller should
+    /// request a repaint so the update is applied as soon as it can, and
+    /// never stays stale.
     pub fn eval_pending(&self) -> bool {
-        self.dirty
+        self.dirty || self.pending.is_some()
     }
 
     /// Whether a slider of this block is being dragged. The renderer calls
@@ -638,6 +736,7 @@ impl ScriptTool {
             return;
         }
         self.state = next;
+        self.gen += 1; // an in-flight render result is now stale
         self.dirty = true;
     }
 
@@ -647,6 +746,7 @@ impl ScriptTool {
         match (self.eval)(&request) {
             Ok(resp) if resp.ok => {
                 self.adopt(&resp);
+                self.gen += 1; // an in-flight render result is now stale
                 if resp.outcome.as_deref() == Some("local") {
                     self.dirty = true;
                     ActionOutcome::Local
@@ -691,9 +791,60 @@ impl ScriptTool {
         self.init_pending = false;
     }
 
+    /// Evaluate inline and take over the answer (the sync/test path, and
+    /// `on_action` on a user click — bounded by `EVAL_TIMEOUT` either way).
     fn render_now(&mut self) -> Result<Vec<UiNode>, String> {
         let request = self.request(None);
-        match (self.eval)(&request) {
+        let res = (self.eval)(&request);
+        self.finish_render(res)
+    }
+
+    /// Spawn one background evaluation: the request is cloned into owned
+    /// data for the thread, the answer comes back over the channel.
+    /// Spawn one background evaluation, if a worker slot is free. Bumps the
+    /// generation, so a result of an older evaluation is dropped as stale.
+    fn spawn_render(&mut self) -> Option<PendingEval> {
+        let w = workers_running();
+        let mut cur = w.load(std::sync::atomic::Ordering::Relaxed);
+        loop {
+            if cur >= MAX_CONCURRENT_WORKERS {
+                return None; // cap reached: the caller stays dirty and retries
+            }
+            match w.compare_exchange_weak(
+                cur,
+                cur + 1,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(c) => cur = c,
+            }
+        }
+        self.gen += 1;
+        let gen = self.gen;
+        let eval = self.eval;
+        let source = self.source.clone();
+        let state = self.state.clone();
+        let init = self.init_pending;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let request = WorkerRequest {
+                source: &source,
+                state: &state,
+                init,
+                action: None,
+            };
+            let _ = tx.send(eval(&request));
+        });
+        Some(PendingEval { rx, gen })
+    }
+
+    /// Turn a worker answer into the render result, adopting its state.
+    fn finish_render(
+        &mut self,
+        res: Result<WorkerResponse, String>,
+    ) -> Result<Vec<UiNode>, String> {
+        match res {
             Ok(resp) if resp.ok => {
                 self.adopt(&resp);
                 let nodes = resp.nodes.as_ref().ok_or_else(|| {

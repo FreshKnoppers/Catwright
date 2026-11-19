@@ -1695,6 +1695,9 @@ msgstr "¿Eliminar el worktree «{name}»? Los archivos del proyecto principal n
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "El worktree tiene cambios sin confirmar: se perderán."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "No se pudo comprobar si el worktree tiene cambios — se pueden perder archivos.
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Eliminar también la rama «{branch}»"
 
@@ -1766,3 +1769,45 @@ msgstr "Fuera del espacio de trabajo"
 
 msgid "This file lies outside the session's workspace."
 msgstr "Este archivo está fuera del espacio de trabajo de la sesión."
+
+msgid "Open file outside the workspace?"
+msgstr "¿Abrir un archivo fuera del espacio de trabajo?"
+
+msgid "Show “{path}” in the preview? The path lies outside the session's workspace."
+msgstr "¿Mostrar «{path}» en la vista previa? La ruta está fuera del espacio de trabajo de la sesión."
+
+msgid "Show"
+msgstr "Mostrar"
+
+msgid "Table truncated: {rows} more rows, {cols} more columns not shown."
+msgstr "Tabla truncada: {rows} filas y {cols} columnas más no mostradas."
+
+msgid "Click again to send “{action}”"
+msgstr "Haz clic otra vez para enviar «{action}»"
+
+msgid "Sends: {action}"
+msgstr "Envía: {action}"
+
+msgid "Click again to send “{submit}”"
+msgstr "Haz clic otra vez para enviar «{submit}»"
+
+msgid "On submit, the values above are sent to the agent."
+msgstr "Al enviar, los valores de arriba se envían al agente."
+
+msgid "Arguments ({n})"
+msgstr "Argumentos ({n})"
+
+msgid "… {n} values cut to {chars} characters"
+msgstr "… {n} valores recortados a {chars} caracteres"
+
+msgid "Script error: the evaluation process died."
+msgstr "Error de script: el proceso de evaluación murió."
+
+msgid "The config folder is a symlink: {path}"
+msgstr "La carpeta de configuración es un enlace simbólico: {path}"
+
+msgid "Git hidden until the folder is trusted"
+msgstr "Git oculto hasta que se confíe en la carpeta"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "La vista de diff necesita una carpeta de confianza."

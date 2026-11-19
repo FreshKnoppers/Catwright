@@ -382,6 +382,11 @@ pub struct ToolCall {
     /// Client-side arrival of the last update (epoch seconds).
     #[serde(skip)]
     pub last_update: u64,
+    /// Cached retained size in bytes (recomputed in `apply`/`bounded_clone`),
+    /// so the per-update `trim_front` budget does not re-serialize every
+    /// retained tool call on every streamed chunk.
+    #[serde(skip)]
+    pub size_hint: usize,
 }
 
 impl ToolCall {
@@ -389,7 +394,7 @@ impl ToolCall {
     /// `content`/`locations` replace the whole list when present.
     pub fn apply(&mut self, upd: &ToolCallUpdate) {
         if let Some(title) = &upd.title {
-            self.title = title.clone();
+            self.title = bounded_text(title, MAX_TOOL_TITLE_BYTES);
         }
         if let Some(kind) = &upd.kind {
             self.kind = kind.clone();
@@ -398,10 +403,10 @@ impl ToolCall {
             self.status = status.clone();
         }
         if let Some(content) = &upd.content {
-            self.content = content.clone();
+            self.content = bounded_content(content);
         }
         if let Some(locations) = &upd.locations {
-            self.locations = locations.clone();
+            self.locations = bounded_locations(locations);
         }
         // serde maps json `null` to None, so `is_some` is presence; the
         // takeover itself caps the value's size (see bounded_raw)
@@ -412,26 +417,59 @@ impl ToolCall {
             self.raw_output = Some(bounded_raw(raw));
         }
         if upd.meta.is_some() {
-            self.meta = upd.meta.clone();
+            self.meta = upd.meta.as_ref().map(bounded_raw).or(upd.meta.clone());
         }
+        self.size_hint = self.compute_size_hint();
     }
 
     /// A copy whose raw input/output obey the retention bound: the first
     /// takeover goes through this cap too, not only updates of an entry.
     pub fn bounded_clone(&self) -> ToolCall {
-        ToolCall {
+        let mut tc = ToolCall {
             raw_input: self.raw_input.as_ref().map(bounded_raw),
             raw_output: self.raw_output.as_ref().map(bounded_raw),
             tool_call_id: self.tool_call_id.clone(),
-            title: self.title.clone(),
+            title: bounded_text(&self.title, MAX_TOOL_TITLE_BYTES),
             kind: self.kind.clone(),
             status: self.status.clone(),
-            content: self.content.clone(),
-            locations: self.locations.clone(),
-            meta: self.meta.clone(),
+            content: bounded_content(&self.content),
+            locations: bounded_locations(&self.locations),
+            meta: self.meta.as_ref().map(bounded_raw),
             first_seen: self.first_seen,
             last_update: self.last_update,
-        }
+            size_hint: 0,
+        };
+        tc.size_hint = tc.compute_size_hint();
+        tc
+    }
+
+    /// Recompute the cached retained size (called when fields change, not on
+    /// every read): the flood bound in `SessionView::trim_front` runs per
+    /// streamed chunk and must not re-serialize every retained entry then.
+    fn compute_size_hint(&self) -> usize {
+        let raw = |v: &Option<Value>| {
+            v.as_ref()
+                .map(|v| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0))
+                .unwrap_or(0)
+        };
+        self.title.len()
+            + 8 // kind: small enum, flat estimate
+            + self.tool_call_id.len()
+            + raw(&self.raw_input)
+            + raw(&self.raw_output)
+            + raw(&self.meta)
+            + self
+                .locations
+                .iter()
+                .map(|l| l.path.len() + 8)
+                .sum::<usize>()
+            + self.content.iter().map(content_entry_bytes).sum::<usize>()
+    }
+
+    /// The cached retained size of this entry in bytes (see
+    /// [`Self::compute_size_hint`]).
+    pub fn approx_bytes(&self) -> usize {
+        self.size_hint
     }
 
     /// Client-side duration in seconds: last update minus first arrival; a
@@ -454,6 +492,17 @@ impl ToolCall {
 /// single tool call must not grow its entry freely.
 const MAX_TOOL_RAW_BYTES: usize = 256 * 1024;
 
+/// Retention bounds for the rest of a tool call's display data (flood
+/// hardening): the agent drives every byte, so title, content entries,
+/// locations and meta all get caps too. Diff texts are truncated in place
+/// (the diff view still works on the rest); an oversized entry of another
+/// kind becomes a short marker text.
+const MAX_TOOL_TITLE_BYTES: usize = 4 * 1024;
+const MAX_TOOL_CONTENT_ENTRIES: usize = 64;
+const MAX_TOOL_CONTENT_ENTRY_BYTES: usize = 256 * 1024;
+const MAX_TOOL_LOCATIONS: usize = 64;
+const MAX_TOOL_PATH_BYTES: usize = 4 * 1024;
+
 /// A raw value within the bound is taken as is; a larger one becomes a
 /// short marker object that says so. The marker keeps the JSON shape the
 /// cards render, with the content gone.
@@ -462,6 +511,102 @@ fn bounded_raw(v: &Value) -> Value {
         Ok(s) if s.len() <= MAX_TOOL_RAW_BYTES => v.clone(),
         _ => json!({"trimmed": true, "reason": "larger than the retention bound"}),
     }
+}
+
+/// `s` cut at a char boundary to at most `max` bytes, with a marker appended.
+fn bounded_text(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = s[..end].to_string();
+    out.push_str("… [truncated]");
+    out
+}
+
+/// Approximate size of one content entry in bytes (the enums are
+/// Deserialize-only, so the strings are summed by hand).
+fn content_entry_bytes(c: &ToolCallContent) -> usize {
+    match c {
+        ToolCallContent::Content { content } => match content {
+            ContentBlock::Text { text } => text.len(),
+            ContentBlock::Image {
+                data,
+                mime_type,
+                uri,
+            } => data.len() + mime_type.len() + uri.as_ref().map(|u| u.len()).unwrap_or(0),
+            ContentBlock::ResourceLink {
+                uri,
+                name,
+                mime_type,
+                title,
+            } => {
+                uri.len()
+                    + name.len()
+                    + mime_type.as_ref().map(|m| m.len()).unwrap_or(0)
+                    + title.as_ref().map(|t| t.len()).unwrap_or(0)
+            }
+            ContentBlock::Resource { resource } => {
+                resource.uri.len()
+                    + resource.text.as_ref().map(|t| t.len()).unwrap_or(0)
+                    + resource.blob.as_ref().map(|b| b.len()).unwrap_or(0)
+                    + resource.mime_type.as_ref().map(|m| m.len()).unwrap_or(0)
+            }
+            ContentBlock::Unknown => 0,
+        },
+        ToolCallContent::Diff {
+            path,
+            old_text,
+            new_text,
+        } => path.len() + new_text.len() + old_text.as_ref().map(|t| t.len()).unwrap_or(0),
+        ToolCallContent::Terminal { terminal_id } => terminal_id.len(),
+        ToolCallContent::Unknown => 0,
+    }
+}
+
+/// One tool call's `content` list within the retention bounds: at most
+/// [`MAX_TOOL_CONTENT_ENTRIES`] entries, each within
+/// [`MAX_TOOL_CONTENT_ENTRY_BYTES`] (diffs keep their shape, truncated).
+fn bounded_content(content: &[ToolCallContent]) -> Vec<ToolCallContent> {
+    content
+        .iter()
+        .take(MAX_TOOL_CONTENT_ENTRIES)
+        .map(|c| match c {
+            ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } => ToolCallContent::Diff {
+                path: bounded_text(path, MAX_TOOL_PATH_BYTES),
+                old_text: old_text
+                    .as_deref()
+                    .map(|t| bounded_text(t, MAX_TOOL_CONTENT_ENTRY_BYTES)),
+                new_text: bounded_text(new_text, MAX_TOOL_CONTENT_ENTRY_BYTES),
+            },
+            other if content_entry_bytes(other) <= MAX_TOOL_CONTENT_ENTRY_BYTES => other.clone(),
+            _ => ToolCallContent::Content {
+                content: ContentBlock::Text {
+                    text: format!(
+                        "… [truncated: larger than {MAX_TOOL_CONTENT_ENTRY_BYTES} bytes]"
+                    ),
+                },
+            },
+        })
+        .collect()
+}
+
+fn bounded_locations(locations: &[Location]) -> Vec<Location> {
+    locations
+        .iter()
+        .take(MAX_TOOL_LOCATIONS)
+        .map(|l| Location {
+            path: bounded_text(&l.path, MAX_TOOL_PATH_BYTES),
+            line: l.line,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1184,6 +1329,7 @@ mod tests {
             meta: None,
             first_seen: 0,
             last_update: 0,
+            size_hint: 0,
         };
         // only status present: everything else stays
         let upd: ToolCallUpdate =
@@ -1309,6 +1455,7 @@ mod tests {
             meta: None,
             first_seen: 0,
             last_update: 0,
+            size_hint: 0,
         };
         // an update's oversized output is capped by the marker object
         let upd: ToolCallUpdate =

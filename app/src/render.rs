@@ -146,6 +146,49 @@ pub fn field_key(owner: &str, msg_idx: usize, block: usize, name: &str) -> Strin
     format!("{owner}#{msg_idx}#{block}#{name}")
 }
 
+/// A ui button/form is armed by its first click; the send needs a second
+/// click within this window. The action text is agent-chosen, so one
+/// accidental click must not send it in the user's name.
+const ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+/// … and not before this minimum gap after arming, so a *double*-click
+/// (two `clicked()` events within egui's double-click time) cannot send
+/// either — an injected "double-click to continue" label must not pass.
+const MIN_ARM_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Armed ui buttons, by widget id. Bounded: a wholesale clear at the cap
+/// (the ids are per-frame stable, so old entries expire on their next
+/// check anyway).
+fn armed_buttons() -> &'static std::sync::Mutex<HashMap<egui::Id, std::time::Instant>> {
+    static ARMED: std::sync::OnceLock<std::sync::Mutex<HashMap<egui::Id, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    ARMED.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Is `id` armed AND past the minimum gap (so the second click counts)?
+/// An expired arm is dropped here.
+fn button_armed(id: egui::Id) -> bool {
+    let mut m = armed_buttons().lock().unwrap();
+    match m.get(&id) {
+        Some(t) if t.elapsed() <= ARM_WINDOW => t.elapsed() >= MIN_ARM_GAP,
+        _ => {
+            m.remove(&id);
+            false
+        }
+    }
+}
+
+fn arm_button(id: egui::Id) {
+    let mut m = armed_buttons().lock().unwrap();
+    if m.len() > 1024 {
+        m.clear();
+    }
+    m.insert(id, std::time::Instant::now());
+}
+
+fn disarm_button(id: egui::Id) {
+    armed_buttons().lock().unwrap().remove(&id);
+}
+
 /// The shared prefix of every per-interaction key of `owner`:
 /// `"<owner>#"` (see `field_key` / `script_key`).
 pub fn owner_key_prefix(owner: &str) -> String {
@@ -435,12 +478,22 @@ fn render_script_tool(
         return;
     }
     let key = script_key(ctx.owner, msg_idx, block, code);
+    /// How many ```ui-js tools the harness keeps alive at once (flood
+    /// bound): each holds a source + state and every evaluation spawns a
+    /// worker process, so an agent message with N blocks must not create
+    /// N live tools. Over the cap the block renders as plain source.
+    const MAX_UI_JS_TOOLS: usize = 64;
     // take the tool out of the map while painting (the paint needs &mut ctx)
-    let Some(mut tool) = ctx
-        .scripts
-        .as_deref_mut()
-        .map(|m| m.remove(&key).unwrap_or_else(|| ScriptTool::new(code)))
-    else {
+    let tool = ctx.scripts.as_deref_mut().and_then(|m| {
+        if let Some(t) = m.remove(&key) {
+            Some(t)
+        } else if m.len() < MAX_UI_JS_TOOLS {
+            Some(ScriptTool::new(code))
+        } else {
+            None
+        }
+    });
+    let Some(mut tool) = tool else {
         render_code_block(
             ui,
             egui::Id::new((ctx.owner, msg_idx, block, "ui-js")),
@@ -980,12 +1033,20 @@ pub(crate) fn render_table_grid(
 ) {
     const PADDING: f32 = 20.0;
     const MINIMUM: f32 = 48.0;
+    /// Table caps (flood hardening): one table — a ```ui``` block, a
+    /// markdown pipe table or a previewed CSV — is measured cell by cell
+    /// and painted wholesale on every frame. A hostile message or a big
+    /// artifact file must not put millions of cells in here.
+    const MAX_TABLE_COLS: usize = 32;
+    const MAX_TABLE_ROWS: usize = 200;
     let count = columns
         .len()
         .max(rows.iter().map(Vec::len).max().unwrap_or(0));
     if count == 0 {
         return;
     }
+    let cols = MAX_TABLE_COLS.min(count);
+    let shown_rows = MAX_TABLE_ROWS.min(rows.len());
     let header_st = InlineStyle {
         size: 12.5,
         color: DIM,
@@ -1003,12 +1064,14 @@ pub(crate) fn render_table_grid(
         append_inline(&mut job, cell, st);
         ui.fonts(|f| f.layout_job(job)).size().x.ceil() + 2.0
     };
-    let mut natural = vec![0.0_f32; count];
-    for (i, cell) in columns.iter().enumerate() {
+    let mut natural = vec![0.0_f32; cols];
+    for (i, cell) in columns.iter().take(cols).enumerate() {
         natural[i] = natural[i].max(measure(cell, header_st));
     }
-    for row in rows {
-        for (i, cell) in row.iter().enumerate() {
+    // measure only the rows that will be painted (and their first `cols`
+    // cells): the loop above is the per-frame cost that must stay bounded
+    for row in rows.iter().take(shown_rows) {
+        for (i, cell) in row.iter().take(cols).enumerate() {
             natural[i] = natural[i].max(measure(cell, body_st));
         }
     }
@@ -1057,11 +1120,24 @@ pub(crate) fn render_table_grid(
                         .set(bg, egui::Shape::rect_filled(rect, 0.0, fill));
                 };
             let _ = id;
-            table_row(ui, columns, header_st, 0);
-            for (i, row) in rows.iter().enumerate() {
+            table_row(ui, columns.get(..cols).unwrap_or(columns), header_st, 0);
+            for (i, row) in rows.iter().take(shown_rows).enumerate() {
                 table_row(ui, row, body_st, i + 1);
             }
         });
+    let more_rows = rows.len() - shown_rows;
+    let more_cols = count - cols;
+    if more_rows > 0 || more_cols > 0 {
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(trf(
+                "Table truncated: {rows} more rows, {cols} more columns not shown.",
+                &[("rows", &more_rows), ("cols", &more_cols)],
+            ))
+            .size(12.0)
+            .color(DIM),
+        );
+    }
 }
 
 /// One grid cell: a horizontal run of inline markdown, with zero item
@@ -1568,21 +1644,43 @@ pub fn render_ui_node(
             ui.add_space(2.0);
         }
         UiNode::Button { label, action } => {
-            // the click sends `action`, not the label: the user sees what
-            // goes out in their name before clicking
+            // The click sends `action`, not the label — both are
+            // agent-controlled text. Two safeguards: the action is always
+            // visible inline (not only on hover), and the first click only
+            // arms the button — the send needs a second click within
+            // ARM_WINDOW, so one accidental click on a prompt-injected
+            // "OK" button sends nothing.
+            let id = egui::Id::new(("ui_btn", ctx.owner, msg_idx, block, action));
+            let armed = button_armed(id);
+            let text = if armed {
+                trf("Click again to send “{action}”", &[("action", action)])
+            } else {
+                label.clone()
+            };
+            let fill = if armed { crate::theme::AMBER } else { ACCENT };
             if ui
                 .add(
-                    egui::Button::new(RichText::new(label).color(Color32::WHITE))
-                        .fill(ACCENT)
+                    egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                        .fill(fill)
                         .rounding(egui::Rounding::same(3.0)),
                 )
-                .on_hover_text(trf("On click: “{action}”", &[("action", action)]))
                 .clicked()
             {
-                ctx.ui_events.push(UiEvent::Button {
-                    action: action.clone(),
-                });
+                if armed {
+                    disarm_button(id);
+                    ctx.ui_events.push(UiEvent::Button {
+                        action: action.clone(),
+                    });
+                } else {
+                    arm_button(id);
+                }
             }
+            ui.label(
+                RichText::new(trf("Sends: {action}", &[("action", action)]))
+                    .monospace()
+                    .size(11.0)
+                    .color(DIM),
+            );
             ui.add_space(4.0);
         }
         UiNode::Table { columns, rows } => {
@@ -1634,34 +1732,57 @@ pub fn render_ui_node(
                         });
                     }
                     ui.add_space(4.0);
+                    // the submit label is agent-chosen and the values go to
+                    // the agent (and with it the model provider and Vibe's
+                    // history): say so inline, and arm the button like a
+                    // plain one — a second click within ARM_WINDOW sends
+                    let btn_id = egui::Id::new(("ui_form", ctx.owner, msg_idx, block, submit));
+                    let armed = button_armed(btn_id);
+                    let text = if armed {
+                        trf("Click again to send “{submit}”", &[("submit", submit)])
+                    } else {
+                        submit.clone()
+                    };
+                    let fill = if armed { crate::theme::AMBER } else { ACCENT };
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(submit).color(Color32::WHITE))
-                                .fill(ACCENT)
+                            egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                                .fill(fill)
                                 .rounding(egui::Rounding::same(3.0)),
                         )
                         .clicked()
                     {
-                        let mut values = serde_json::Map::new();
-                        for f in fields {
-                            let key = field_key(ctx.owner, msg_idx, block, &f.name);
-                            values.insert(
-                                f.name.clone(),
-                                serde_json::Value::String(
-                                    ctx.form_values.get(&key).cloned().unwrap_or_default(),
-                                ),
-                            );
+                        if armed {
+                            disarm_button(btn_id);
+                            let mut values = serde_json::Map::new();
+                            for f in fields {
+                                let key = field_key(ctx.owner, msg_idx, block, &f.name);
+                                values.insert(
+                                    f.name.clone(),
+                                    serde_json::Value::String(
+                                        ctx.form_values.get(&key).cloned().unwrap_or_default(),
+                                    ),
+                                );
+                            }
+                            // sliders, number fields and selects of the same block
+                            // travel with the submit
+                            for (name, value) in block_inputs(ctx, msg_idx, block, &ctx.block_nodes)
+                            {
+                                values.entry(name).or_insert(value);
+                            }
+                            ctx.ui_events.push(UiEvent::Form {
+                                submit: submit.clone(),
+                                values: serde_json::Value::Object(values),
+                            });
+                        } else {
+                            arm_button(btn_id);
                         }
-                        // sliders, number fields and selects of the same block
-                        // travel with the submit
-                        for (name, value) in block_inputs(ctx, msg_idx, block, &ctx.block_nodes) {
-                            values.entry(name).or_insert(value);
-                        }
-                        ctx.ui_events.push(UiEvent::Form {
-                            submit: submit.clone(),
-                            values: serde_json::Value::Object(values),
-                        });
                     }
+                    ui.label(
+                        RichText::new(tr("On submit, the values above are sent to the agent."))
+                            .size(11.0)
+                            .color(DIM),
+                    );
                 });
             ui.add_space(6.0);
         }

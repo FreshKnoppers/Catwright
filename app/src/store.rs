@@ -136,12 +136,23 @@ fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let meta = std::fs::metadata(dir).map_err(|e| {
+            // symlink_metadata, not metadata: a symlink planted at the
+            // config path (by any same-user process, e.g. an agent driven
+            // by a malicious repo while the app is closed) must not be
+            // followed — its target would get chmod 0700 and all writes
+            // would go through it
+            let meta = std::fs::symlink_metadata(dir).map_err(|e| {
                 trf(
                     "The config folder could not be read: {error}",
                     &[("error", &e)],
                 )
             })?;
+            if meta.file_type().is_symlink() {
+                return Err(trf(
+                    "The config folder is a symlink: {path}",
+                    &[("path", &dir.to_string_lossy())],
+                ));
+            }
             if !meta.is_dir() {
                 // a file (or worse) sits where the folder belongs: say
                 // where, so the user can move it aside
@@ -922,6 +933,16 @@ mod tests {
         ensure_private_dir(&dir).unwrap();
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+        // a symlink in the place of the folder is an error too (never
+        // followed: its target must not get chmod 0700 nor our writes)
+        let target = base.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = base.join("linked");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let err = ensure_private_dir(&link).unwrap_err();
+        assert!(err.contains("symlink"), "{err}");
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o700, "the symlink target was not chmod'ed");
         // a regular file in the place of the folder is an error
         let file = base.join("occupied");
         std::fs::write(&file, "x").unwrap();
