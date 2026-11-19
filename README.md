@@ -207,8 +207,8 @@ Each [release](https://github.com/FreshKnoppers/Catwright/releases) has a
 ready-built archive for Linux x86_64 (glibc 2.39 or newer):
 
 ```sh
-tar xzf catwright-v0.5.1-x86_64-linux.tar.gz
-cd catwright-v0.5.1-x86_64-linux
+tar xzf catwright-v0.6.0-x86_64-linux.tar.gz
+cd catwright-v0.6.0-x86_64-linux
 ./dist/install.sh
 ```
 
