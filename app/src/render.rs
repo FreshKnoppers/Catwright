@@ -588,8 +588,8 @@ fn step_decimals(step: f64) -> usize {
 
 /// Format a computed value: `decimals` digits (default 2) in the notation of
 /// `lang` (English: thousands commas, decimal point; German, Spanish, Italian,
-/// Portuguese: thousands dots, decimal comma; French: thousands spaces,
-/// decimal comma), plus an optional unit.
+/// Portuguese: thousands dots, decimal comma; French: thousands no-break
+/// spaces, so a number never wraps, decimal comma), plus an optional unit.
 fn format_computed(
     lang: i18n::Lang,
     value: f64,
@@ -605,7 +605,7 @@ fn format_computed(
     let (group, point) = match lang {
         i18n::Lang::En => (',', '.'),
         i18n::Lang::De => ('.', ','),
-        i18n::Lang::Fr => (' ', ','),
+        i18n::Lang::Fr => ('\u{a0}', ','),
         i18n::Lang::Es | i18n::Lang::It | i18n::Lang::Pt => ('.', ','),
     };
     let mut out = group_thousands(int_part, group);
@@ -2365,6 +2365,19 @@ mod tests {
             super::format_computed(De, -5.25, Some(2), Some("€")),
             "-5,25 €"
         );
+    }
+
+    #[test]
+    fn computed_format_follows_the_other_uis() {
+        use crate::i18n::Lang::{Es, Fr, It, Pt};
+        // French groups with a no-break space: the number never wraps
+        assert_eq!(
+            super::format_computed(Fr, 1234567.891, Some(2), None),
+            "1\u{a0}234\u{a0}567,89"
+        );
+        for lang in [Es, It, Pt] {
+            assert_eq!(super::format_computed(lang, 1234.5, None, None), "1.234,50");
+        }
     }
 
     #[test]

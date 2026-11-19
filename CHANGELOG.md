@@ -5,6 +5,8 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- The UI speaks French, Spanish, Italian and Portuguese too (Settings →
+  General, or `--lang fr|es|it|pt`).
 - Release archives carry a build provenance attestation; check one with
   `gh attestation verify <archive> --repo FreshKnoppers/Catwright`.
 - `SECURITY.md`: how to report vulnerabilities privately.

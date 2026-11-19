@@ -352,7 +352,7 @@ msgid "What do you want to chat about?"
 msgstr "¿De qué quieres hablar?"
 
 msgid "What are you building today in"
-msgstr "¿Qué estás construyendo hoy en"
+msgstr "Qué estás construyendo hoy en"
 
 msgid "your project?"
 msgstr "tu proyecto?"
