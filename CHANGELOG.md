@@ -3,6 +3,13 @@
 Release notes per version. The release workflow publishes the section of a
 tag (`## v0.2.0`) as that release's description.
 
+## Unreleased
+
+Fixes:
+
+- A finished subagent's status bar no longer shows a block next to the
+  sitting cat: the track ends where the cat sits.
+
 ## v0.3.0
 
 **Download:** `catwright-v0.3.0-x86_64-linux.tar.gz` below, then:
