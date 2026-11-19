@@ -26,6 +26,16 @@ install -D -m 0644 "$dir/catwright.desktop" \
 # (cp -R of "hicolor/." lands INSIDE hicolor: the size dirs belong under it)
 mkdir -p "$HOME/.local/share/icons/hicolor"
 cp -R "$dir/icons/hicolor/." "$HOME/.local/share/icons/hicolor/"
+# overwriting an icon leaves its folder's mtime alone, so an existing
+# icon-theme.cache still counts as fresh: refresh it (when the tool is
+# there) and the desktop's app database, so a new icon shows up
+if command -v gtk-update-icon-cache >/dev/null 2>&1 &&
+    [ -f "$HOME/.local/share/icons/hicolor/index.theme" ]; then
+    gtk-update-icon-cache -f -q "$HOME/.local/share/icons/hicolor" || true
+fi
+if command -v kbuildsycoca6 >/dev/null 2>&1; then
+    kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+fi
 echo "installed:"
 echo "  ~/.local/bin/catwright"
 echo "  ~/.local/share/applications/catwright.desktop"
