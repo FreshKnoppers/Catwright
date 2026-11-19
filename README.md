@@ -34,6 +34,12 @@ Subagents with the plan and their status bars in the side panel:
 
 ![Three subagents at work: two cats chase their balls of yarn, the third one is done and sits](docs/screenshots/subagents.png)
 
+Voice dictation while it runs (`--dictate`): the microphone is orange, and
+the text Mistral recognises streams into the composer; nothing is sent until
+you send it (see [Voice input and output](#voice-input-and-output)):
+
+![The composer with the orange microphone and a dictated sentence about a temperature chart](docs/screenshots/dictation.png)
+
 A project's start screen:
 
 ![Start screen with the input field, model and thinking pickers and the recent sessions](docs/screenshots/start.png)
@@ -226,6 +232,7 @@ catwright --project ~/my/project --session <id> --open analysis.py
 catwright --project ~/my/project --open analysis.py --preview-diff
                                                  # ... in Diff mode (against the last commit)
 catwright --activity                             # open the activity feed
+catwright --project ~/my/project --dictate       # start a voice dictation right away
 catwright --version                              # print the version and exit
 ```
 

@@ -23,6 +23,9 @@
 //!                                                (relative to --project); with
 //!                                                `--preview-diff` in Diff mode
 //!   catwright --activity                        open the activity feed on start
+//!   catwright [--project <dir>] --dictate       start a voice dictation once Vibe is ready
+//!                                                (shows the microphone for this run even
+//!                                                with the setting off)
 //!   catwright --version                         print the version and exit (also `-V`)
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
@@ -78,6 +81,8 @@ struct Cli {
     activity: bool,
     /// `--version` / `-V`: print the version and exit, no window.
     version: bool,
+    /// `--dictate`: start a voice dictation as soon as Vibe is ready.
+    dictate: bool,
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -95,6 +100,7 @@ fn parse_cli(args: &[String]) -> Cli {
         preview_diff: false,
         activity: false,
         version: false,
+        dictate: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -129,6 +135,10 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--preview-diff" => {
                 cli.preview_diff = true;
+                i += 1;
+            }
+            "--dictate" => {
+                cli.dictate = true;
                 i += 1;
             }
             "--version" | "-V" => {
@@ -269,7 +279,10 @@ fn main() -> eframe::Result<()> {
             eprintln!("--headless needs --screenshot <png>");
             std::process::exit(2);
         }
-        let app = app::App::new(screenshot, settings, frames, open, prompt, lang, start_view);
+        let mut app = app::App::new(screenshot, settings, frames, open, prompt, lang, start_view);
+        if cli.dictate {
+            app.dictate_when_ready();
+        }
         match app.run_headless([cli.size.0, cli.size.1]) {
             Ok(path) => {
                 eprintln!("screenshot saved to {}", path.display());
@@ -281,15 +294,19 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    let dictate = cli.dictate;
     eframe::run_native(
         "Catwright",
         options,
         Box::new(move |cc| {
             fonts::install_fallback_fonts(&cc.egui_ctx);
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(app::App::new(
-                screenshot, settings, frames, open, prompt, lang, start_view,
-            )))
+            let mut app =
+                app::App::new(screenshot, settings, frames, open, prompt, lang, start_view);
+            if dictate {
+                app.dictate_when_ready();
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -337,6 +354,13 @@ mod tests {
         assert!(!c.preview_diff);
         let c = cli(&[]);
         assert!(c.open_file.is_none() && !c.preview_diff && !c.activity);
+    }
+
+    #[test]
+    fn dictate_flag_parses() {
+        assert!(cli(&["--dictate"]).dictate);
+        assert!(cli(&["--project", "/tmp/p", "--dictate"]).dictate);
+        assert!(!cli(&["--project", "/tmp/p"]).dictate);
     }
 
     #[test]

@@ -6892,3 +6892,35 @@ fn a_narration_that_never_begins_is_given_up() {
     h.expire_narration(Instant::now() + Duration::from_secs(60));
     assert!(h.narrating("s1", 1));
 }
+
+/// `--dictate` with `--session`: the dictation starts once that session is
+/// loaded.
+#[test]
+fn dictate_on_ready_starts_once_the_session_is_loaded() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    h.voice_dictation = true;
+    h.dictate_on_ready = true;
+    h.handle_event(AcpEvent::SessionLoaded {
+        session_id: "s1".to_string(),
+        result: serde_json::from_value(json!({})).unwrap(),
+    });
+    // the session's extras go out first; the transcription follows (a
+    // missing one times out in read_msg)
+    let mut seen = Vec::new();
+    loop {
+        let m = agent.read_msg()["method"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if m == "_voice/transcribeStart" {
+            break;
+        }
+        seen.push(m);
+        assert!(seen.len() < 10, "no transcription start: {seen:?}");
+    }
+    assert!(!h.dictate_on_ready, "only once");
+    assert_eq!(h.dictation, Dictation::Starting);
+}

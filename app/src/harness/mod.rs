@@ -224,6 +224,9 @@ pub struct Harness {
     /// CLI `--activity`: bring the activity feed back after the
     /// `--session` of the same start opens (open_session resets the view).
     pub(crate) activity_on_ready: bool,
+    /// CLI `--dictate`: start a dictation once Vibe is ready — in the
+    /// `--session` once it is loaded, else from the start screen.
+    pub(crate) dictate_on_ready: bool,
     /// Message to send once the agent (and the CLI's session) is ready.
     prompt_on_ready: Option<String>,
     /// Restarts since the last stable connection, and when it became ready.
@@ -371,6 +374,7 @@ impl Harness {
             remove_confirm: None,
             open_on_ready: None,
             activity_on_ready: false,
+            dictate_on_ready: false,
             notify_events: false,
             voice_dictation: false,
             dictation: Dictation::Idle,
@@ -556,6 +560,11 @@ impl Harness {
                     // the CLI's `--session`, or the session that was open
                     // when the connection broke (Handoff 2.8.7)
                     self.open_session(cwd, &sid);
+                } else if self.dictate_on_ready {
+                    // `--dictate` without a session to load: like a click on
+                    // the start screen's microphone (it starts the session)
+                    self.dictate_on_ready = false;
+                    self.toggle_dictation();
                 }
                 if self.activity_on_ready {
                     self.activity_on_ready = false;
@@ -820,6 +829,11 @@ impl Harness {
                 self.load_session_extras(&session_id);
                 if self.active.as_deref() == Some(session_id.as_str()) {
                     self.send_prompt_on_ready();
+                    // `--dictate` with `--session`: record into this session
+                    if self.dictate_on_ready {
+                        self.dictate_on_ready = false;
+                        self.toggle_dictation();
+                    }
                 }
             }
             AcpEvent::Update { session_id, update } => {

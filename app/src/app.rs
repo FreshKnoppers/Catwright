@@ -27,6 +27,10 @@ pub struct App {
     harness: Harness,
     /// First start: the language picker is shown until the user confirms.
     language_prompt: bool,
+    /// `--dictate`: the user asked for a dictation on the command line, so
+    /// the microphone shows for this run even with the setting off (it
+    /// must be there to stop the dictation).
+    dictate_cli: bool,
 }
 
 impl App {
@@ -138,12 +142,22 @@ impl App {
             frames_left: if shot { frames.max(1) } else { u32::MAX },
             harness,
             language_prompt,
+            dictate_cli: false,
         };
         if let Some(tab) = settings_tab {
             app.settings_open = true;
             app.settings_nav = SettingsNav::from_cli(&tab);
         }
         app
+    }
+
+    /// CLI `--dictate`: start a voice dictation as soon as Vibe is ready (in
+    /// the `--session` once it is loaded, else on the start screen, which
+    /// starts the project's session first).
+    pub fn dictate_when_ready(&mut self) {
+        self.dictate_cli = true;
+        self.harness.voice_dictation = true;
+        self.harness.dictate_on_ready = true;
     }
 
     /// Persist the Vibe models / thinking levels the harness has seen.
@@ -228,7 +242,7 @@ impl App {
         self.harness.ensure_started(ctx);
         self.harness.window_focused = ctx.input(|i| i.focused);
         self.harness.notify_events = self.settings.notify_turn_events;
-        self.harness.voice_dictation = self.settings.voice_dictation;
+        self.harness.voice_dictation = self.settings.voice_dictation || self.dictate_cli;
         self.harness.voice_narration = self.settings.voice_narration;
         self.harness.auto_narrate = self.settings.auto_narrate;
         self.harness.poll();
@@ -422,6 +436,7 @@ mod tests {
             frames_left: 0,
             harness: crate::harness::Harness::new(Vec::new(), "ask".to_string()),
             language_prompt: false,
+            dictate_cli: false,
         }
     }
 

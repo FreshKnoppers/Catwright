@@ -32,6 +32,7 @@ shot session session --project "$WS" --session "$S_STATS"
 shot subagents subagents --project "$WS" --session "$S_SUB" --prompt "$SUB_PROMPT"
 shot dashboard dashboard --project "$HC" --session "$S_DASH"
 shot preview-diff session --project "$WS" --session "$S_STATS" --open analysis.py --preview-diff
+shot dictation session --project "$WS" --session "$S_STATS" --dictate
 shot activity activity --project "$WS" --session "$S_ACT" --prompt "Filter the glitch in analysis.py" --activity
 rm -rf "$D"
 echo "screenshots in $out"

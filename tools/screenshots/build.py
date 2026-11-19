@@ -226,6 +226,8 @@ scenario = {
     # a live prompt lifecycle for the activity-feed screenshot: a tool call,
     # a permission request that stays open, then the turn finishes
     "live_by_session": {S_SUB: sub_live},
+    # what the dictation screenshot "hears" (`--dictate`)
+    "dictation": ["Also draw a line chart ", "of the daily temperatures ", "and mark the sensor glitch"],
     "live": {"on_prompt": [
         {"update": tool("Editing analysis.py", "edit", {"filePath": f"{WS}/analysis.py"},
                         diff=(f"{WS}/analysis.py", ANALYSIS_V1, ANALYSIS_V2), meta={"tool_name": "search_replace"})},

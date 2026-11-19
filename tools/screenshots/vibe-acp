@@ -96,5 +96,13 @@ for line in sys.stdin:
         result(rid, {"files": [], "scopes": []})
     elif method == "_connectors/list":
         result(rid, {"connectors": [], "error": None})
+    elif method == "_voice/transcribeStart":
+        # dictation screenshot: Vibe starts recording and the first
+        # recognised pieces arrive (the recording keeps running)
+        result(rid, {"ok": True})
+        for piece in sc.get("dictation", []):
+            send({"jsonrpc": "2.0", "method": "_voice/transcriptionDelta", "params": {"text": piece}})
+    elif method in ("_voice/transcribeStop", "_voice/transcribeCancel", "_voice/narrateCancel"):
+        result(rid, {"ok": True})
     else:
         result(rid, {})

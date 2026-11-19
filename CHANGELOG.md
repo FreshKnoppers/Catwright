@@ -5,6 +5,10 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- `catwright --dictate` starts a voice dictation as soon as Vibe is ready
+  (also usable from a desktop shortcut); the microphone shows for that run
+  even with the setting off.
+- README: a screenshot of a running dictation.
 ## v0.5.0
 
 **Download:** `catwright-v0.5.0-x86_64-linux.tar.gz` below, then:
