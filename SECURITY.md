@@ -45,7 +45,7 @@ Each release archive comes with a `.sha256` file:
 sha256sum -c catwright-vX.Y.Z-x86_64-linux.tar.gz.sha256
 ```
 
-Releases after v0.3.1 also carry a build provenance attestation, which
+From v0.4.0 on, releases also carry a build provenance attestation, which
 shows that the archive was built by this repository's release workflow:
 
 ```sh

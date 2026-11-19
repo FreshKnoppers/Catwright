@@ -5,20 +5,56 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+## v0.4.0
+
+**Download:** `catwright-v0.4.0-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.4.0-x86_64-linux.tar.gz
+cd catwright-v0.4.0-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:** each archive has a `.sha256` file and, new in this
+release, a build provenance attestation:
+
+```sh
+sha256sum -c catwright-v0.4.0-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.4.0-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
 - The UI speaks French, Spanish, Italian and Portuguese too (Settings →
   General, or `--lang fr|es|it|pt`).
-- Release archives carry a build provenance attestation; check one with
-  `gh attestation verify <archive> --repo FreshKnoppers/Catwright`.
-- `SECURITY.md`: how to report vulnerabilities privately.
-- `CONTRIBUTING.md`, a code of conduct and forms for issues and pull
+- A new logo and app icon: a pixel cat sitting on a branch.
+- Subagents: each running cat chases its own rolling ball of yarn, and
+  several running cats no longer walk in step.
+- `catwright --version` (or `-V`) prints the version and exits.
+- `SECURITY.md` (how to report vulnerabilities privately),
+  `CONTRIBUTING.md`, a code of conduct and forms for issues and pull
   requests.
-- `catwright --version` (or `-V`) prints the version and exits; before,
-  it was ignored and the window opened.
-- Subagents: with several running, a returned or timed-out wait no longer
-  marks all of them done. Their state comes from Vibe's `agents.list`
-  where the agent reports it.
-- Subagents: each cat chases its own rolling ball of yarn, and running
-  cats no longer walk in step.
+
+**Fixes:**
+
+- Subagents: with several running, a wait that returned or ran out no
+  longer marks all of them done. Their state now comes from Vibe's
+  `agents.list` where the agent reports it.
+- `catwright --version` was ignored and opened the window.
+
+**Known limit:**
+
+- Drag & drop works on X11/XWayland only: the window library reports no
+  dropped files in a native Wayland session. The "+" button attaches files
+  everywhere.
 
 ## v0.3.1
 
