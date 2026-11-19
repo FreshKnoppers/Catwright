@@ -58,9 +58,11 @@ The screenshots show demo projects with prepared sessions
 - Vibe's approvals and questions as cards; mode and model picker, thinking
   level per model
 - Diffs, review of a turn's changes, rewind to an earlier state
-- Review comments on diff lines, sent to Vibe as one message ("Send to Vibe")
+- Review comments on diff lines, sent to Vibe as one message ("Send to Vibe"),
+  in the transcript and in the preview pane's diff
 - Preview pane beside the transcript: code with line numbers or the diff
-  against the last commit (Code/Diff switch, `--open <file>` on start)
+  against the last commit (Code/Diff switch, `--open <file>` on start); the
+  header's "N changed" and the work panel's Changes open a file's diff
 - Transcript detail levels (Compact/Standard/Detailed/Verbose) while a turn runs
 - Activity feed across all sessions: answer a waiting approval right there,
   finished and failed turns at a glance, unread badge and archiving

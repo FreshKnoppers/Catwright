@@ -243,8 +243,11 @@ msgstr "Projektordner öffnen"
 msgid "Fork session"
 msgstr "Sitzung abzweigen (Fork)"
 
-msgid "Changed files in the working directory (git status)"
-msgstr "Geänderte Dateien im Arbeitsverzeichnis (git status)"
+msgid "Changed files in the working directory (git status) — click for the list"
+msgstr "Geänderte Dateien im Arbeitsverzeichnis (git status) – Klick zeigt die Liste"
+
+msgid "… {n} more"
+msgstr "… {n} weitere"
 
 msgid "Current Git branch"
 msgstr "Aktueller Git-Branch"

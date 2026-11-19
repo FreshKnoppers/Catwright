@@ -5,6 +5,14 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+New:
+
+- Review comments also in the preview pane's diff (hover a line, "+"),
+  sent to Vibe like the transcript's.
+- The header's "N changed" opens the list of changed files (git status); a
+  click shows the file's diff in the preview pane. The rows of the work
+  panel's Changes card open the diff, too.
+
 Known limit:
 
 - Drag & drop (new in v0.3.0) works on X11/XWayland only: the window
@@ -23,6 +31,8 @@ Fixes:
 - `dist/install.sh` refreshes the icon cache, so a new app icon shows up.
 - The activity feed drops the "Mark all read" button: opening the feed
   already marks everything read.
+- The preview pane's diff found no committed version when the project is a
+  sub-folder of its repository, and showed every line as new.
 
 ## v0.3.0
 

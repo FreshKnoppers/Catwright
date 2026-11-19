@@ -19,20 +19,75 @@ const MAX_FILES: usize = 20_000;
 /// of self-referencing entries must not keep the thread busy forever.
 const MAX_WALK_DIRS: usize = 10_000;
 
+/// Upper bound for the changed files kept per folder (the count stays
+/// exact; only the list for the header's menu is cut).
+const MAX_CHANGED_LISTED: usize = 500;
+
 /// Git state of a folder. `None` branch: not a git repository.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitInfo {
     pub branch: Option<String>,
     pub changed: usize,
+    /// The changed entries, at most `MAX_CHANGED_LISTED`, in git's order.
+    pub files: Vec<ChangedFile>,
+    /// The repository root: `files` are relative to it, not to the folder.
+    pub root: Option<PathBuf>,
+}
+
+/// One `git status` entry: its two-letter status code (e.g. ` M`, `??`)
+/// and its path relative to the repository root. An untracked folder ends
+/// in `/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub code: String,
+    pub path: String,
 }
 
 /// Parse the output of `git rev-parse --abbrev-ref HEAD` and
-/// `git status --porcelain`.
+/// `git status --porcelain -z` (NUL-separated, paths unquoted; a rename or
+/// copy is followed by its original path, which is not an entry of its own).
 pub fn parse_git(branch: &str, status: &str) -> GitInfo {
     let branch = branch.trim();
+    let mut changed = 0;
+    let mut files = Vec::new();
+    let mut entries = status.split('\0').filter(|e| !e.is_empty());
+    while let Some(entry) = entries.next() {
+        let (Some(code), Some(path)) = (entry.get(..2), entry.get(3..)) else {
+            continue;
+        };
+        if code.starts_with(['R', 'C']) {
+            // the original path of a rename/copy
+            entries.next();
+        }
+        changed += 1;
+        if files.len() < MAX_CHANGED_LISTED {
+            files.push(ChangedFile {
+                code: code.to_string(),
+                path: path.to_string(),
+            });
+        }
+    }
     GitInfo {
         branch: (!branch.is_empty()).then(|| branch.to_string()),
-        changed: status.lines().filter(|l| !l.trim().is_empty()).count(),
+        changed,
+        files,
+        root: None,
+    }
+}
+
+/// Read the git state of `dir` (blocking: two git subprocesses).
+fn read_git(dir: &Path) -> GitInfo {
+    let branch = git_output(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let status = git_output(dir, &["status", "--porcelain", "-z"]);
+    match (branch, status) {
+        (Some(b), Some(s)) => {
+            let mut info = parse_git(&b, &s);
+            info.root = git_output(dir, &["rev-parse", "--show-toplevel"])
+                .map(|r| PathBuf::from(r.trim()))
+                .filter(|r| !r.as_os_str().is_empty());
+            info
+        }
+        _ => GitInfo::default(),
     }
 }
 
@@ -133,12 +188,7 @@ impl Watcher {
             self.git_asked.insert(dir.to_path_buf(), Instant::now());
             let (tx, dir_owned) = (self.tx.clone(), dir.to_path_buf());
             std::thread::spawn(move || {
-                let branch = git_output(&dir_owned, &["rev-parse", "--abbrev-ref", "HEAD"]);
-                let status = git_output(&dir_owned, &["status", "--porcelain"]);
-                let info = match (branch, status) {
-                    (Some(b), Some(s)) => parse_git(&b, &s),
-                    _ => GitInfo::default(),
-                };
+                let info = read_git(&dir_owned);
                 let _ = tx.send(Found::Git(dir_owned, info));
             });
         }
@@ -572,7 +622,7 @@ mod tests {
 
     #[test]
     fn git_output_parses_branch_and_dirty_count() {
-        let g = parse_git("main\n", " M a.rs\n?? b.rs\n");
+        let g = parse_git("main\n", " M a.rs\0?? b.rs\0");
         assert_eq!(g.branch.as_deref(), Some("main"));
         assert_eq!(g.changed, 2);
         assert_eq!(parse_git("", ""), GitInfo::default());
@@ -612,22 +662,41 @@ mod tests {
         assert_eq!(mention_at("", 0), None);
     }
 
+    /// The header's menu lists the changed paths: unquoted (spaces stay),
+    /// a rename counts once under its new path, folders keep their `/`.
+    #[test]
+    fn git_status_lists_the_changed_paths() {
+        let g = parse_git(
+            "main",
+            " M src/a b.rs\0R  new.rs\0old.rs\0?? notes/\0A  added.rs\0",
+        );
+        assert_eq!(g.changed, 4);
+        let listed: Vec<(&str, &str)> = g
+            .files
+            .iter()
+            .map(|f| (f.code.as_str(), f.path.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (" M", "src/a b.rs"),
+                ("R ", "new.rs"),
+                ("??", "notes/"),
+                ("A ", "added.rs"),
+            ]
+        );
+    }
+
     #[test]
     fn git_runs_against_this_repository() {
         // the crate lives in a git repository during development; outside
         // of one the lookup must simply report "no branch"
-        let info = {
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-            match (
-                git_output(dir, &["rev-parse", "--abbrev-ref", "HEAD"]),
-                git_output(dir, &["status", "--porcelain"]),
-            ) {
-                (Some(b), Some(s)) => parse_git(&b, &s),
-                _ => GitInfo::default(),
-            }
-        };
+        let info = read_git(Path::new(env!("CARGO_MANIFEST_DIR")));
         if let Some(branch) = info.branch {
             assert!(!branch.contains('\n'));
+            // the changed paths are relative to the root, which holds the crate
+            let root = info.root.expect("a repository has a root");
+            assert!(Path::new(env!("CARGO_MANIFEST_DIR")).starts_with(&root));
         }
     }
 }

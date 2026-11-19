@@ -5315,7 +5315,39 @@ fn feature_screenshots() {
     shot(&mut h, "03-preview-pane");
     h.ui.preview.as_mut().unwrap().mode = crate::harness::state::PreviewMode::Diff;
     shot(&mut h, "03b-preview-diff");
+    // a comment in the preview's diff, plus the editor on another line
+    let pkey = format!("preview::{}", file.to_string_lossy());
+    h.ui.diff_comments.insert(
+        pkey.clone(),
+        vec![crate::harness::state::DiffComment {
+            line: 3,
+            text: "use a constant".to_string(),
+        }],
+    );
+    h.ui.comment_edit = Some(crate::harness::state::CommentEdit {
+        key: pkey,
+        line: 4,
+        text: String::new(),
+    });
+    shot(&mut h, "03c-preview-diff-comments");
+    h.ui.comment_edit = None;
     h.ui.preview = None;
+    // the header's "N changed" menu (the git state arrives in the background)
+    let mut tries = 0;
+    while h.watcher.git(&dir).is_none_or(|g| g.changed == 0) && tries < 100 {
+        h.watcher.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tries += 1;
+    }
+    let popup = crate::harness::ui::header::changed_files_popup(&dir);
+    let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+        ctx.memory_mut(|m| m.open_popup(popup));
+        let _ = crate::harness::ui::show(&mut h, ctx);
+    });
+    if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+        img.save(std::path::Path::new(&out).join("03d-changed-files.png"))
+            .unwrap();
+    }
     h.ui.activity_open = true;
     shot(&mut h, "04-activity");
     h.ui.activity_open = false;
@@ -6016,4 +6048,101 @@ fn activity_read_marker_survives_the_bound() {
     h.push_activity(ActivityKind::Finished, "s1", "new".to_string(), None);
     assert_eq!(h.activity.len(), 100);
     assert_eq!(h.activity_unseen(), 1, "the new entry is unseen");
+}
+
+/// The header's "N changed" menu lists git's changed paths — also for a
+/// project that is a sub-folder of its repository — and a file opens as its
+/// diff against HEAD in the preview pane, where it can be commented like a
+/// transcript diff and the comments go to the composer.
+#[test]
+fn changed_files_open_as_a_commentable_preview_diff() {
+    let repo = std::env::temp_dir().join(format!("cw-changed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let sub = repo.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let file = sub.join("analysis.py");
+    std::fs::write(&file, "old_line = 1\n").unwrap();
+    let git = |args: &[&str]| crate::harness::watch::git_output(&repo, args);
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "v1",
+    ]);
+    std::fs::write(&file, "new_line = 2\n").unwrap();
+    std::fs::write(repo.join("top.txt"), "x").unwrap();
+
+    let (mut h, mut agent) = setup(vec![sub.clone()], "ask");
+    create_session(&mut h, &mut agent, &sub, "s1");
+    h.active = Some("s1".to_string());
+    let mut tries = 0;
+    while h.watcher.git(&sub).is_none_or(|g| g.changed == 0) && tries < 100 {
+        h.watcher.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        tries += 1;
+    }
+    let info = h.watcher.git(&sub).cloned().expect("git state arrives");
+    assert_eq!(info.changed, 2, "{info:?}");
+
+    // the open menu: the file relative to the project, the one above it
+    // relative to the repository
+    let popup = crate::harness::ui::header::changed_files_popup(&sub);
+    let ctx = egui::Context::default();
+    crate::fonts::install_fallback_fonts(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(1440.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        ctx.memory_mut(|m| m.open_popup(popup));
+        let out = ctx.run(input.clone(), |ctx| {
+            let _ = crate::harness::ui::show(&mut h, ctx);
+        });
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                texts.push(t.galley.text().to_string());
+            }
+        }
+    }
+    let all = texts.join("\n");
+    assert!(all.contains("2 changed"), "the header count:\n{all}");
+    assert!(all.contains("analysis.py"), "the project file:\n{all}");
+    assert!(
+        all.contains("top.txt"),
+        "the file above the project:\n{all}"
+    );
+
+    // a click on the file: its diff against HEAD (found from the sub-folder,
+    // so the old line shows as removed) with a comment
+    h.open_preview_diff(&file);
+    let key = format!("preview::{}", file.to_string_lossy());
+    h.ui.diff_comments.insert(
+        key.clone(),
+        vec![crate::harness::state::DiffComment {
+            line: 1,
+            text: "rename it back".to_string(),
+        }],
+    );
+    let all = render_texts(&mut h, 3).join("\n");
+    assert!(all.contains("old_line = 1"), "HEAD's version:\n{all}");
+    assert!(all.contains("new_line = 2"), "the working tree:\n{all}");
+    assert!(all.contains("L1: rename it back"), "comment row:\n{all}");
+    assert!(all.contains("Send to Vibe"), "comment action:\n{all}");
+
+    crate::harness::ui::transcript::send_comments(&mut h, &key, "analysis.py");
+    assert!(
+        h.draft.contains("analysis.py") && h.draft.contains("L1: rename it back"),
+        "the composer draft: {}",
+        h.draft
+    );
+    let _ = std::fs::remove_dir_all(&repo);
 }

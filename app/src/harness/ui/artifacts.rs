@@ -1,6 +1,7 @@
 //! The Artefakte view in the main area: every file the agent touched, grouped
 //! by project, with a preview by file type.
 
+use super::transcript::{comment_section, diff_body, send_comments, Comments, MessageOp};
 use super::*;
 use crate::artifacts::{self, ArtifactKind, Preview};
 use crate::i18n::{self, tr, trf};
@@ -140,6 +141,7 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     };
     let mut close = false;
     let mut mode = p.mode;
+    let mut ops: Vec<MessageOp> = Vec::new();
     // paths are shown relative to the active session's workspace (or the
     // current project); the absolute path stays on the hover tooltip
     let base = h
@@ -198,7 +200,7 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
             };
             ui.add(
                 egui::Label::new(
-                    RichText::new(shown)
+                    RichText::new(&shown)
                         .monospace()
                         .size(11.0)
                         .color(theme::DIM),
@@ -211,9 +213,36 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| match mode {
                     PreviewMode::Code => preview_content(ui, &p.path, true),
-                    PreviewMode::Diff => diff_content(ui, &p.path, base.as_deref()),
+                    PreviewMode::Diff => {
+                        // review comments work here like in the transcript;
+                        // the draft names the path as shown above
+                        let key = format!("preview::{}", p.path);
+                        let mut comments =
+                            Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
+                        diff_content(
+                            ui,
+                            &p.path,
+                            base.as_deref(),
+                            (&key, &mut comments, &mut ops),
+                        );
+                        comment_section(ui, &key, &shown, &mut comments, &mut ops);
+                    }
                 });
         });
+    for op in ops {
+        match op {
+            MessageOp::CommentAt { key, line } => {
+                h.ui.comment_edit = Some(crate::harness::state::CommentEdit {
+                    key,
+                    line,
+                    text: String::new(),
+                });
+            }
+            MessageOp::SendComments { key, path } => send_comments(h, &key, &path),
+            // the diff view queues nothing else
+            _ => {}
+        }
+    }
     if let Some(p) = h.ui.preview.as_mut() {
         p.width = out.response.rect.width();
         p.mode = mode;
@@ -227,7 +256,12 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
 /// the transcript's red/green line diff (not the raw `git diff` text). The
 /// HEAD blob and the file text are cached by path, mtime and size (git and
 /// the file read are subprocesses; they must not run every frame).
-fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
+fn diff_content(
+    ui: &mut egui::Ui,
+    path: &str,
+    base: Option<&std::path::Path>,
+    comment: (&str, &mut Comments, &mut Vec<MessageOp>),
+) {
     type DiffCache = std::sync::Mutex<
         std::collections::HashMap<(String, Option<u64>, u64), (Option<String>, String)>,
     >;
@@ -250,19 +284,26 @@ fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
         if let Some(t) = c.get(&key) {
             t.clone()
         } else {
-            let dir = base.map(|b| b.to_path_buf()).unwrap_or_else(|| {
-                std::path::Path::new(path)
-                    .parent()
-                    .unwrap_or(std::path::Path::new("/"))
-                    .to_path_buf()
-            });
+            // git runs in the workspace, or next to the file when it lies
+            // outside (a changed file above a sub-folder project)
+            let dir = base
+                .filter(|b| std::path::Path::new(path).starts_with(b))
+                .map(|b| b.to_path_buf())
+                .unwrap_or_else(|| {
+                    std::path::Path::new(path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new("/"))
+                        .to_path_buf()
+                });
             let rel = std::path::Path::new(path)
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| path.to_string());
+            // `HEAD:./path` is relative to the folder git runs in, plain
+            // `HEAD:path` to the repository root
             let head = crate::harness::watch::git_output(&dir, &["rev-parse", "HEAD"]);
             let old = head.filter(|h| !h.trim().is_empty()).and_then(|_| {
-                crate::harness::watch::git_output(&dir, &["show", &format!("HEAD:{rel}")])
+                crate::harness::watch::git_output(&dir, &["show", &format!("HEAD:./{rel}")])
             });
             let current = std::fs::read_to_string(path).unwrap_or_default();
             let entry = (old, current);
@@ -277,12 +318,10 @@ fn diff_content(ui: &mut egui::Ui, path: &str, base: Option<&std::path::Path>) {
         }
     };
     match old {
-        Some(old) if old != current => {
-            super::transcript::diff_body(ui, Some(&old), &current, 400, None)
-        }
+        Some(old) if old != current => diff_body(ui, Some(&old), &current, 400, Some(comment)),
         Some(_) => notice(ui, tr("No changes against the last commit.")),
         // no commit yet, or the file is untracked: every line is new
-        None if !current.is_empty() => super::transcript::diff_body(ui, None, &current, 400, None),
+        None if !current.is_empty() => diff_body(ui, None, &current, 400, Some(comment)),
         None => notice(ui, tr("No changes against the last commit.")),
     }
 }

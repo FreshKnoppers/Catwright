@@ -362,6 +362,8 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     let mut approve_file: Option<String> = None;
     let mut revert_all = false;
     let mut approve_all = false;
+    // a click on a row shows the file's diff in the preview pane
+    let mut show_diff: Option<String> = None;
     card(
         &mut h.ui.panel_sections,
         ui,
@@ -374,8 +376,12 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             for (path, added, removed) in &files {
                 let open = pending.iter().find(|f| &f.path == path);
                 let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+                    ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
                 let hovered = ui.rect_contains_pointer(rect);
+                let mut button_clicked = false;
+                if hovered {
+                    ui.painter().rect_filled(rect, 3.0, theme::RAISED);
+                }
                 let name = crate::artifacts::file_name(path);
                 let mut right = rect.right();
                 if hovered && open.is_some() && idle {
@@ -389,6 +395,7 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     .clicked()
                     {
                         revert_file = Some(path.clone());
+                        button_clicked = true;
                     }
                     right -= 24.0;
                     let r =
@@ -401,6 +408,7 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     .clicked()
                     {
                         approve_file = Some(path.clone());
+                        button_clicked = true;
                     }
                     right -= 24.0;
                 } else if hovered {
@@ -414,6 +422,7 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     .clicked()
                     {
                         open_folder_of(path);
+                        button_clicked = true;
                     }
                     right -= 24.0;
                 } else {
@@ -454,7 +463,12 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 }
                 let g = line_galley(ui, name, widgets::font(13.0), theme::TEXT, right - x - 4.0);
                 paint_line(ui, x, rect.center().y, g);
-                resp.on_hover_text(relative_path(path, &cwd));
+                let resp = resp
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(relative_path(path, &cwd));
+                if resp.clicked() && !button_clicked {
+                    show_diff = Some(path.clone());
+                }
             }
             if !pending.is_empty() {
                 ui.add_space(4.0);
@@ -477,6 +491,14 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             }
         },
     );
+    if let Some(path) = show_diff {
+        let abs = if std::path::Path::new(&path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            cwd.join(path)
+        };
+        h.open_preview_diff(&abs);
+    }
     if let Some(path) = revert_file {
         h.ui.confirm = Some(Confirm::RevertFile {
             session_id: sid.to_string(),

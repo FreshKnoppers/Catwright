@@ -103,15 +103,7 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     text: String::new(),
                 });
             }
-            MessageOp::SendComments { key, path } => {
-                let comments = h.ui.diff_comments.get(&key).cloned().unwrap_or_default();
-                if !comments.is_empty() {
-                    h.draft = comments_prompt(&path, &comments);
-                    h.ui.focus_composer = true;
-                    h.status =
-                        tr("Comments are in the input field — add to them and send.").to_string();
-                }
-            }
+            MessageOp::SendComments { key, path } => send_comments(h, &key, &path),
         }
     }
     // the pills of the NEXT frame jump to the positions this frame drew
@@ -621,11 +613,30 @@ pub(crate) fn comments_prompt(path: &str, comments: &[DiffComment]) -> String {
     out
 }
 
-/// Borrowed comment state of the transcript: the stored comments plus the
-/// comment being written.
+/// Put the comments of the diff `key` into the composer as one draft.
+pub(crate) fn send_comments(h: &mut Harness, key: &str, path: &str) {
+    let comments = h.ui.diff_comments.get(key).cloned().unwrap_or_default();
+    if !comments.is_empty() {
+        h.draft = comments_prompt(path, &comments);
+        h.ui.focus_composer = true;
+        h.status = tr("Comments are in the input field — add to them and send.").to_string();
+    }
+}
+
+/// Borrowed comment state of a diff view (transcript or preview pane): the
+/// stored comments plus the comment being written.
 pub(crate) struct Comments<'a> {
     map: &'a mut HashMap<String, Vec<DiffComment>>,
     edit: &'a mut Option<CommentEdit>,
+}
+
+impl<'a> Comments<'a> {
+    pub(crate) fn new(
+        map: &'a mut HashMap<String, Vec<DiffComment>>,
+        edit: &'a mut Option<CommentEdit>,
+    ) -> Self {
+        Self { map, edit }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1575,7 +1586,7 @@ fn diff_chip(
 /// The review comments of one open diff: the editor for the line being
 /// commented, the stored comments, and the "Send to Vibe" button that turns
 /// them into a composer draft.
-fn comment_section(
+pub(crate) fn comment_section(
     ui: &mut egui::Ui,
     key: &str,
     path: &str,

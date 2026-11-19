@@ -1352,6 +1352,17 @@ impl Harness {
         }
     }
 
+    /// Show the absolute `path` in the preview pane as its diff against the
+    /// last commit (the header's list of changed files).
+    pub fn open_preview_diff(&mut self, path: &Path) {
+        let width = self.ui.preview.as_ref().map_or(380.0, |p| p.width);
+        self.ui.preview = Some(PreviewState {
+            path: path.to_string_lossy().into_owned(),
+            width,
+            mode: PreviewMode::Diff,
+        });
+    }
+
     /// Pin/unpin a session (persisted through the settings by the app).
     pub fn toggle_pinned(&mut self, sid: &str) {
         if !self.pinned.remove(sid) {

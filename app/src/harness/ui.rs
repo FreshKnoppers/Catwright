@@ -8,7 +8,7 @@ mod activity;
 mod artifacts;
 mod cards;
 pub(crate) mod composer;
-mod header;
+pub(crate) mod header;
 pub(crate) mod palette;
 mod panel;
 mod sidebar;
