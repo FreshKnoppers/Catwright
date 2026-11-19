@@ -1760,3 +1760,9 @@ msgstr "Die Antwort konnte nicht vorgelesen werden."
 
 msgid "Vibe did not start reading aloud."
 msgstr "Vibe hat das Vorlesen nicht gestartet."
+
+msgid "Outside the workspace"
+msgstr "Außerhalb des Workspaces"
+
+msgid "This file lies outside the session's workspace — a symlink or a .. path resolved there."
+msgstr "Diese Datei liegt außerhalb des Workspaces der Sitzung — ein Symlink oder ein ..-Pfad löst dorthin auf."

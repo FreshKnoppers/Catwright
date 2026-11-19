@@ -119,6 +119,12 @@ impl App {
                 harness.activity_on_ready = true;
             }
             Some(StartView::Preview { path, diff }) => {
+                // a `--project` gives the workspace to check against
+                let base = harness.current_project.clone();
+                let outside_workspace = base
+                    .as_deref()
+                    .map(|c| crate::render::is_outside_workspace(c, &path))
+                    .unwrap_or(false);
                 harness.ui.preview = Some(crate::harness::state::PreviewState {
                     path: path.to_string_lossy().into_owned(),
                     width: 380.0,
@@ -127,6 +133,7 @@ impl App {
                     } else {
                         crate::harness::state::PreviewMode::Code
                     },
+                    outside_workspace,
                 });
             }
             None => {}

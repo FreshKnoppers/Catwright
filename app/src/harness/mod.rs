@@ -1486,16 +1486,25 @@ impl Harness {
     /// path in a tool row, diff chip or changes row). Relative paths
     /// resolve against the session's workspace.
     pub fn open_preview(&mut self, sid: &str, path: &str) {
+        let session_cwd = self.sessions.get(sid).map(|v| v.cwd.clone());
         let resolved = if Path::new(path).is_absolute() {
             Some(PathBuf::from(path))
         } else {
-            self.sessions.get(sid).map(|v| v.cwd.join(path))
+            session_cwd.as_ref().map(|c| c.join(path))
         };
         if let Some(p) = resolved {
+            // The path may come from the agent (tool rows, diff chips): a
+            // `..` or a symlink can lead outside the workspace, so resolve
+            // it canonically and flag it — the header shows a badge then.
+            let outside_workspace = session_cwd
+                .as_deref()
+                .map(|c| crate::render::is_outside_workspace(c, &p))
+                .unwrap_or(false);
             self.ui.preview = Some(PreviewState {
                 path: p.to_string_lossy().into_owned(),
                 width: 380.0,
                 mode: PreviewMode::Code,
+                outside_workspace,
             });
         }
     }
@@ -1504,10 +1513,21 @@ impl Harness {
     /// last commit (the header's list of changed files).
     pub fn open_preview_diff(&mut self, path: &Path) {
         let width = self.ui.preview.as_ref().map_or(380.0, |p| p.width);
+        let base = self
+            .active
+            .as_deref()
+            .and_then(|sid| self.sessions.get(sid))
+            .map(|v| v.cwd.clone())
+            .or_else(|| self.current_project.clone());
+        let outside_workspace = base
+            .as_deref()
+            .map(|c| crate::render::is_outside_workspace(c, path))
+            .unwrap_or(false);
         self.ui.preview = Some(PreviewState {
             path: path.to_string_lossy().into_owned(),
             width,
             mode: PreviewMode::Diff,
+            outside_workspace,
         });
     }
 

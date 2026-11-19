@@ -4076,6 +4076,38 @@ fn open_preview_resolves_relative_paths_against_the_session() {
     );
 }
 
+/// Paths that resolve outside the session's workspace (a `..`, an absolute
+/// path elsewhere, a symlink pointing out) set `outside_workspace`, so the
+/// preview header can show the badge; inside paths leave it clear.
+#[test]
+fn open_preview_flags_paths_outside_the_workspace() {
+    let base = std::env::temp_dir().join(format!("cw-prev-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let ws = base.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let outside = base.join("outside.txt");
+    std::fs::write(&outside, "x\n").unwrap();
+    std::fs::write(ws.join("inside.txt"), "x\n").unwrap();
+    std::os::unix::fs::symlink(&outside, ws.join("link.txt")).unwrap();
+    let (mut h, _agent) = setup(vec![ws.clone()], "ask");
+    h.sessions
+        .insert("s1".to_string(), SessionView::new("s1", ws.clone()));
+    let flag = |h: &Harness| h.ui.preview.as_ref().map(|p| p.outside_workspace);
+    h.open_preview("s1", "inside.txt");
+    assert_eq!(flag(&h), Some(false), "a file inside the workspace");
+    h.open_preview("s1", "../outside.txt");
+    assert_eq!(flag(&h), Some(true), "a .. path escaping the workspace");
+    h.open_preview("s1", outside.to_string_lossy().as_ref());
+    assert_eq!(
+        flag(&h),
+        Some(true),
+        "an absolute path outside the workspace"
+    );
+    h.open_preview("s1", "link.txt");
+    assert_eq!(flag(&h), Some(true), "a symlink pointing outside");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn sidebar_entries_sort_pinned_first() {
     let listed = vec![
@@ -5205,6 +5237,7 @@ fn new_views_render_headless_with_their_widgets() {
         path: file.to_string_lossy().into_owned(),
         width: 380.0,
         mode: crate::harness::state::PreviewMode::Code,
+        outside_workspace: false,
     });
     let all = render_texts(&mut h, 3).join("\n");
     assert!(
@@ -5312,6 +5345,7 @@ fn feature_screenshots() {
         path: file.to_string_lossy().into_owned(),
         width: 380.0,
         mode: crate::harness::state::PreviewMode::Code,
+        outside_workspace: false,
     });
     shot(&mut h, "03-preview-pane");
     h.ui.preview.as_mut().unwrap().mode = crate::harness::state::PreviewMode::Diff;
@@ -5332,6 +5366,19 @@ fn feature_screenshots() {
     });
     shot(&mut h, "03c-preview-diff-comments");
     h.ui.comment_edit = None;
+    // a path outside the workspace carries the warning badge in the header
+    // (the file itself need not exist; the badge comes from the flag)
+    let outside = dir
+        .parent()
+        .unwrap()
+        .join(format!("od-outside-{}.py", std::process::id()));
+    h.ui.preview = Some(crate::harness::state::PreviewState {
+        path: outside.to_string_lossy().into_owned(),
+        width: 380.0,
+        mode: crate::harness::state::PreviewMode::Code,
+        outside_workspace: true,
+    });
+    shot(&mut h, "03e-preview-outside-workspace");
     h.ui.preview = None;
     // the header's "N changed" menu (the git state arrives in the background)
     let mut tries = 0;

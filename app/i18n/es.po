@@ -1760,3 +1760,9 @@ msgstr "No se pudo leer la respuesta en voz alta."
 
 msgid "Vibe did not start reading aloud."
 msgstr "Vibe no ha empezado a leer en voz alta."
+
+msgid "Outside the workspace"
+msgstr "Fuera del espacio de trabajo"
+
+msgid "This file lies outside the session's workspace — a symlink or a .. path resolved there."
+msgstr "Este archivo está fuera del espacio de trabajo de la sesión: un enlace simbólico o una ruta .. resuelve allí."

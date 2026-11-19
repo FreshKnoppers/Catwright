@@ -289,6 +289,9 @@ pub struct PreviewState {
     /// Panel width in points; the user can resize it.
     pub width: f32,
     pub mode: PreviewMode,
+    /// The path resolves outside the session's workspace (through a symlink
+    /// or a `..`); the header then shows a warning badge.
+    pub outside_workspace: bool,
 }
 
 /// Transient state of the harness UI.

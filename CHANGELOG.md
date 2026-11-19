@@ -5,6 +5,11 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- Security hardening: the preview pane resolves the opened path canonically
+  and shows an "Outside the workspace" badge when it lies outside the
+  session's workspace (through a symlink or a `..`); file chips in answers
+  no longer resolve through symlinks that point outside the workspace.
+
 ## v0.5.1
 
 **Download:** `catwright-v0.5.1-x86_64-linux.tar.gz` below, then:

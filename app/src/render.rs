@@ -1210,7 +1210,7 @@ fn canonical_cwd(cwd: &Path) -> PathBuf {
 }
 
 /// Lexical normalization (`.` and `..` resolved without touching the disk).
-fn normalize_lexically(p: &Path) -> PathBuf {
+pub(crate) fn normalize_lexically(p: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for c in p.components() {
@@ -1223,6 +1223,19 @@ fn normalize_lexically(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// True when the absolute `path` resolves to a file outside the workspace
+/// `cwd` — through a symlink or a `..` that a linked folder turns into
+/// another target. The candidate is canonicalized when it exists (a
+/// missing file falls back to the lexical view); click-triggered, not per
+/// frame, so the syscalls are fine here.
+pub(crate) fn is_outside_workspace(cwd: &Path, path: &Path) -> bool {
+    let root = canonical_cwd(cwd);
+    let canon = path
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexically(path));
+    !(canon.starts_with(&root) || canon.starts_with(normalize_lexically(cwd)))
 }
 
 /// Resolve one token (an inline-code span or a path-like word) to an
@@ -1264,7 +1277,15 @@ pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
         return None;
     }
     if file_exists_cached(&abs) {
-        Some(abs)
+        // `metadata` follows symlinks, so a link inside the workspace can
+        // still point outside (repo/x.txt -> /etc/passwd): resolve the
+        // candidate canonically and re-check against the canonical root
+        // before offering it as a chip.
+        if is_outside_workspace(cwd, &abs) {
+            None
+        } else {
+            Some(abs)
+        }
     } else {
         None
     }
@@ -2994,5 +3015,42 @@ mod tests {
         let _ = std::fs::remove_file(&link);
         assert!(super::resolve_workspace_file(&cwd, "2.5").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symlink inside the workspace that points outside must not become a
+    /// chip: `metadata` follows links, so the existence check alone passes;
+    /// the canonical re-check rejects the candidate (audit 2026-11: Opus'
+    /// finding on `resolve_workspace_file`).
+    #[test]
+    fn workspace_file_resolution_rejects_symlinks_pointing_outside() {
+        let base = std::env::temp_dir().join(format!("cw-chips-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let outside = base.join("outside.txt");
+        std::fs::write(&outside, "secret\n").unwrap();
+        std::fs::write(ws.join("real.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("link.txt")).unwrap();
+        // a linked folder: `dirlink/f.txt` is lexically inside the workspace
+        let real_dir = base.join("real-dir");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        std::fs::write(real_dir.join("f.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&real_dir, ws.join("dirlink")).unwrap();
+        let cwd = ws.canonicalize().unwrap();
+        assert!(super::resolve_workspace_file(&cwd, "real.txt").is_some());
+        assert!(
+            super::resolve_workspace_file(&cwd, "link.txt").is_none(),
+            "a symlink to outside the workspace is no chip"
+        );
+        assert!(
+            super::resolve_workspace_file(&cwd, "dirlink/f.txt").is_none(),
+            "a path through a linked folder is no chip either"
+        );
+        assert!(
+            super::is_outside_workspace(&cwd, &ws.join("link.txt")),
+            "the helper sees the symlink target outside"
+        );
+        assert!(!super::is_outside_workspace(&cwd, &ws.join("real.txt")));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

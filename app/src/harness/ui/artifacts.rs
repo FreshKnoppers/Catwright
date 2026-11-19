@@ -208,6 +208,19 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                 .truncate(),
             )
             .on_hover_text(&p.path);
+            if p.outside_workspace {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr("Outside the workspace"))
+                            .color(theme::YELLOW)
+                            .size(11.0),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(tr(
+                    "This file lies outside the session's workspace — a symlink or a .. path resolved there.",
+                ));
+            }
             ui.add_space(4.0);
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
