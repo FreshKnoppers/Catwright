@@ -36,14 +36,11 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
                 {
                     close = true;
                 }
-                let unseen = h.activity_unseen();
-                if unseen > 0
-                    && widgets::button(ui, tr("Mark all read"), ButtonKind::Secondary).clicked()
-                {
-                    h.ui.activity_seen = h.activity.len();
-                }
             });
         });
+        // the user is looking at the feed: what arrives meanwhile is seen,
+        // too (opening it already marked the rest)
+        h.ui.activity_seen = h.activity.len();
         ui.add_space(6.0);
         let events: Vec<ActivityEvent> = h
             .activity

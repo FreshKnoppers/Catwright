@@ -77,7 +77,7 @@ Each point: what to do, what should happen. Tick off or note the failure.
       "Finished" and "Failed" sections with entries (workspace in mono
       caps, age, Open on the right); failed session shows red FAILED in the
       sidebar until it is opened or a new prompt is sent.
-- [ ] "Mark all read" clears the badge; a session can be marked unread and
+- [ ] Opening the feed clears the badge; a session can be marked unread and
       archived (archived group in the sidebar, un-archive from there).
       **Should:** as described; archiving persists across restarts.
 

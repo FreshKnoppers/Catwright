@@ -2016,7 +2016,7 @@ impl Harness {
     }
 
     /// Feed entries added since the user last looked that are still shown
-    /// (the sidebar badge and "Mark all read").
+    /// (the sidebar badge; showing the feed marks them seen).
     pub fn activity_unseen(&self) -> usize {
         self.activity
             .iter()

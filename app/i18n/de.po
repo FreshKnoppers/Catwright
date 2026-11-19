@@ -1632,9 +1632,6 @@ msgstr "Diff"
 msgid "No changes against the last commit."
 msgstr "Keine Änderungen gegenüber dem letzten Commit."
 
-msgid "Mark all read"
-msgstr "Alle als gelesen markieren"
-
 msgid "FAILED"
 msgstr "FEHLGESCHLAGEN"
 

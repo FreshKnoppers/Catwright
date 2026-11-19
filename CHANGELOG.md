@@ -15,6 +15,14 @@ Fixes:
 
 - A finished subagent's status bar no longer shows a block next to the
   sitting cat: the track ends where the cat sits.
+- Finished subagents of an earlier turn no longer start walking again when
+  the next turn begins.
+- Desktop notifications also come for Vibe's questions and for approvals of
+  a subagent's session (then without the project name).
+- Enter in the worktree dialog creates the worktree.
+- `dist/install.sh` refreshes the icon cache, so a new app icon shows up.
+- The activity feed drops the "Mark all read" button: opening the feed
+  already marks everything read.
 
 ## v0.3.0
 
