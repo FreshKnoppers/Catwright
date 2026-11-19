@@ -922,6 +922,32 @@ mod tests {
         d
     }
 
+    /// What `probe_filter_drivers` must report for a repository whose own
+    /// config defines `repo_own`: the probe neutralizes drivers from ALL
+    /// scopes, so the system/global drivers of the machine running the
+    /// tests come first (the GitHub runner and many desktops ship git-lfs
+    /// in /etc/gitconfig or ~/.gitconfig), then the repo's own ones, each
+    /// name once — the parser's order. Read outside any repository, with
+    /// the same `--includes` as the probe, so only system/global count.
+    fn expected_drivers(repo_own: &[&str]) -> Vec<String> {
+        let outside = tmp_base("no-repo");
+        let out = std::process::Command::new("git")
+            .current_dir(&outside)
+            // discovery must not walk up into a repository around TMPDIR
+            .env("GIT_CEILING_DIRECTORIES", outside.parent().unwrap())
+            .args(["config", "--includes", "--show-scope", "--list", "-z"])
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&outside);
+        let mut names = parse_scoped_filter_list(&String::from_utf8_lossy(&out.stdout));
+        for own in repo_own {
+            if !names.iter().any(|n| n == own) {
+                names.push(own.to_string());
+            }
+        }
+        names
+    }
+
     /// A `!` alias makes git spawn a shell; the background `sleep` inherits
     /// the piped stdout and keeps its write end open, while git itself has
     /// already exited with status 0. The old `reader.join()` hung on this
@@ -1181,7 +1207,7 @@ mod tests {
 
         // the probe sees the driver …
         let drivers = probe_filter_drivers(&repo).expect("probe succeeds in a repo");
-        assert_eq!(drivers, vec!["pwn"]);
+        assert_eq!(drivers, expected_drivers(&["pwn"]));
         // … and our scan runs `status` with the filter neutralized
         let out = git_output(&repo, &["status", "--porcelain", "-z"]);
         assert!(out.is_some(), "status still answers");
@@ -1296,7 +1322,7 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
 
         let drivers = probe_filter_drivers(&repo).expect("probe succeeds");
-        assert_eq!(drivers, vec!["x=y"]);
+        assert_eq!(drivers, expected_drivers(&["x=y"]));
         assert!(git_output(&repo, &["status", "--porcelain", "-z"]).is_some());
         assert!(!marker.exists(), "the '='-named driver must not have run");
         let _ = std::fs::remove_dir_all(&base);
@@ -1312,8 +1338,12 @@ mod tests {
         std::fs::create_dir_all(&not_a_repo).unwrap();
         assert_eq!(probe_filter_drivers(&not_a_repo), Some(vec![]));
         assert!(git_output(&not_a_repo, &["init", "-q"]).is_some());
-        // now it is a repo: the probe reads its config (no filters here)
-        assert_eq!(probe_filter_drivers(&not_a_repo), Some(vec![]));
+        // now it is a repo: the probe reads its config (no repo filters
+        // here, only what system/global config defines)
+        assert_eq!(
+            probe_filter_drivers(&not_a_repo),
+            Some(expected_drivers(&[]))
+        );
         assert!(git_output(&not_a_repo, &["status", "--porcelain"]).is_some());
         let _ = std::fs::remove_dir_all(&base);
     }
