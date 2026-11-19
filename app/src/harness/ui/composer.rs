@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::acp::protocol::ConfigOption;
+use crate::harness::state::Dictation;
 use crate::harness::watch::{filter_files, mention_at};
 use crate::harness::{
     current_mode_label, extras, filter_commands, mode_label, mode_selectable, start_modes, Conn,
@@ -341,6 +342,19 @@ fn attachment_chips(h: &mut Harness, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 }
 
+/// The microphone button of the composer: `None` while the setting is off.
+/// The tooltip says what a click does; the icon is ORANGE while Vibe
+/// records.
+pub(crate) fn dictation_button(h: &Harness) -> Option<(Icon, &'static str, egui::Color32)> {
+    if !h.voice_dictation {
+        return None;
+    }
+    Some(match h.dictation {
+        Dictation::Recording => (Icon::Mic, tr("Stop dictation"), theme::ORANGE),
+        _ => (Icon::Mic, tr("Dictate"), theme::MUTED),
+    })
+}
+
 fn toolbar(
     h: &mut Harness,
     ui: &mut egui::Ui,
@@ -361,6 +375,14 @@ fn toolbar(
                 .map(|s| s.cwd.clone())
                 .unwrap_or_else(|| picker_start(h));
             h.ui.file_picker = Some(dialogs::FilePicker::new(start));
+        }
+        if let Some((icon, tooltip, color)) = dictation_button(h) {
+            if ui
+                .add(IconButton::new(icon, tooltip).color(color))
+                .clicked()
+            {
+                h.toggle_dictation();
+            }
         }
         mode_chip(h, ui, sid);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

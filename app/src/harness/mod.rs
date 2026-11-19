@@ -27,8 +27,8 @@ use extras::{
 };
 use serde_json::{json, Value};
 use state::{
-    ActivityEvent, ActivityKind, PreviewMode, PreviewState, QueuedPrompt, TurnDiffView, TurnDiffs,
-    UiState,
+    ActivityEvent, ActivityKind, Dictation, PreviewMode, PreviewState, QueuedPrompt, TurnDiffView,
+    TurnDiffs, UiState,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -187,6 +187,14 @@ pub struct Harness {
     /// Mirror of Settings::notify_turn_events, refreshed by the app shell
     /// every frame.
     pub notify_events: bool,
+    /// Mirror of Settings::voice_dictation, refreshed by the app shell every
+    /// frame: the composer shows the microphone only while it is on.
+    pub voice_dictation: bool,
+    /// The composer's dictation state (Vibe records, Catwright only asks).
+    pub dictation: Dictation,
+    /// No `_voice/transcriptionDelta` arrived yet for the running dictation:
+    /// its first piece is separated from the typed draft by one space.
+    dictation_first_delta: bool,
     /// Whether the window has focus (refreshed by the app shell every
     /// frame). Notifications only fire while it does not.
     pub window_focused: bool,
@@ -343,6 +351,9 @@ impl Harness {
             open_on_ready: None,
             activity_on_ready: false,
             notify_events: false,
+            voice_dictation: false,
+            dictation: Dictation::Idle,
+            dictation_first_delta: false,
             window_focused: true,
             pending_notify: Vec::new(),
             prompt_on_ready: None,
@@ -815,6 +826,39 @@ impl Harness {
                 }
             }
             AcpEvent::ExtResult { kind, result } => self.handle_ext_result(kind, result),
+            AcpEvent::VoiceStarted { ok, error } => {
+                // only the answer to the start we are waiting for counts: a
+                // late one (the dictation was cancelled meanwhile) is stale
+                if self.dictation == Dictation::Starting {
+                    if ok {
+                        self.dictation = Dictation::Recording;
+                    } else {
+                        self.dictation = Dictation::Idle;
+                        self.status = error
+                            .unwrap_or_else(|| tr("Voice dictation could not be started.").into());
+                    }
+                }
+            }
+            AcpEvent::VoiceStopped { ok, error } => {
+                if self.dictation == Dictation::Stopping {
+                    self.dictation = Dictation::Idle;
+                    if !ok {
+                        self.status = error
+                            .unwrap_or_else(|| tr("Voice dictation could not be stopped.").into());
+                    }
+                }
+            }
+            // the state already went Idle when the cancel went out; a late
+            // answer must not touch a dictation started since
+            AcpEvent::VoiceCancelled => {}
+            AcpEvent::VoiceDelta { text, error } => {
+                if let Some(error) = error {
+                    self.dictation = Dictation::Idle;
+                    self.status = error;
+                } else if let Some(text) = text {
+                    self.append_dictation(&text);
+                }
+            }
             AcpEvent::Retrying {
                 session_id,
                 category,
@@ -1543,6 +1587,9 @@ impl Harness {
         if blocks.is_empty() {
             return;
         }
+        // the message is going out: a running dictation stops here, so Vibe
+        // does not keep recording into the next draft
+        self.cancel_dictation();
         if self.client.is_none() {
             self.status = tr("Vibe is not connected.").to_string();
             return;
@@ -2678,6 +2725,52 @@ impl Harness {
         }
     }
 
+    /// The composer's microphone: start the dictation, or stop the running
+    /// one. A click while a request is in flight is ignored — its answer
+    /// decides the next state.
+    pub fn toggle_dictation(&mut self) {
+        match self.dictation {
+            Dictation::Idle => {
+                let language = crate::i18n::lang().code().to_string();
+                if self.send_ext(ExtKind::VoiceTranscribeStart { language }) {
+                    self.dictation = Dictation::Starting;
+                    self.dictation_first_delta = true;
+                }
+            }
+            Dictation::Recording => {
+                if self.send_ext(ExtKind::VoiceTranscribeStop) {
+                    self.dictation = Dictation::Stopping;
+                }
+            }
+            Dictation::Starting | Dictation::Stopping => {}
+        }
+    }
+
+    /// A message goes out, or the setting is switched off: the running
+    /// dictation is aborted, so Vibe does not keep recording into the next
+    /// draft (and no recording is left without its button).
+    pub(crate) fn cancel_dictation(&mut self) {
+        if matches!(self.dictation, Dictation::Starting | Dictation::Recording) {
+            self.send_ext(ExtKind::VoiceTranscribeCancel);
+            self.dictation = Dictation::Idle;
+        }
+    }
+
+    /// Append one recognised piece to the draft. The first piece of a
+    /// dictation is separated from what the user typed by one space.
+    fn append_dictation(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.dictation_first_delta {
+            self.dictation_first_delta = false;
+            if !self.draft.is_empty() && !self.draft.ends_with(char::is_whitespace) {
+                self.draft.push(' ');
+            }
+        }
+        self.draft.push_str(text);
+    }
+
     fn refresh_list(&mut self, cwd: &Path) {
         let res = self.client.as_ref().map(|c| c.list_sessions(Some(cwd)));
         if let Some(Err(e)) = res {
@@ -3186,6 +3279,12 @@ impl Harness {
                 self.connectors
                     .insert(session_id, extras::parse_connectors(&result));
             }
+            // The voice answers never come through here: `route_response`
+            // turns them into `VoiceStarted` / `VoiceStopped` /
+            // `VoiceCancelled` (they carry `ok` and Vibe's error text).
+            ExtKind::VoiceTranscribeStart { .. }
+            | ExtKind::VoiceTranscribeStop
+            | ExtKind::VoiceTranscribeCancel => {}
         }
     }
 
@@ -3219,6 +3318,17 @@ impl Harness {
                 return;
             }
             ExtKind::ConnectorsToggle { .. } => tr("Toggle connector"),
+            // a voice request the wire rejected (an older Vibe without the
+            // extension, a broken pipe): the dictation is over either way
+            ExtKind::VoiceTranscribeStart { .. } | ExtKind::VoiceTranscribeStop => {
+                self.dictation = Dictation::Idle;
+                tr("Voice dictation")
+            }
+            // the user cancelled on purpose: nothing to report
+            ExtKind::VoiceTranscribeCancel => {
+                self.dictation = Dictation::Idle;
+                return;
+            }
             // background refreshes: an older Vibe or a busy session is no
             // reason to bother the user
             ExtKind::LoopsList { .. } | ExtKind::ReviewState { .. } => return,

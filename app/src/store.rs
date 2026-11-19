@@ -224,6 +224,10 @@ pub struct Settings {
     /// default.
     #[serde(default)]
     pub notify_turn_events: bool,
+    /// Voice dictation in the composer: a microphone button that starts and
+    /// stops Vibe's transcription. Off by default.
+    #[serde(default)]
+    pub voice_dictation: bool,
     /// Pinned session ids: they sort to the top of their workspace's list.
     #[serde(default)]
     pub pinned_sessions: Vec<String>,
@@ -280,6 +284,7 @@ impl Default for Settings {
             panel_closed: false,
             auto_account: false,
             notify_turn_events: false,
+            voice_dictation: false,
             pinned_sessions: Vec::new(),
             transcript_detail: default_transcript_detail(),
             archived_sessions: Vec::new(),

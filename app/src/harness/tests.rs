@@ -40,6 +40,7 @@ use super::*;
 use crate::acp::client::{AcpClient, SessionOrigin};
 use crate::acp::protocol as proto;
 use crate::acp::session::repeated_tool_call;
+use crate::harness::state::Dictation;
 use crate::i18n::{tr_in, Lang};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -5445,6 +5446,14 @@ fn feature_screenshots() {
     });
     shot(&mut h, "11-palette-files");
     h.ui.palette = None;
+    // the composer's microphone (Settings → General → Voice dictation):
+    // idle, and recording in ORANGE
+    h.voice_dictation = true;
+    shot(&mut h, "15-dictation-idle");
+    h.dictation = Dictation::Recording;
+    shot(&mut h, "15b-dictation-recording");
+    h.dictation = Dictation::Idle;
+    h.voice_dictation = false;
     // a worktree of the project shows in the sidebar; the delete dialog warns
     {
         let wt = std::env::temp_dir().join(format!("cw-wt-{}", std::process::id()));
@@ -6191,4 +6200,233 @@ fn permission_card_without_a_known_call_is_not_empty() {
     let all = render_texts(&mut h, 3).join("\n");
     assert!(all.contains("$ ls -la"), "the real call:\n{all}");
     assert!(!all.contains("Vibe sent no details"), "no note:\n{all}");
+}
+
+// ---------------------------------------------------------------------------
+// Voice dictation: Vibe records and transcribes, Catwright only asks
+// (`_voice/*`, docs/acp.md)
+// ---------------------------------------------------------------------------
+
+/// A harness with one open session and the microphone setting on.
+fn dictation_harness() -> (Harness, Agent) {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    h.voice_dictation = true;
+    (h, agent)
+}
+
+/// The click starts Vibe's transcription (with the UI language), its answer
+/// makes the state Recording, and a second click stops it.
+#[test]
+fn dictation_starts_records_and_stops() {
+    let (mut h, mut agent) = dictation_harness();
+    h.toggle_dictation();
+    assert_eq!(h.dictation, Dictation::Starting);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/transcribeStart");
+    assert_eq!(msg["params"]["language"], json!(crate::i18n::lang().code()));
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    assert_eq!(h.dictation, Dictation::Recording);
+
+    h.toggle_dictation();
+    assert_eq!(h.dictation, Dictation::Stopping);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/transcribeStop");
+    assert_eq!(msg["params"], json!({}));
+    h.handle_event(AcpEvent::VoiceStopped {
+        ok: true,
+        error: None,
+    });
+    assert_eq!(h.dictation, Dictation::Idle);
+    assert!(h.status.is_empty(), "no error to show: {}", h.status);
+}
+
+/// A failed start goes back to Idle and shows Vibe's own text.
+#[test]
+fn a_failed_start_keeps_vibes_text() {
+    let (mut h, mut agent) = dictation_harness();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: false,
+        error: Some("No audio input device found".into()),
+    });
+    assert_eq!(h.dictation, Dictation::Idle);
+    assert_eq!(h.status, "No audio input device found");
+}
+
+/// Deltas append; the first one of a dictation is separated from the typed
+/// draft by exactly one space.
+#[test]
+fn dictation_deltas_append_with_one_space() {
+    let (mut h, mut agent) = dictation_harness();
+    h.draft = "Bitte".to_string();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    for piece in ["die ", "Tests ", "laufen"] {
+        h.handle_event(AcpEvent::VoiceDelta {
+            text: Some(piece.into()),
+            error: None,
+        });
+    }
+    assert_eq!(h.draft, "Bitte die Tests laufen");
+
+    // a draft that already ends in whitespace gets no second space
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStop");
+    h.handle_event(AcpEvent::VoiceStopped {
+        ok: true,
+        error: None,
+    });
+    h.draft = "Bitte ".to_string();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    h.handle_event(AcpEvent::VoiceDelta {
+        text: Some("weiter".into()),
+        error: None,
+    });
+    assert_eq!(h.draft, "Bitte weiter");
+
+    // an empty draft gets no leading space
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStop");
+    h.handle_event(AcpEvent::VoiceStopped {
+        ok: true,
+        error: None,
+    });
+    h.draft.clear();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    h.handle_event(AcpEvent::VoiceDelta {
+        text: Some("Hallo".into()),
+        error: None,
+    });
+    assert_eq!(h.draft, "Hallo");
+}
+
+/// An error delta ends the dictation; what was recognised stays.
+#[test]
+fn an_error_delta_ends_the_dictation() {
+    let (mut h, mut agent) = dictation_harness();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    h.handle_event(AcpEvent::VoiceDelta {
+        text: Some("Hallo".into()),
+        error: None,
+    });
+    h.handle_event(AcpEvent::VoiceDelta {
+        text: None,
+        error: Some("Audio backend is unavailable: no device".into()),
+    });
+    assert_eq!(h.dictation, Dictation::Idle);
+    assert_eq!(h.status, "Audio backend is unavailable: no device");
+    assert_eq!(h.draft, "Hallo", "the recognised text stays");
+}
+
+/// Sending a message aborts the dictation first; a late start answer must
+/// not revive it.
+#[test]
+fn sending_a_message_cancels_the_dictation() {
+    let (mut h, mut agent) = dictation_harness();
+    h.toggle_dictation();
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    h.handle_event(AcpEvent::VoiceDelta {
+        text: Some("Hallo".into()),
+        error: None,
+    });
+    h.draft.push_str(" Vibe");
+    h.send();
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/transcribeCancel");
+    assert_eq!(msg["params"], json!({}));
+    assert_eq!(h.dictation, Dictation::Idle);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "session/prompt");
+    assert_eq!(
+        msg["params"]["prompt"][0],
+        json!({"type": "text", "text": "Hallo Vibe"})
+    );
+    // the start answer arrives after the cancel: it is stale
+    h.handle_event(AcpEvent::VoiceStarted {
+        ok: true,
+        error: None,
+    });
+    assert_eq!(h.dictation, Dictation::Idle);
+}
+
+/// The microphone button exists only while the setting is on, and its
+/// tooltip says what a click does.
+#[test]
+fn the_microphone_button_follows_the_setting() {
+    let (mut h, _agent) = dictation_harness();
+    h.voice_dictation = false;
+    assert!(
+        crate::harness::ui::composer::dictation_button(&h).is_none(),
+        "the setting is off: no microphone"
+    );
+    h.voice_dictation = true;
+    let (icon, tooltip, color) = crate::harness::ui::composer::dictation_button(&h).unwrap();
+    assert_eq!(icon, crate::icons::Icon::Mic);
+    assert_eq!(tooltip, "Dictate");
+    assert_eq!(color, crate::theme::MUTED);
+    h.dictation = Dictation::Recording;
+    let (icon, tooltip, color) = crate::harness::ui::composer::dictation_button(&h).unwrap();
+    assert_eq!(icon, crate::icons::Icon::Mic);
+    assert_eq!(tooltip, "Stop dictation");
+    assert_eq!(color, crate::theme::ORANGE, "recording is orange");
+}
+
+/// The composer really paints the microphone: the frame with the setting on
+/// differs from the one with it off (and the frame itself is stable).
+#[test]
+fn the_microphone_is_painted_only_with_the_setting_on() {
+    let (mut h, _agent) = dictation_harness();
+    h.voice_dictation = false;
+    // no focus request: the composer's frame colour would differ between
+    // the first and the second render
+    h.ui.focus_composer = false;
+    let shot = |h: &mut Harness| {
+        crate::softrender::render_ui([1360, 860], 3, |ctx| {
+            let _ = crate::harness::ui::show(h, ctx);
+        })
+    };
+    let off = shot(&mut h);
+    let off_again = shot(&mut h);
+    assert_eq!(
+        off.as_raw(),
+        off_again.as_raw(),
+        "the same state renders the same frame"
+    );
+    h.voice_dictation = true;
+    let on = shot(&mut h);
+    assert_ne!(
+        off.as_raw(),
+        on.as_raw(),
+        "the microphone button is painted"
+    );
 }

@@ -5,6 +5,10 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- Voice dictation in the composer (Settings → General): a microphone button
+  starts and stops Vibe's transcription, the recognised text streams into the
+  draft.
+
 ## v0.4.0
 
 **Download:** `catwright-v0.4.0-x86_64-linux.tar.gz` below, then:

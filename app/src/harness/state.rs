@@ -196,6 +196,22 @@ impl Default for LoopForm {
     }
 }
 
+/// State of the composer's voice dictation. Vibe records the microphone and
+/// transcribes through Mistral; Catwright only sends the three `_voice/*`
+/// requests and appends the text it gets back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dictation {
+    #[default]
+    Idle,
+    /// `_voice/transcribeStart` is in flight.
+    Starting,
+    /// Vibe records; `_voice/transcriptionDelta` pieces append to the draft.
+    Recording,
+    /// `_voice/transcribeStop` is in flight: Vibe flushes, so text may still
+    /// arrive briefly after its answer.
+    Stopping,
+}
+
 /// What the composer's popup list currently offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ComposerPopup {

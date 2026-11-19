@@ -344,6 +344,23 @@ impl App {
                 }
             },
         );
+        setting_row(
+            ui,
+            tr("Voice dictation"),
+            tr("Shows a microphone button in the composer. While it is on, Vibe records your microphone and Mistral transcribes it."),
+            |ui| {
+                let on = self.settings.voice_dictation;
+                if widgets::toggle(ui, on, "").clicked() {
+                    self.settings.voice_dictation = !on;
+                    self.harness.voice_dictation = !on;
+                    if !on {
+                        // the button goes away: a running dictation must not
+                        // keep recording without a way to stop it
+                        self.harness.cancel_dictation();
+                    }
+                }
+            },
+        );
         section(ui, tr("Config folder"));
         ui.horizontal(|ui| {
             if let Some(dir) = store::config_dir() {

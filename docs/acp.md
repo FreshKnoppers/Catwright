@@ -178,8 +178,34 @@ Also used: `_review/turnDiff` with `{sessionId,path,owner:{turnId}}`, answering
 turn id is the user message id). It feeds the per-round file changes in the
 transcript.
 
-Not used yet: `_voice/*`, `_projectLinks/*`, `_auth/*`, `_review/hunks`,
+Not used yet: `_projectLinks/*`, `_auth/*`, `_review/hunks`,
 `_logLevel/*`.
+
+## Voice (Vibe 3.1.3)
+
+Vibe records the microphone and transcribes through Mistral; Catwright contains
+no audio code. It sends three extension requests and appends what comes back.
+None of them carries a `sessionId`: Vibe uses the first session open in its
+process, and without one it answers `{"ok":false,"error":"No active session"}`.
+
+| method | params | result |
+|---|---|---|
+| `_voice/transcribeStart` | `{language}` (the UI language code; Mistral auto-detects the language anyway) | `{"ok":true}` or `{"ok":false,"error":"…"}` |
+| `_voice/transcribeStop` | `{}` | `{"ok":true,"text":""}` or `{"ok":false,"error":"…"}`. Stopping flushes: further deltas may still arrive briefly after the answer. |
+| `_voice/transcribeCancel` | `{}` | `{"ok":true}` or `{"ok":false,"error":"…"}` |
+
+Agent to client, a notification (no id): a piece of recognised text to
+**append** (deltas, not the full text), or a failure.
+
+```json
+{"jsonrpc":"2.0","method":"_voice/transcriptionDelta","params":{"text":"Hallo "}}
+{"jsonrpc":"2.0","method":"_voice/transcriptionDelta","params":{"error":"No audio input device found"}}
+```
+
+Vibe's error texts are shown as they are (they are not ours to translate):
+"Transcription already in progress", "Audio backend is unavailable: …", "No
+audio input device found…", "Voice transcription needs an API key: set …". The
+transcribed text is never logged.
 
 ## Agent to client: `elicitation/create` (a REQUEST, verified live)
 

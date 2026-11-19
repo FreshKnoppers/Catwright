@@ -172,6 +172,16 @@ pub enum ExtKind {
         name: String,
         disabled: bool,
     },
+    /// Start Vibe's voice transcription (`_voice/transcribeStart`). Vibe
+    /// records the microphone and transcribes through Mistral; the text
+    /// arrives as `_voice/transcriptionDelta` notifications.
+    VoiceTranscribeStart {
+        language: String,
+    },
+    /// Stop the transcription and flush what is left (`_voice/transcribeStop`).
+    VoiceTranscribeStop,
+    /// Abort the transcription without flushing (`_voice/transcribeCancel`).
+    VoiceTranscribeCancel,
 }
 
 impl ExtKind {
@@ -283,6 +293,13 @@ impl ExtKind {
                 "_connectors/toggle",
                 json!({ "sessionId": session_id, "name": name, "disabled": disabled }),
             ),
+            // The voice methods carry no session id: Vibe uses the first
+            // session open in its process (docs/acp.md).
+            ExtKind::VoiceTranscribeStart { language } => {
+                ("_voice/transcribeStart", json!({ "language": language }))
+            }
+            ExtKind::VoiceTranscribeStop => ("_voice/transcribeStop", json!({})),
+            ExtKind::VoiceTranscribeCancel => ("_voice/transcribeCancel", json!({})),
         }
     }
 }
@@ -349,6 +366,24 @@ pub enum AcpEvent {
         session_id: String,
         category: String,
         detail: String,
+    },
+    /// `_voice/transcribeStart` answered: `ok`, or Vibe's own error text.
+    VoiceStarted {
+        ok: bool,
+        error: Option<String>,
+    },
+    /// `_voice/transcribeStop` answered: `ok`, or Vibe's own error text.
+    VoiceStopped {
+        ok: bool,
+        error: Option<String>,
+    },
+    /// `_voice/transcribeCancel` answered (the payload carries nothing).
+    VoiceCancelled,
+    /// A piece of recognised text to append (`text`), or a failure
+    /// (`error`) of the running transcription (`_voice/transcriptionDelta`).
+    VoiceDelta {
+        text: Option<String>,
+        error: Option<String>,
     },
     RequestFailed {
         request: RequestKind,
@@ -979,6 +1014,13 @@ fn handle_line(line: &str, shared: &Shared) -> Option<AcpEvent> {
                     category: text("category"),
                     detail: text("detail"),
                 })
+            } else if method == "_voice/transcriptionDelta" {
+                // a piece of recognised text to append, or Vibe's error
+                let field = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_string);
+                Some(AcpEvent::VoiceDelta {
+                    text: field("text"),
+                    error: field("error"),
+                })
             } else {
                 None // unknown notifications are ignored
             }
@@ -1122,11 +1164,34 @@ fn route_response(kind: RequestKind, value: Value) -> Result<AcpEvent, rpc::RpcE
         // the payload carries nothing the harness needs; the usage_update
         // Vibe sends with it arrives as a normal session update
         RequestKind::ResumeSession { .. } => Ok(AcpEvent::SessionResumed),
-        RequestKind::Ext(kind) => Ok(AcpEvent::ExtResult {
-            kind,
-            result: value,
-        }),
+        RequestKind::Ext(kind) => match kind {
+            // The voice answers are `{"ok":true}` or
+            // `{"ok":false,"error":"…"}`; the error text is Vibe's own.
+            ExtKind::VoiceTranscribeStart { .. } => {
+                let (ok, error) = voice_answer(&value);
+                Ok(AcpEvent::VoiceStarted { ok, error })
+            }
+            ExtKind::VoiceTranscribeStop => {
+                let (ok, error) = voice_answer(&value);
+                Ok(AcpEvent::VoiceStopped { ok, error })
+            }
+            ExtKind::VoiceTranscribeCancel => Ok(AcpEvent::VoiceCancelled),
+            kind => Ok(AcpEvent::ExtResult {
+                kind,
+                result: value,
+            }),
+        },
     }
+}
+
+/// `ok` and Vibe's `error` text of a `_voice/*` answer.
+fn voice_answer(value: &Value) -> (bool, Option<String>) {
+    let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let error = value
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (ok, error)
 }
 
 /// Best-effort write from the reader thread (error replies).
@@ -1214,6 +1279,105 @@ mod tests {
         assert_eq!(m, "_trust/decision");
         assert_eq!(p["cwd"], json!("/w"));
         assert_eq!(p["decision"], json!("trust_cwd"));
+        // the voice requests carry no session id (Vibe uses the first open
+        // session of its process)
+        let (m, p) = ExtKind::VoiceTranscribeStart {
+            language: "de".into(),
+        }
+        .wire();
+        assert_eq!(m, "_voice/transcribeStart");
+        assert_eq!(p, json!({"language": "de"}));
+        let (m, p) = ExtKind::VoiceTranscribeStop.wire();
+        assert_eq!(m, "_voice/transcribeStop");
+        assert_eq!(p, json!({}));
+        let (m, p) = ExtKind::VoiceTranscribeCancel.wire();
+        assert_eq!(m, "_voice/transcribeCancel");
+        assert_eq!(p, json!({}));
+    }
+
+    /// `_voice/transcriptionDelta` carries either a piece of text or Vibe's
+    /// error; both reach the harness.
+    #[test]
+    fn transcription_delta_notification_becomes_an_event() {
+        let (tx, rx) = mpsc::channel::<AcpEvent>();
+        std::mem::forget(rx);
+        let shared = Shared {
+            tx,
+            writer_slot: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            stderr_tail: Arc::new(Mutex::new(Vec::new())),
+            stderr_handle: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
+        };
+        let line =
+            r#"{"jsonrpc":"2.0","method":"_voice/transcriptionDelta","params":{"text":"Hallo "}}"#;
+        match handle_line(line, &shared) {
+            Some(AcpEvent::VoiceDelta { text, error }) => {
+                assert_eq!(text.as_deref(), Some("Hallo "));
+                assert_eq!(error, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let line = r#"{"jsonrpc":"2.0","method":"_voice/transcriptionDelta","params":{"error":"No audio input device found"}}"#;
+        match handle_line(line, &shared) {
+            Some(AcpEvent::VoiceDelta { text, error }) => {
+                assert_eq!(text, None);
+                assert_eq!(error.as_deref(), Some("No audio input device found"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// The three voice answers are routed to their own events, with Vibe's
+    /// error text kept as it came.
+    #[test]
+    fn voice_answers_are_routed() {
+        let started = route_response(
+            RequestKind::Ext(ExtKind::VoiceTranscribeStart {
+                language: "en".into(),
+            }),
+            json!({"ok": true}),
+        )
+        .expect("started");
+        assert!(matches!(
+            started,
+            AcpEvent::VoiceStarted {
+                ok: true,
+                error: None
+            }
+        ));
+        let failed = route_response(
+            RequestKind::Ext(ExtKind::VoiceTranscribeStart {
+                language: "en".into(),
+            }),
+            json!({"ok": false, "error": "Transcription already in progress"}),
+        )
+        .expect("failed start");
+        match failed {
+            AcpEvent::VoiceStarted { ok, error } => {
+                assert!(!ok);
+                assert_eq!(error.as_deref(), Some("Transcription already in progress"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let stopped = route_response(
+            RequestKind::Ext(ExtKind::VoiceTranscribeStop),
+            json!({"ok": true, "text": ""}),
+        )
+        .expect("stopped");
+        assert!(matches!(
+            stopped,
+            AcpEvent::VoiceStopped {
+                ok: true,
+                error: None
+            }
+        ));
+        let cancelled = route_response(
+            RequestKind::Ext(ExtKind::VoiceTranscribeCancel),
+            json!({"ok": true}),
+        )
+        .expect("cancelled");
+        assert!(matches!(cancelled, AcpEvent::VoiceCancelled));
     }
 
     /// `elicitation/create` is delivered to the harness instead of being

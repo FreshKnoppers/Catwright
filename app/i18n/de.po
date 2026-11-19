@@ -1718,3 +1718,21 @@ msgstr "Diese Anfrage gehört zu keinem geöffneten Verlauf – vermutlich ein S
 
 msgid "“{title}” has now run {n} times in a row with the same input. Vibe cannot stop itself — you can cancel the running turn here."
 msgstr "„{title}“ läuft zum {n}. Mal hintereinander mit denselben Eingaben. Vibe kann sich selbst nicht bremsen – du kannst den laufenden Turn hier abbrechen."
+
+msgid "Voice dictation"
+msgstr "Sprachdiktat"
+
+msgid "Shows a microphone button in the composer. While it is on, Vibe records your microphone and Mistral transcribes it."
+msgstr "Zeigt einen Mikrofon-Knopf im Eingabefeld. Solange er an ist, nimmt Vibe dein Mikrofon auf und Mistral schreibt es mit."
+
+msgid "Dictate"
+msgstr "Diktieren"
+
+msgid "Stop dictation"
+msgstr "Diktat beenden"
+
+msgid "Voice dictation could not be started."
+msgstr "Das Diktat konnte nicht gestartet werden."
+
+msgid "Voice dictation could not be stopped."
+msgstr "Das Diktat konnte nicht beendet werden."
