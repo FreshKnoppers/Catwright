@@ -334,7 +334,10 @@ fn diff_content(
     comment: (&str, &mut Comments, &mut Vec<MessageOp>),
 ) {
     type DiffCache = std::sync::Mutex<
-        std::collections::HashMap<(String, Option<u64>, u64, bool), (Option<String>, String)>,
+        std::collections::HashMap<
+            (String, String, Option<u64>, u64, bool),
+            (Option<String>, String),
+        >,
     >;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -360,18 +363,24 @@ fn diff_content(
         );
         return;
     }
-    // the trust state is part of the key: a diff cached while the folder
-    // was untrusted must not survive trusting it (and vice versa)
-    let key = (path.to_string(), mtime, len, trusted);
+    // git runs in the workspace, or next to the file when it lies
+    // outside (a changed file above a sub-folder project)
+    let dir = git_dir_for(path, base);
+    // the git folder and the trust state are part of the key: a diff cached
+    // for another folder (session switch) or while the folder was untrusted
+    // must not be served
+    let key = (
+        path.to_string(),
+        dir.to_string_lossy().into_owned(),
+        mtime,
+        len,
+        trusted,
+    );
     let (old, current) = {
         let mut c = cache.lock().unwrap();
         if let Some(t) = c.get(&key) {
             t.clone()
         } else {
-            // git runs in the workspace, or next to the file when it lies
-            // outside (a changed file above a sub-folder project); the
-            // call neutralizes the repo's own filter drivers (watch.rs)
-            let dir = git_dir_for(path, base);
             let rel = std::path::Path::new(path)
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())

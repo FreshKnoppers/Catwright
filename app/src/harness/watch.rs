@@ -297,6 +297,9 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<St
         .arg("-c")
         .arg("protocol.allow=never")
         .env("GIT_NO_LAZY_FETCH", "1")
+        // beats per-protocol `protocol.<name>.allow` in the repo's config
+        // (verified against git 2.56: env wins even over `-c`)
+        .env("GIT_ALLOW_PROTOCOL", "none")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -379,6 +382,12 @@ pub(crate) fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
     git_output_bounded(dir, args, GIT_TIMEOUT)
 }
 
+/// `git_output` with a custom deadline, for calls that must not stall the
+/// UI thread for the full watcher budget.
+pub(crate) fn git_output_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    git_output_bounded(dir, args, timeout)
+}
+
 /// Default stdout cap for one git call: a scan's answer is small; anything
 /// bigger (a huge blob from `git show`) counts as "none" instead of
 /// becoming a huge String on the caller's thread.
@@ -390,10 +399,12 @@ const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// an `include.path` target — PoC-verified that `git status` then runs its
 /// clean filter while a `--local`-only probe sees nothing), and every scope
 /// other than system/global is the repo's own word. A repo-scope
-/// `include.*`/`includeIf.*` fails the probe CLOSED instead (it can point
-/// at a FIFO a live attacker rewrites between probe and command).
-/// `git config --list` exits 0 in any repository, so `None` here means
-/// the probe itself failed — callers fail closed.
+/// `include.*`/`includeIf.*` or `hook.*` fails the probe CLOSED instead
+/// (an include can point at a FIFO a live attacker rewrites between probe
+/// and command; git >= 2.46 runs config-defined hooks even with
+/// core.hooksPath=/dev/null), and the config files themselves must be
+/// regular files. `git config --list` exits 0 in any repository, so
+/// `None` here means the probe itself failed — callers fail closed.
 pub fn probe_filter_drivers(dir: &Path) -> Option<Vec<String>> {
     probe_filter_drivers_timeout(dir, GIT_TIMEOUT)
 }
@@ -418,7 +429,36 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
         &[],
     ) {
         RawGit::Exit(128) => Some(Vec::new()),
-        RawGit::Ok(_) => {
+        RawGit::Ok(gitdir_out) => {
+            // A repository EXISTS. Its config FILES must be plain regular
+            // files: a `.git/config` that is a FIFO or a symlink would let
+            // a live writer serve the probe one config and the real command
+            // another. `symlink_metadata` does not follow symlinks, so a
+            // symlinked config fails closed here.
+            let gitdir = {
+                let g = gitdir_out.trim();
+                let p = Path::new(g);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    dir.join(p)
+                }
+            };
+            let commondir = match std::fs::read_to_string(gitdir.join("commondir")) {
+                Ok(c) => {
+                    let c = c.trim();
+                    let p = Path::new(c);
+                    if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        gitdir.join(p)
+                    }
+                }
+                Err(_) => gitdir.clone(),
+            };
+            if !config_files_are_regular(&gitdir, &commondir) {
+                return None;
+            }
             // A repository EXISTS: its config must be readable, else fail
             // closed (`git config --list` alone would exit 0 everywhere —
             // it also reads global/system — so rev-parse is the gate).
@@ -439,8 +479,12 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
                     // A repo-scope `include.*`/`includeIf.*` can point at a
                     // FIFO or a file a live attacker rewrites between our
                     // probe and the real command — probing first cannot fix
-                    // that race, so refuse to run git here at all.
-                    if repo_scoped_include(&out) {
+                    // that race, so refuse to run git here at all. A
+                    // repo-scope `hook.*` is worse: git >= 2.46 runs
+                    // config-defined hooks even with core.hooksPath=/dev/null
+                    // (PoC-verified against git 2.56: worktree add ran a
+                    // shipped hook.pwn.command with event=post-checkout).
+                    if repo_scoped_dangerous_key(&out) {
                         return None;
                     }
                     Some(parse_scoped_filter_list(&out))
@@ -452,11 +496,28 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
     }
 }
 
+/// The repo's config files must be plain regular files (missing is fine —
+/// no repo config then). `symlink_metadata` does not follow symlinks, so a
+/// symlinked or special-file config fails closed.
+fn config_files_are_regular(gitdir: &Path, commondir: &Path) -> bool {
+    [
+        gitdir.join("config"),
+        commondir.join("config"),
+        gitdir.join("config.worktree"),
+    ]
+    .iter()
+    .all(|p| match std::fs::symlink_metadata(p) {
+        Ok(m) => m.is_file(),
+        Err(_) => true,
+    })
+}
+
 /// True when the scoped config list contains an `include.*`/`includeIf.*`
-/// key from a repo scope (local/worktree/... — not system/global, those are
-/// the user's own). Such an include can redirect config reads to a file the
-/// repo controls, which makes probe-then-run racy, so callers fail closed.
-fn repo_scoped_include(out: &str) -> bool {
+/// or `hook.*` key from a repo scope (local/worktree/... — not system/global,
+/// those are the user's own). Such keys redirect config reads or execute on
+/// hook events, which makes probe-then-run racy or plain dangerous, so
+/// callers fail closed.
+fn repo_scoped_dangerous_key(out: &str) -> bool {
     let parts: Vec<&str> = out.split('\0').collect();
     let mut i = 0;
     while i + 1 < parts.len() {
@@ -468,7 +529,7 @@ fn repo_scoped_include(out: &str) -> bool {
         }
         if let Some((key, _)) = key_value.split_once('\n') {
             let k = key.to_ascii_lowercase();
-            if k.starts_with("include.") || k.starts_with("includeif.") {
+            if k.starts_with("include.") || k.starts_with("includeif.") || k.starts_with("hook.") {
                 return true;
             }
         }
@@ -608,6 +669,9 @@ fn git_raw(
         .arg("-c")
         .arg("protocol.allow=never")
         .env("GIT_NO_LAZY_FETCH", "1")
+        // beats per-protocol `protocol.<name>.allow` in the repo's config
+        // (verified against git 2.56: env wins even over `-c`)
+        .env("GIT_ALLOW_PROTOCOL", "none")
         .arg("-C")
         .arg(dir)
         // never touch the repository's index: the agent's own git commands
@@ -1408,21 +1472,136 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// `include.*`/`includeIf.*` from a repo scope fails the probe closed;
-    /// from system/global (the user's own) it must not.
+    /// `include.*`/`includeIf.*`/`hook.*` from a repo scope fails the probe
+    /// closed; from system/global (the user's own) it must not.
     #[test]
-    fn repo_scoped_include_detection() {
+    fn repo_scoped_dangerous_key_detection() {
         // scope\0 key\nvalue\0 pairs, as `git config --show-scope --list -z` emits
         let with_include = "local\0include.path\n../evil.conf\0worktree\0filter.x.clean\ncat\0";
-        assert!(repo_scoped_include(with_include));
+        assert!(repo_scoped_dangerous_key(with_include));
         let with_include_if = "local\0includeIf.gitdir:/x/.path\ny\0";
-        assert!(repo_scoped_include(with_include_if));
+        assert!(repo_scoped_dangerous_key(with_include_if));
         let capitalized = "local\0Include.Path\n../evil.conf\0";
-        assert!(repo_scoped_include(capitalized));
+        assert!(repo_scoped_dangerous_key(capitalized));
+        // config-defined hooks run even with core.hooksPath=/dev/null (PoC)
+        let with_hook =
+            "local\0hook.pwn.command\ntouch /tmp/x\0local\0hook.pwn.event\npost-checkout\0";
+        assert!(repo_scoped_dangerous_key(with_hook));
         let user_scopes_only =
-            "global\0include.path\n~/ok.conf\0system\0includeIf.gitdir:/x/.path\ny\0local\0filter.x.clean\ncat\0";
-        assert!(!repo_scoped_include(user_scopes_only));
-        assert!(!repo_scoped_include(""));
+            "global\0include.path\n~/ok.conf\0system\0hook.pwn.command\nx\0local\0filter.x.clean\ncat\0";
+        assert!(!repo_scoped_dangerous_key(user_scopes_only));
+        assert!(!repo_scoped_dangerous_key(""));
+    }
+
+    /// A `.git/config` that is a symlink must fail the probe closed: a live
+    /// writer could serve the probe one config and the real command another.
+    #[test]
+    fn symlinked_git_config_fails_the_probe_closed() {
+        let base = tmp_base("symlink-config");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        };
+        git(&["init", "-q", "."]);
+        assert!(
+            probe_filter_drivers(&repo).is_some(),
+            "regular config is fine"
+        );
+        // replace .git/config with a symlink to a regular file
+        let real = base.join("real-config");
+        std::fs::copy(repo.join(".git").join("config"), &real).unwrap();
+        std::fs::remove_file(repo.join(".git").join("config")).unwrap();
+        std::os::unix::fs::symlink(&real, repo.join(".git").join("config")).unwrap();
+        assert_eq!(
+            probe_filter_drivers(&repo),
+            None,
+            "a symlinked .git/config must fail closed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// PoC: git >= 2.46 runs config-defined hooks (`hook.<name>.command` +
+    /// `hook.<name>.event`) even with `core.hooksPath=/dev/null` — verified
+    /// against git 2.56 that `worktree add` executes a shipped
+    /// post-checkout hook. A repo-scope `hook.*` must therefore fail the
+    /// probe closed, so no git command runs there.
+    #[test]
+    fn repo_scope_config_hook_fails_the_probe_closed() {
+        let base = tmp_base("hook-poc");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("-c")
+                .arg("user.email=t@t")
+                .arg("-c")
+                .arg("user.name=t")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q", "."]);
+        let marker = base.join("hook-ran");
+        git(&[
+            "config",
+            "hook.pwn.command",
+            &format!("touch {}", marker.display()),
+        ]);
+        git(&["config", "hook.pwn.event", "post-checkout"]);
+        std::fs::write(repo.join("f"), "x").unwrap();
+        git(&["add", "f"]);
+        git(&["commit", "-qm", "one"]);
+
+        // premise: plain worktree add DOES run the config hook
+        let _ = std::fs::remove_file(&marker);
+        let wt = base.join("wt");
+        let plain = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("-c")
+            .arg("core.hooksPath=/dev/null")
+            .args(["worktree", "add", &wt.to_string_lossy(), "HEAD"])
+            .output()
+            .unwrap();
+        let _ = plain.status;
+        assert!(
+            marker.exists(),
+            "PoC premise: worktree add runs the config-defined hook even with hooksPath=/dev/null"
+        );
+        let _ = std::fs::remove_file(&marker);
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["worktree", "remove", "--force", &wt.to_string_lossy()])
+            .status();
+
+        // our probe refuses the repo: no git command of ours may run there
+        assert_eq!(
+            probe_filter_drivers(&repo),
+            None,
+            "repo-scope hook.* must fail closed"
+        );
+        assert!(git_output(&repo, &["status", "--porcelain"]).is_none());
+        assert!(
+            !marker.exists(),
+            "the config hook must never run via our calls"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The watcher must not run any git scan in a folder that is not

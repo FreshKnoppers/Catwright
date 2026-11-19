@@ -1445,10 +1445,20 @@ impl Harness {
     }
 
     /// Uncommitted changes in a worktree (warns in the delete dialog).
-    pub fn worktree_dirty(path: &Path) -> bool {
-        watch::git_output(path, &["status", "--porcelain"])
-            .map(|o| !o.trim().is_empty())
-            .unwrap_or(false)
+    /// Only in a trusted folder, with a short deadline (this runs on the UI
+    /// thread) and without submodule recursion (a nested repo's own config
+    /// must not be read). The filter probe still runs in the worktree itself.
+    pub fn worktree_dirty(path: &Path, trusted: bool) -> bool {
+        if !trusted {
+            return false;
+        }
+        watch::git_output_timeout(
+            path,
+            &["status", "--porcelain", "--ignore-submodules=all"],
+            std::time::Duration::from_secs(2),
+        )
+        .map(|o| !o.trim().is_empty())
+        .unwrap_or(false)
     }
 
     /// Delete a worktree in the background; its branch only when
@@ -1471,9 +1481,14 @@ impl Harness {
         let job_path = path.clone();
         let branch = branch.to_string();
         std::thread::spawn(move || {
+            // `--force`: without it git runs its own cleanliness check
+            // INSIDE the worktree, reading that worktree's own config
+            // (config.worktree) — filters there are not covered by the
+            // probe, which ran in `project`. Our own dirty check already
+            // ran (worktree_dirty, probed in the worktree) before this.
             let res = watch::run_git(
                 &project,
-                &["worktree", "remove", &path.to_string_lossy()],
+                &["worktree", "remove", "--force", &path.to_string_lossy()],
                 WORKTREE_TIMEOUT,
             );
             let res = match res {

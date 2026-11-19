@@ -698,7 +698,8 @@ fn apply_ops(h: &mut Harness, ops: Vec<Op>) {
                 path,
                 branch,
             } => {
-                let dirty = Harness::worktree_dirty(&path);
+                let trusted = h.trust.get(&project).is_some_and(|t| t.trusted);
+                let dirty = Harness::worktree_dirty(&path, trusted);
                 h.ui.worktree_delete = Some(crate::harness::state::WorktreeDelete {
                     project,
                     path,

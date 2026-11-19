@@ -5616,7 +5616,7 @@ fn feature_screenshots() {
             project: dir.clone(),
             path: w.path.clone(),
             branch: w.branch.clone(),
-            dirty: Harness::worktree_dirty(&w.path),
+            dirty: Harness::worktree_dirty(&w.path, true),
             delete_branch: false,
         });
         shot(&mut h, "14-worktree-delete");
