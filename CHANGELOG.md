@@ -5,10 +5,12 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
-- Security hardening: the preview pane resolves the opened path canonically
-  and shows an "Outside the workspace" badge when it lies outside the
-  session's workspace (through a symlink or a `..`); file chips in answers
-  no longer resolve through symlinks that point outside the workspace.
+- Security hardening: the preview pane and the artifacts view resolve the
+  opened path canonically and show an "Outside the workspace" badge when it
+  lies outside the session's workspace (an absolute path elsewhere, a
+  symlink or a `..`); file chips in answers no longer resolve through
+  symlinks that point outside the workspace. The containment check is
+  cached per path, so rendering stays cheap.
 
 ## v0.5.1
 

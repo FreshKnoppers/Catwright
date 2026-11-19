@@ -1196,6 +1196,31 @@ fn file_exists_cached(p: &Path) -> bool {
     v
 }
 
+/// (workspace, path) -> (lies outside the workspace, checked at), cached with
+/// the same TTL as the existence probe above. Chips resolve every token of
+/// every agent message on every frame, so the `canonicalize` inside
+/// [`is_outside_workspace`] must run once per (workspace, path) per TTL,
+/// not again on each frame.
+pub(crate) fn outside_workspace_cached(cwd: &Path, p: &Path) -> bool {
+    /// (workspace, path) -> (lies outside, checked at).
+    type OutsideCache = Mutex<HashMap<(PathBuf, PathBuf), (bool, Instant)>>;
+    static CACHE: OnceLock<OutsideCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut c = cache.lock().unwrap();
+    let key = (cwd.to_path_buf(), p.to_path_buf());
+    if let Some((v, at)) = c.get(&key) {
+        if at.elapsed() < FILE_EXISTS_TTL {
+            return *v;
+        }
+    }
+    let v = is_outside_workspace(cwd, p);
+    if c.len() > 8192 {
+        c.clear();
+    }
+    c.insert(key, (v, Instant::now()));
+    v
+}
+
 /// Canonical workspace root, cached (a syscall per token otherwise).
 fn canonical_cwd(cwd: &Path) -> PathBuf {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
@@ -1226,10 +1251,12 @@ pub(crate) fn normalize_lexically(p: &Path) -> PathBuf {
 }
 
 /// True when the absolute `path` resolves to a file outside the workspace
-/// `cwd` — through a symlink or a `..` that a linked folder turns into
-/// another target. The candidate is canonicalized when it exists (a
-/// missing file falls back to the lexical view); click-triggered, not per
-/// frame, so the syscalls are fine here.
+/// `cwd` — an absolute path elsewhere, a symlink, or a `..` that a linked
+/// folder turns into another target. The candidate is canonicalized when it
+/// exists (a missing file falls back to the lexical view). The syscalls are
+/// not free, so callers that run per frame cache the result (see
+/// [`outside_workspace_cached`]); click-triggered callers may use this
+/// directly.
 pub(crate) fn is_outside_workspace(cwd: &Path, path: &Path) -> bool {
     let root = canonical_cwd(cwd);
     let canon = path
@@ -1276,16 +1303,12 @@ pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
     if !abs.starts_with(&root) && !abs.starts_with(normalize_lexically(cwd)) {
         return None;
     }
-    if file_exists_cached(&abs) {
-        // `metadata` follows symlinks, so a link inside the workspace can
-        // still point outside (repo/x.txt -> /etc/passwd): resolve the
-        // candidate canonically and re-check against the canonical root
-        // before offering it as a chip.
-        if is_outside_workspace(cwd, &abs) {
-            None
-        } else {
-            Some(abs)
-        }
+    // `metadata` follows symlinks, so a link inside the workspace can still
+    // point outside (repo/x.txt -> /etc/passwd): the canonical containment
+    // check (cached with the existence probe, see outside_workspace_cached)
+    // rejects such candidates before they become chips.
+    if file_exists_cached(&abs) && !outside_workspace_cached(cwd, &abs) {
+        Some(abs)
     } else {
         None
     }
@@ -3051,6 +3074,9 @@ mod tests {
             "the helper sees the symlink target outside"
         );
         assert!(!super::is_outside_workspace(&cwd, &ws.join("real.txt")));
+        // the cached variant used per frame agrees with the direct check
+        assert!(super::outside_workspace_cached(&cwd, &ws.join("link.txt")));
+        assert!(!super::outside_workspace_cached(&cwd, &ws.join("real.txt")));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

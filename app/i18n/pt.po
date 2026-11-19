@@ -1764,5 +1764,5 @@ msgstr "O Vibe não começou a ler em voz alta."
 msgid "Outside the workspace"
 msgstr "Fora do espaço de trabalho"
 
-msgid "This file lies outside the session's workspace — a symlink or a .. path resolved there."
-msgstr "Este ficheiro está fora do espaço de trabalho da sessão: uma ligação simbólica ou um caminho .. resolve para lá."
+msgid "This file lies outside the session's workspace."
+msgstr "Este ficheiro está fora do espaço de trabalho da sessão."

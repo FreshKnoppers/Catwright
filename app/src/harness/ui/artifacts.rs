@@ -88,7 +88,22 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
     egui::CentralPanel::default()
         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(20.0, 14.0)))
         .show_inside(ui, |ui| match selected {
-            Some(path) => preview(ui, &path),
+            Some(path) => {
+                // the artifact's own workspace, else the current project;
+                // the check is cached, so the per-frame call is cheap
+                let base = found
+                    .iter()
+                    .find(|a| a.path == path)
+                    .map(|a| a.cwd.clone())
+                    .or_else(|| h.current_project.clone());
+                let outside = base
+                    .as_deref()
+                    .map(|b| {
+                        crate::render::outside_workspace_cached(b, std::path::Path::new(&path))
+                    })
+                    .unwrap_or(false);
+                preview(ui, &path, outside)
+            }
             None => {
                 ui.add_space(60.0);
                 ui.vertical_centered(|ui| {
@@ -209,17 +224,7 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
             )
             .on_hover_text(&p.path);
             if p.outside_workspace {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(tr("Outside the workspace"))
-                            .color(theme::YELLOW)
-                            .size(11.0),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(tr(
-                    "This file lies outside the session's workspace — a symlink or a .. path resolved there.",
-                ));
+                outside_workspace_badge(ui);
             }
             ui.add_space(4.0);
             egui::ScrollArea::vertical()
@@ -339,7 +344,21 @@ fn diff_content(
     }
 }
 
-pub(super) fn preview(ui: &mut egui::Ui, path: &str) {
+/// The yellow warning line under a preview header when the file lies outside
+/// the session's workspace.
+fn outside_workspace_badge(ui: &mut egui::Ui) {
+    ui.add(
+        egui::Label::new(
+            RichText::new(tr("Outside the workspace"))
+                .color(theme::YELLOW)
+                .size(11.0),
+        )
+        .truncate(),
+    )
+    .on_hover_text(tr("This file lies outside the session's workspace."));
+}
+
+pub(super) fn preview(ui: &mut egui::Ui, path: &str, outside_workspace: bool) {
     let kind = artifacts::kind_of(path);
     ui.horizontal(|ui| {
         ui.label(
@@ -370,6 +389,9 @@ pub(super) fn preview(ui: &mut egui::Ui, path: &str) {
     ui.add(
         egui::Label::new(RichText::new(path).monospace().size(11.5).color(theme::DIM)).truncate(),
     );
+    if outside_workspace {
+        outside_workspace_badge(ui);
+    }
     ui.add_space(10.0);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
