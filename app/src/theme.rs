@@ -451,8 +451,10 @@ pub fn pixel_cat(ui: &mut egui::Ui, time: f64, running: bool, pixel: f32) -> egu
 /// Status bar of a subagent card: a 4 px track of pixel blocks (RAISED) with
 /// the cat (2 px pixels) on top. Running: the cat walks from left to right
 /// and starts over at the left, the track behind it is ORANGE_DIM. Done: the
-/// whole track is GREEN and the cat sits at the right end. Failed: RED track,
-/// cat sits at the left. Cancelled: DIM track, cat sits at the left.
+/// track up to the cat is GREEN and the cat sits at the right end. Failed:
+/// RED track, cat sits at the left. Cancelled: DIM track, cat sits at the
+/// left. A sitting cat has no track under it (its bitmap has transparent
+/// cells), only whole blocks are drawn.
 pub fn subagent_bar(
     ui: &mut egui::Ui,
     state: &crate::acp::session::SubagentState,
@@ -486,10 +488,21 @@ pub fn subagent_bar(
         0.0
     };
 
-    // track: pixel blocks, filled up to the cat while running
-    let mut x = track.left();
-    while x < track.right() {
-        let w = BLOCK.min(track.right() - x);
+    // track: whole pixel blocks only (no cut-off sliver at the end). While
+    // the cat walks it runs over the full track; once it sits, the track
+    // ends at the cat (Done: it sits at the right end) or starts after it
+    // (Failed/Cancelled: it sits at the left), so no block peeks through the
+    // transparent cells of the sitting bitmap
+    let (from, to) = match state {
+        SubagentState::Running => (track.left(), track.right()),
+        SubagentState::Done => (track.left(), track.left() + cat_x - GAP),
+        SubagentState::Failed | SubagentState::Cancelled => {
+            (track.left() + CAT_W + GAP, track.right())
+        }
+    };
+    let mut x = from;
+    while x + BLOCK <= to {
+        let w = BLOCK;
         let color = match state {
             SubagentState::Running => {
                 if x + w <= track.left() + cat_x {
