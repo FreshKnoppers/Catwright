@@ -1695,6 +1695,9 @@ msgstr "Eliminar o worktree «{name}»? Os ficheiros no projeto principal ficam 
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "O worktree tem alterações sem commit — vão perder-se."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "Não foi possível verificar as alterações do worktree — arquivos podem ser perdidos.
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Eliminar também a branch «{branch}»"
 

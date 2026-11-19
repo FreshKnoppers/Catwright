@@ -1448,9 +1448,12 @@ impl Harness {
     /// Only in a trusted folder, with a short deadline (this runs on the UI
     /// thread) and without submodule recursion (a nested repo's own config
     /// must not be read). The filter probe still runs in the worktree itself.
-    pub fn worktree_dirty(path: &Path, trusted: bool) -> bool {
+    /// `None` = no trustworthy answer (untrusted folder, failed filter probe,
+    /// or over the deadline): deletion uses `--force`, so the dialog must
+    /// warn instead of silently discarding data.
+    pub fn worktree_dirty(path: &Path, trusted: bool) -> Option<bool> {
         if !trusted {
-            return false;
+            return None;
         }
         watch::git_output_timeout(
             path,
@@ -1458,7 +1461,6 @@ impl Harness {
             std::time::Duration::from_secs(2),
         )
         .map(|o| !o.trim().is_empty())
-        .unwrap_or(false)
     }
 
     /// Delete a worktree in the background; its branch only when

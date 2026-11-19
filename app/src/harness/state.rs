@@ -131,8 +131,9 @@ pub struct WorktreeDelete {
     pub project: PathBuf,
     pub path: PathBuf,
     pub branch: String,
-    /// Uncommitted changes in the worktree — warned about in the dialog.
-    pub dirty: bool,
+    /// Uncommitted changes in the worktree — `None` = the check could not
+    /// run (deletion uses `--force`, so the dialog warns instead).
+    pub dirty: Option<bool>,
     /// Also delete the branch: the user's own choice, default OFF.
     pub delete_branch: bool,
 }
