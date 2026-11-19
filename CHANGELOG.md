@@ -5,7 +5,26 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
-New:
+## v0.3.1
+
+**Download:** `catwright-v0.3.1-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.3.1-x86_64-linux.tar.gz
+cd catwright-v0.3.1-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.0
+to 3.1.3.
+
+**What's new:**
 
 - Review comments also in the preview pane's diff (hover a line, "+"),
   sent to Vibe like the transcript's.
@@ -13,31 +32,31 @@ New:
   click shows the file's diff in the preview pane. The rows of the work
   panel's Changes card open the diff, too.
 
-Known limit:
+**Fixes:**
+
+- An approval whose tool call Vibe had not reported (vibe-acp sends only an
+  id, sometimes just the tool's name) showed an empty card; it now shows the
+  tool or call id and says that Vibe sent no details.
+- Desktop notifications also come for Vibe's questions and for approvals of
+  a subagent's session (then without the project name).
+- Finished subagents of an earlier turn no longer start walking again when
+  the next turn begins.
+- A finished subagent's status bar no longer shows a block next to the
+  sitting cat: the track ends where the cat sits.
+- Enter in the worktree dialog creates the worktree.
+- The preview pane's diff found no committed version when the project is a
+  sub-folder of its repository, and showed every line as new.
+- The card for a subagent's approval and the loop warning were German in
+  the English UI.
+- `dist/install.sh` refreshes the icon cache, so a new app icon shows up.
+- The activity feed drops the "Mark all read" button: opening the feed
+  already marks everything read.
+
+**Known limit:**
 
 - Drag & drop (new in v0.3.0) works on X11/XWayland only: the window
   library reports no dropped files in a native Wayland session. The "+"
   button attaches files everywhere.
-
-Fixes:
-
-- A finished subagent's status bar no longer shows a block next to the
-  sitting cat: the track ends where the cat sits.
-- Finished subagents of an earlier turn no longer start walking again when
-  the next turn begins.
-- Desktop notifications also come for Vibe's questions and for approvals of
-  a subagent's session (then without the project name).
-- Enter in the worktree dialog creates the worktree.
-- `dist/install.sh` refreshes the icon cache, so a new app icon shows up.
-- The activity feed drops the "Mark all read" button: opening the feed
-  already marks everything read.
-- An approval whose tool call Vibe had not reported (vibe-acp sends only an
-  id, sometimes just the tool's name) showed an empty card; it now shows the
-  tool or call id and says that Vibe sent no details.
-- The card for a subagent's approval and the loop warning were German in
-  the English UI.
-- The preview pane's diff found no committed version when the project is a
-  sub-folder of its repository, and showed every line as new.
 
 ## v0.3.0
 
