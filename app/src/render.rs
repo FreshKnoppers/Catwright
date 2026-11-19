@@ -2349,7 +2349,7 @@ mod tests {
             "1,235 €"
         );
         assert_eq!(super::format_computed(De, 7.0, Some(1), Some("  ")), "7,0");
-        // German thousands dots (HANDOFF 3.3: the separator is wanted now)
+        // German thousands dots (grouping is wanted, not just a comma)
         assert_eq!(
             super::format_computed(De, 22645.48, None, Some("€")),
             "22.645,48 €"
