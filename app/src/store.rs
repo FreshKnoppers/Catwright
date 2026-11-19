@@ -234,7 +234,8 @@ pub struct Settings {
     /// Archived session ids: hidden from the sidebar's session lists.
     #[serde(default)]
     pub archived_sessions: Vec<String>,
-    /// UI language code (`"en"`, `"de"`). `None` until the user picked one:
+    /// UI language code (`"en"`, `"de"`, `"fr"`, `"es"`, `"it"`, `"pt"`).
+    /// `None` until the user picked one:
     /// the first start then asks, with English preselected.
     #[serde(default)]
     pub language: Option<String>,

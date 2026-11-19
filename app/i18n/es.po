@@ -1,0 +1,1720 @@
+# Spanish translation of Catwright.
+# The code holds the English text (msgid); this file maps it to Spanish.
+# Placeholders like {name} must stay exactly as they are.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: es\n"
+
+msgid "Language"
+msgstr "Idioma"
+
+msgid "Language of the app. Vibe answers in the language you write in."
+msgstr "Idioma de la aplicación. Vibe responde en el idioma en el que escribes."
+
+msgid "Choose the language of the app. You can change it later in the settings."
+msgstr "Elige el idioma de la aplicación. Puedes cambiarlo más tarde en la configuración."
+
+msgid "Continue"
+msgstr "Continuar"
+
+msgid "Show less"
+msgstr "Mostrar menos"
+
+msgid "{n} more"
+msgstr "{n} más"
+
+msgid "RECONNECTING ({attempt}/{max})"
+msgstr "RECONECTANDO ({attempt}/{max})"
+
+msgid "Plan: {plan}"
+msgstr "Plan: {plan}"
+
+msgid "{pct} % of the monthly quota"
+msgstr "{pct} % de la cuota mensual"
+
+msgid "New quota on {date}"
+msgstr "Nueva cuota el {date}"
+
+msgid "Collapse sidebar (Ctrl B)"
+msgstr "Contraer la barra lateral (Ctrl B)"
+
+msgid "New session"
+msgstr "Nueva sesión"
+
+msgid "Ctrl N"
+msgstr "Ctrl N"
+
+msgid "Search"
+msgstr "Buscar"
+
+msgid "Ctrl K"
+msgstr "Ctrl K"
+
+msgid "Artifacts"
+msgstr "Artefactos"
+
+msgid "Projects"
+msgstr "Proyectos"
+
+msgid "Add project"
+msgstr "Añadir proyecto"
+
+msgid "Add your first project folder."
+msgstr "Añade tu primera carpeta de proyecto."
+
+msgid "New session here"
+msgstr "Nueva sesión aquí"
+
+msgid "Project actions"
+msgstr "Acciones del proyecto"
+
+msgid "Open folder"
+msgstr "Abrir carpeta"
+
+msgid "Copy path"
+msgstr "Copiar ruta"
+
+msgid "Remove from list"
+msgstr "Quitar de la lista"
+
+msgid "Sessions without a project folder"
+msgstr "Sesiones sin carpeta de proyecto"
+
+msgid "Session actions"
+msgstr "Acciones de la sesión"
+
+msgid "Pinned"
+msgstr "Fijadas"
+
+msgid "WAITING"
+msgstr "EN ESPERA"
+
+msgid "RUNNING"
+msgstr "EN CURSO"
+
+msgid "Unpin"
+msgstr "Desfijar"
+
+msgid "Pin"
+msgstr "Fijar"
+
+msgid "Rename"
+msgstr "Renombrar"
+
+msgid "Delete"
+msgstr "Eliminar"
+
+msgid "CONNECTING …"
+msgstr "CONECTANDO …"
+
+msgid "VIBE NOT CONNECTED"
+msgstr "VIBE NO CONECTADO"
+
+msgid "Reconnect"
+msgstr "Reconectar"
+
+msgid "Account"
+msgstr "Cuenta"
+
+msgid "Show account"
+msgstr "Mostrar cuenta"
+
+msgid "Settings (Ctrl ,)"
+msgstr "Configuración (Ctrl ,)"
+
+msgid "Pay-as-you-go active: usage above 100 % is billed."
+msgstr "Pago por uso activo: el uso por encima del 100 % se cobra."
+
+msgid "No quota reported."
+msgstr "No se ha informado de ninguna cuota."
+
+msgid "Loading …"
+msgstr "Cargando …"
+
+msgid "Not loaded yet."
+msgstr "Aún no se ha cargado."
+
+msgid "Refresh"
+msgstr "Actualizar"
+
+msgid "Settings"
+msgstr "Configuración"
+
+msgid "Expand sidebar (Ctrl B)"
+msgstr "Expandir la barra lateral (Ctrl B)"
+
+msgid "New session (Ctrl N)"
+msgstr "Nueva sesión (Ctrl N)"
+
+msgid "Search (Ctrl K)"
+msgstr "Buscar (Ctrl K)"
+
+msgid "■ Waiting for you – Catwright"
+msgstr "■ Esperando tu respuesta – Catwright"
+
+msgid "Vibe is working … – Catwright"
+msgstr "Vibe está trabajando … – Catwright"
+
+msgid "Remove “{name}” from the list? The files in the folder stay untouched."
+msgstr "¿Quitar «{name}» de la lista? Los archivos de la carpeta permanecen intactos."
+
+msgid "Restore 1 file"
+msgstr "Restaurar 1 archivo"
+
+msgid "Restore {n} files"
+msgstr "Restaurar {n} archivos"
+
+msgid "… and {n} more"
+msgstr "… y {n} más"
+
+msgid "Delete session"
+msgstr "Eliminar sesión"
+
+msgid "Delete “{title}” for good? This cannot be undone."
+msgstr "¿Eliminar «{title}» definitivamente? Esta acción no se puede deshacer."
+
+msgid "Revert changes"
+msgstr "Revertir cambios"
+
+msgid "Revert all open changes to “{file}”? The file is reset in the project."
+msgstr "¿Revertir todos los cambios abiertos en «{file}»? El archivo se restablece en el proyecto."
+
+msgid "Revert"
+msgstr "Revertir"
+
+msgid "Revert all changes"
+msgstr "Revertir todos los cambios"
+
+msgid "Revert open changes to {files} file(s)? The files are reset in the project."
+msgstr "¿Revertir los cambios abiertos en {files} archivo(s)? Los archivos se restablecen en el proyecto."
+
+msgid "Revert all"
+msgstr "Revertir todo"
+
+msgid "Run automatically"
+msgstr "Ejecutar automáticamente"
+
+msgid "Let Vibe run without asking? File changes and commands are no longer confirmed."
+msgstr "¿Dejar que Vibe se ejecute sin preguntar? Los cambios de archivos y los comandos ya no se confirman."
+
+msgid "Automatic"
+msgstr "Automático"
+
+msgid "Close"
+msgstr "Cerrar"
+
+msgid "Remove project"
+msgstr "Quitar proyecto"
+
+msgid "Remove"
+msgstr "Quitar"
+
+msgid "Rename session"
+msgstr "Renombrar sesión"
+
+msgid "New title"
+msgstr "Nuevo título"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Save"
+msgstr "Guardar"
+
+msgid "Rewind to here"
+msgstr "Rebobinar hasta aquí"
+
+msgid "No files affected."
+msgstr "Ningún archivo afectado."
+
+msgid "Rewind"
+msgstr "Rebobinar"
+
+msgid "{n} changed"
+msgstr "{n} modificados"
+
+msgid "Work panel (Ctrl J)"
+msgstr "Panel de trabajo (Ctrl J)"
+
+msgid "Open project folder"
+msgstr "Abrir la carpeta del proyecto"
+
+msgid "Fork session"
+msgstr "Bifurcar sesión (fork)"
+
+msgid "Changed files in the working directory (git status) — click for the list"
+msgstr "Archivos modificados en el directorio de trabajo (git status) — haz clic para ver la lista"
+
+msgid "… {n} more"
+msgstr "… {n} más"
+
+msgid "Current Git branch"
+msgstr "Rama actual de Git"
+
+msgid "Fork"
+msgstr "Bifurcar (fork)"
+
+msgid "Copy transcript (Markdown)"
+msgstr "Copiar transcripción (Markdown)"
+
+msgid "Transcript copied to the clipboard."
+msgstr "Transcripción copiada al portapapeles."
+
+msgid "Switching the model changes Vibe’s globally active model (“active_model” in Vibe’s config.toml) – the Vibe CLI uses it afterwards too."
+msgstr "Cambiar el modelo cambia el modelo activo global de Vibe («active_model» en el config.toml de Vibe) – la CLI de Vibe también lo usa después."
+
+msgid "Queue"
+msgstr "Poner en cola"
+
+msgid "Send"
+msgstr "Enviar"
+
+msgid "Line"
+msgstr "Línea"
+
+msgid "Commands"
+msgstr "Comandos"
+
+msgid "Files"
+msgstr "Archivos"
+
+msgid "{pct} % CONTEXT · {used}"
+msgstr "{pct} % CONTEXTO · {used}"
+
+msgid "Vibe could not be started"
+msgstr "No se pudo iniciar Vibe"
+
+msgid "Check in a terminal that `vibe --version` runs and that you are signed in."
+msgstr "Comprueba en un terminal que `vibe --version` funciona y que has iniciado sesión."
+
+msgid "Connection to Vibe interrupted"
+msgstr "Conexión con Vibe interrumpida"
+
+msgid "Retry {attempt} of {max} …"
+msgstr "Reintento {attempt} de {max} …"
+
+msgid "Queue the next message …"
+msgstr "Poner el siguiente mensaje en cola …"
+
+msgid "Message to Vibe …"
+msgstr "Mensaje para Vibe …"
+
+msgid "What do you want to build?"
+msgstr "¿Qué quieres construir?"
+
+msgid "Remove attachment"
+msgstr "Quitar archivo adjunto"
+
+msgid "Attach a file (or type @)"
+msgstr "Adjuntar un archivo (o escribe @)"
+
+msgid "Drop to attach"
+msgstr "Suelta para adjuntar"
+
+msgid "Stop (Esc)"
+msgstr "Detener (Esc)"
+
+msgid "Queue (↵)"
+msgstr "Encolar (↵)"
+
+msgid "Send (↵)"
+msgstr "Enviar (↵)"
+
+msgid "Mode: Vibe runs everything without asking"
+msgstr "Modo: Vibe ejecuta todo sin preguntar"
+
+msgid "Mode: when Vibe asks"
+msgstr "Modo: cuando Vibe pregunta"
+
+msgid "Vibe default"
+msgstr "Predeterminado de Vibe"
+
+msgid "Vibe (subscription)"
+msgstr "Vibe (suscripción)"
+
+msgid "How deeply the model thinks"
+msgstr "Profundidad del pensamiento del modelo"
+
+msgid "Thinking"
+msgstr "Pensando"
+
+msgid "Context window usage"
+msgstr "Uso de la ventana de contexto"
+
+msgid "Recent chats"
+msgstr "Chats recientes"
+
+msgid "Recent"
+msgstr "Recientes"
+
+msgid "What do you want to chat about?"
+msgstr "¿De qué quieres hablar?"
+
+msgid "What are you building today in"
+msgstr "¿Qué estás construyendo hoy en"
+
+msgid "your project?"
+msgstr "tu proyecto?"
+
+msgid "Your Vibe subscription · web search and tools with approval"
+msgstr "Tu suscripción de Vibe · búsqueda web y herramientas con permiso"
+
+msgid "For code, Vibe works in a project folder."
+msgstr "Para código, Vibe trabaja en una carpeta de proyecto."
+
+msgid "Add project folder"
+msgstr "Añadir carpeta de proyecto"
+
+msgid "no project"
+msgstr "sin proyecto"
+
+msgid "Add project …"
+msgstr "Añadir proyecto …"
+
+msgid "Round"
+msgstr "Ronda"
+
+msgid "“{title}”"
+msgstr "«{title}»"
+
+msgid " · {n} tool calls"
+msgstr " · {n} llamadas a herramientas"
+
+msgid " · 1 tool call"
+msgstr " · 1 llamada a herramienta"
+
+msgid "Plan"
+msgstr "Plan"
+
+msgid "… {n} more lines"
+msgstr "… {n} líneas más"
+
+msgid "··· 1 unchanged line"
+msgstr "··· 1 línea sin cambios"
+
+msgid "··· {n} unchanged lines"
+msgstr "··· {n} líneas sin cambios"
+
+msgid "Done in {time}"
+msgstr "Listo en {time}"
+
+msgid "Previous round"
+msgstr "Ronda anterior"
+
+msgid "Next round"
+msgstr "Ronda siguiente"
+
+msgid "To the end"
+msgstr "Ir al final"
+
+msgid "Fold round"
+msgstr "Contraer ronda"
+
+msgid "Unfold round"
+msgstr "Expandir ronda"
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid "Fork after this round"
+msgstr "Bifurcar después de esta ronda"
+
+msgid "Copy answer"
+msgstr "Copiar respuesta"
+
+msgid "Thinking …"
+msgstr "Pensando …"
+
+msgid "Thoughts"
+msgstr "Pensamientos"
+
+msgid "ERROR"
+msgstr "ERROR"
+
+msgid "Open file in Artifacts"
+msgstr "Abrir archivo en Artefactos"
+
+msgid "Output"
+msgstr "Salida"
+
+msgid "Copy output"
+msgstr "Copiar salida"
+
+msgid "Changes without a round"
+msgstr "Cambios sin ronda asociada"
+
+msgid "Loading diff …"
+msgstr "Cargando diff …"
+
+msgid "Cancelling …"
+msgstr "Cancelando …"
+
+msgid "Waiting for you"
+msgstr "Esperando tu respuesta"
+
+msgid "Working"
+msgstr "Trabajando"
+
+msgid "Esc = Cancel"
+msgstr "Esc = Cancelar"
+
+msgid "Try again"
+msgstr "Reintentar"
+
+msgid "Trust this project folder?"
+msgstr "¿Confiar en esta carpeta de proyecto?"
+
+msgid "Decide later"
+msgstr "Decidir más tarde"
+
+msgid "Project files"
+msgstr "Archivos del proyecto"
+
+msgid "Trust folder"
+msgstr "Confiar en la carpeta"
+
+msgid "Trust the whole repository"
+msgstr "Confiar en todo el repositorio"
+
+msgid "Don’t trust"
+msgstr "No confiar"
+
+msgid "Vibe is asking"
+msgstr "Vibe está preguntando"
+
+msgid "Your own answer …"
+msgstr "Tu propia respuesta …"
+
+msgid "Answer"
+msgstr "Responder"
+
+msgid "Skip"
+msgstr "Omitir"
+
+msgid "Approval required"
+msgstr "Permiso requerido"
+
+msgid "Run command"
+msgstr "Ejecutar comando"
+
+msgid "Edit file"
+msgstr "Editar archivo"
+
+msgid "Delete file"
+msgstr "Eliminar archivo"
+
+msgid "Move file"
+msgstr "Mover archivo"
+
+msgid "Fetch web page"
+msgstr "Obtener página web"
+
+msgid "Read file"
+msgstr "Leer archivo"
+
+msgid "Run action"
+msgstr "Ejecutar acción"
+
+msgid "Agent repeats the same call — possible loop"
+msgstr "El agente repite la misma llamada — posible bucle"
+
+msgid "Cancel turn"
+msgstr "Cancelar turno"
+
+msgid "In the queue"
+msgstr "En la cola"
+
+msgid "Up next"
+msgstr "A continuación"
+
+msgid "Send now"
+msgstr "Enviar ahora"
+
+msgid "Remove from the queue"
+msgstr "Quitar de la cola"
+
+msgid "System prompt"
+msgstr "Prompt del sistema"
+
+msgid "Tools"
+msgstr "Herramientas"
+
+msgid "Skills"
+msgstr "Skills"
+
+msgid "Conversation"
+msgstr "Conversación"
+
+msgid "Last answer ↑ {input} ↓ {output}"
+msgstr "Última respuesta ↑ {input} ↓ {output}"
+
+msgid "Cost (turn): {amount} {currency}"
+msgstr "Coste (turno): {amount} {currency}"
+
+msgid "{n} files"
+msgstr "{n} archivos"
+
+msgid "{n} open"
+msgstr "{n} abiertos"
+
+msgid "{n} running"
+msgstr "{n} en curso"
+
+msgid "1 start attempt failed"
+msgstr "1 intento de inicio fallido"
+
+msgid "{n} start attempts failed"
+msgstr "{n} intentos de inicio fallidos"
+
+msgid "Done · {n} turns"
+msgstr "Listo · {n} turnos"
+
+msgid "Done"
+msgstr "Listo"
+
+msgid "{n} connected"
+msgstr "{n} conectados"
+
+msgid "{schedule} · in {time}"
+msgstr "{schedule} · en {time}"
+
+msgid "{n} tools"
+msgstr "{n} herramientas"
+
+msgid "Branch {branch}"
+msgstr "Rama {branch}"
+
+msgid "What should Vibe do regularly?\n(first line = name)"
+msgstr "¿Qué debe hacer Vibe regularmente?\n(la primera línea es el nombre)"
+
+msgid "Context"
+msgstr "Contexto"
+
+msgid "Compact context"
+msgstr "Compactar contexto"
+
+msgid "Summarises the conversation so far and frees context (/compact)"
+msgstr "Resume la conversación hasta ahora y libera contexto (/compact)"
+
+msgid "No measurement yet."
+msgstr "Aún no hay medición."
+
+msgid "Free"
+msgstr "Libre"
+
+msgid "Split estimated (from Vibe’s measurement)"
+msgstr "Distribución estimada (según la medición de Vibe)"
+
+msgid "Changes"
+msgstr "Cambios"
+
+msgid "Revert change"
+msgstr "Revertir cambio"
+
+msgid "Mark as reviewed"
+msgstr "Marcar como revisado"
+
+msgid "Accept all"
+msgstr "Aceptar todo"
+
+msgid "Marks all open changes as reviewed"
+msgstr "Marca todos los cambios abiertos como revisados"
+
+msgid "Discard all"
+msgstr "Descartar todo"
+
+msgid "Reverts all open changes in the project"
+msgstr "Revierte todos los cambios abiertos en el proyecto"
+
+msgid "Running …"
+msgstr "En curso …"
+
+msgid "Failed"
+msgstr "Fallido"
+
+msgid "Cancelled"
+msgstr "Cancelado"
+
+msgid "Routines"
+msgstr "Rutinas"
+
+msgid "Recurring tasks in this session. They only run while it is open and nothing else is running."
+msgstr "Tareas recurrentes en esta sesión. Solo se ejecutan mientras está abierta y no hay nada más en ejecución."
+
+msgid "Delete routine"
+msgstr "Eliminar rutina"
+
+msgid "Delete all routines"
+msgstr "Eliminar todas las rutinas"
+
+msgid "Delete all {count} routines of this session? They will not run again."
+msgstr "¿Eliminar todas las {count} rutinas de esta sesión? Ya no se ejecutarán."
+
+msgid "Delete all"
+msgstr "Eliminar todo"
+
+msgid "Every"
+msgstr "Cada"
+
+msgid "e.g. 30s, 10m, 2h"
+msgstr "p. ej. 30s, 10m, 2h"
+
+msgid "Create"
+msgstr "Crear"
+
+msgid "New routine"
+msgstr "Nueva rutina"
+
+msgid "Connectors"
+msgstr "Conectores"
+
+msgid "No connectors set up."
+msgstr "No hay conectores configurados."
+
+msgid "Disable"
+msgstr "Desactivar"
+
+msgid "Enable"
+msgstr "Activar"
+
+msgid "Environment"
+msgstr "Entorno"
+
+msgid "Trusted"
+msgstr "Confiable"
+
+msgid "Not trusted"
+msgstr "No confiable"
+
+msgid "Vibe loads AGENTS.md, skills and hooks from this folder only when it is trusted."
+msgstr "Vibe solo carga AGENTS.md, skills y hooks de esta carpeta cuando es confiable."
+
+msgid "Continue this conversation as a new session (fork)"
+msgstr "Continuar esta conversación como una nueva sesión (fork)"
+
+msgid "Choose a folder"
+msgstr "Elegir una carpeta"
+
+msgid "Open Artifacts"
+msgstr "Abrir Artefactos"
+
+msgid "Edited files"
+msgstr "Archivos editados"
+
+msgid "Worktree for project"
+msgstr "Worktree del proyecto"
+
+msgid "Isolated copy"
+msgstr "Copia aislada"
+
+msgid "Ctrl ,"
+msgstr "Ctrl ,"
+
+msgid "Toggle sidebar"
+msgstr "Alternar la barra lateral"
+
+msgid "Ctrl B"
+msgstr "Ctrl B"
+
+msgid "Toggle work panel"
+msgstr "Alternar el panel de trabajo"
+
+msgid "Ctrl J"
+msgstr "Ctrl J"
+
+msgid "Project"
+msgstr "Proyecto"
+
+msgid "Search sessions, projects or commands …"
+msgstr "Buscar sesiones, proyectos o comandos …"
+
+msgid "No matches."
+msgstr "Sin resultados."
+
+msgid "Too large for the preview ({size}, max. {max})."
+msgstr "Demasiado grande para la vista previa ({size}, máx. {max})."
+
+msgid "The image is too large for the preview (max. {dim} px, {mem})."
+msgstr "La imagen es demasiado grande para la vista previa (máx. {dim} px, {mem})."
+
+msgid "Back to the session"
+msgstr "Volver a la sesión"
+
+msgid "No edited files in open sessions yet."
+msgstr "Aún no hay archivos editados en sesiones abiertas."
+
+msgid "missing"
+msgstr "no encontrado"
+
+msgid "Pick a file on the left."
+msgstr "Elige un archivo a la izquierda."
+
+msgid "Open folder in the file manager"
+msgstr "Abrir carpeta en el gestor de archivos"
+
+msgid "Open in browser"
+msgstr "Abrir en el navegador"
+
+msgid "The image could not be decoded."
+msgstr "No se pudo decodificar la imagen."
+
+msgid "The file is missing on disk (deleted or reverted?)."
+msgstr "El archivo no existe en el disco (¿eliminado o revertido?)."
+
+msgid "The file could not be read."
+msgstr "No se pudo leer el archivo."
+
+msgid "Vibe asked a question that cannot be shown."
+msgstr "Vibe hizo una pregunta que no se puede mostrar."
+
+msgid "Error ({code}): {message}"
+msgstr "Error ({code}): {message}"
+
+msgid "Fork failed: {detail}"
+msgstr "El fork ha fallado: {detail}"
+
+msgid "Worktree “{name}” created."
+msgstr "Worktree «{name}» creado."
+
+msgid "The worktree could not be created (is the project a Git repository?)"
+msgstr "No se pudo crear el worktree (¿es el proyecto un repositorio de Git?)"
+
+msgid " – The message was not sent and is back in the input field."
+msgstr " – El mensaje no se ha enviado y está de nuevo en el campo de entrada."
+
+msgid "Connection to Vibe interrupted. The message was not sent and is back in the input field."
+msgstr "Conexión con Vibe interrumpida. El mensaje no se ha enviado y está de nuevo en el campo de entrada."
+
+msgid "Connection to Vibe interrupted. The running answer was cancelled."
+msgstr "Conexión con Vibe interrumpida. La respuesta en curso se ha cancelado."
+
+msgid "Connection to Vibe interrupted."
+msgstr "Conexión con Vibe interrumpida."
+
+msgid " Open approvals were discarded (please ask again)."
+msgstr " Se descartaron los permisos abiertos (vuelve a solicitarlos)."
+
+msgid "“{path}” is not an existing directory."
+msgstr "«{path}» no es un directorio existente."
+
+msgid "Cancelled – queued messages are back in the input field."
+msgstr "Cancelado – los mensajes en cola vuelven al campo de entrada."
+
+msgid "Rewound – {n} file(s) could not be restored."
+msgstr "Rebobinado – {n} archivo(s) no se pudieron restaurar."
+
+msgid "Rewound."
+msgstr "Rebobinado."
+
+msgid "Rewound – 1 file restored."
+msgstr "Rebobinado – 1 archivo restaurado."
+
+msgid "Rewound – {n} files restored."
+msgstr "Rebobinado – {n} archivos restaurados."
+
+msgid "Folder trusted – AGENTS.md, skills and hooks apply from the next session."
+msgstr "Carpeta confiable – AGENTS.md, skills y hooks se aplican desde la siguiente sesión."
+
+msgid "Vibe is not signed in. Please start `vibe` once in a terminal and sign in."
+msgstr "Vibe no ha iniciado sesión. Inicia `vibe` una vez en un terminal e inicia sesión."
+
+msgid "{what} failed: {detail}"
+msgstr "{what} ha fallado: {detail}"
+
+msgid "rate limit reached"
+msgstr "límite de tasa alcanzado"
+
+msgid "server error"
+msgstr "error del servidor"
+
+msgid "timeout"
+msgstr "tiempo de espera agotado"
+
+msgid "connection problem"
+msgstr "problema de conexión"
+
+msgid "temporary error"
+msgstr "error temporal"
+
+msgid "Retrying: {reason}"
+msgstr "Reintentando: {reason}"
+
+msgid "Fork created."
+msgstr "Bifurcación creada."
+
+msgid "A setting could not be applied – the prompt is sent anyway."
+msgstr "No se pudo aplicar un ajuste: el prompt se envía de todos modos."
+
+msgid "No project open."
+msgstr "No hay ningún proyecto abierto."
+
+msgid "No config folder found."
+msgstr "No se encontró ninguna carpeta de configuración."
+
+msgid "Vibe is not connected."
+msgstr "Vibe no está conectado."
+
+msgid "Vibe is still working – please wait or stop it."
+msgstr "Vibe sigue trabajando: espera o detenlo."
+
+msgid "Please add a project on the left first."
+msgstr "Añade primero un proyecto a la izquierda."
+
+msgid "Open approvals were discarded."
+msgstr "Se descartaron los permisos abiertos."
+
+msgid "Fork is not possible while an answer is running."
+msgstr "No se puede bifurcar mientras se ejecuta una respuesta."
+
+msgid "Creating fork …"
+msgstr "Creando fork …"
+
+msgid "Vibe is still working – interaction discarded."
+msgstr "Vibe sigue trabajando: interacción descartada."
+
+msgid "No active session – interaction discarded."
+msgstr "No hay ninguna sesión activa: interacción descartada."
+
+msgid "Deleting is not possible while an answer is running."
+msgstr "No se puede eliminar mientras se ejecuta una respuesta."
+
+msgid "Rewinding is possible once the answer is done."
+msgstr "Se puede rebobinar cuando la respuesta haya terminado."
+
+msgid "Session deleted."
+msgstr "Sesión eliminada."
+
+msgid "The folder stays untrusted."
+msgstr "La carpeta sigue sin ser confiable."
+
+msgid "Changes accepted."
+msgstr "Cambios aceptados."
+
+msgid "Changes reverted."
+msgstr "Cambios revertidos."
+
+msgid "Read account"
+msgstr "Leer cuenta"
+
+msgid "Save trust"
+msgstr "Guardar confianza"
+
+msgid "Create routine"
+msgstr "Crear rutina"
+
+msgid "Apply changes"
+msgstr "Aplicar cambios"
+
+msgid "Toggle connector"
+msgstr "Activar o desactivar conector"
+
+msgid "Token limit reached"
+msgstr "Límite de tokens alcanzado"
+
+msgid "Step limit reached"
+msgstr "Límite de pasos alcanzado"
+
+msgid "Refused"
+msgstr "Rechazado"
+
+msgid "every {time}"
+msgstr "cada {time}"
+
+msgid "NEW"
+msgstr "NUEVO"
+
+msgid "DELETED"
+msgstr "ELIMINADO"
+
+msgid "MOVED"
+msgstr "MOVIDO"
+
+msgid "CHANGED"
+msgstr "MODIFICADO"
+
+msgid "Diff not available: {error}"
+msgstr "Diff no disponible: {error}"
+
+msgid "Diff not available."
+msgstr "Diff no disponible."
+
+msgid "{n} sec"
+msgstr "{n} s"
+
+msgid "{n} min"
+msgstr "{n} min"
+
+msgid "{n} h"
+msgstr "{n} h"
+
+msgid "1 day"
+msgstr "1 día"
+
+msgid "{n} days"
+msgstr "{n} días"
+
+msgid "now"
+msgstr "ahora"
+
+msgid "yesterday"
+msgstr "ayer"
+
+msgid "{n} d"
+msgstr "{n} d"
+
+msgid "Allow once"
+msgstr "Permitir una vez"
+
+msgid "For this session"
+msgstr "Para esta sesión"
+
+msgid "Always allow"
+msgstr "Permitir siempre"
+
+msgid "Deny"
+msgstr "Denegar"
+
+msgid "Off"
+msgstr "Desactivado"
+
+msgid "Low"
+msgstr "Bajo"
+
+msgid "Medium"
+msgstr "Medio"
+
+msgid "High"
+msgstr "Alto"
+
+msgid "Max"
+msgstr "Máx"
+
+msgid "Asks before every action"
+msgstr "Pregunta antes de cada acción"
+
+msgid "File changes automatically, commands with approval"
+msgstr "Cambios de archivos automáticos, comandos con permiso"
+
+msgid "Safe actions automatically, risky ones with approval"
+msgstr "Acciones seguras automáticas, las arriesgadas con permiso"
+
+msgid "Runs everything without asking"
+msgstr "Ejecuta todo sin preguntar"
+
+msgid "Summarise the conversation and free context"
+msgstr "Resume la conversación y libera contexto"
+
+msgid "Show the available commands"
+msgstr "Mostrar los comandos disponibles"
+
+msgid "Show the path to the session log"
+msgstr "Mostrar la ruta del registro de la sesión"
+
+msgid "Show or change the MCP sign-in status"
+msgstr "Mostrar o cambiar el estado de inicio de sesión de MCP"
+
+msgid "Reload configuration, instructions and skills"
+msgstr "Recargar configuración, instrucciones y skills"
+
+msgid "Retry a failed or cancelled answer"
+msgstr "Reintentar una respuesta fallida o cancelada"
+
+msgid "Information on data retention"
+msgstr "Información sobre retención de datos"
+
+msgid "Proxy and certificate settings"
+msgstr "Configuración de proxy y certificados"
+
+msgid "Move the session to Vibe Code Web"
+msgstr "Mover la sesión a Vibe Code Web"
+
+msgid "General"
+msgstr "General"
+
+msgid "Account & plan"
+msgstr "Cuenta y plan"
+
+msgid "Keyboard shortcuts"
+msgstr "Atajos de teclado"
+
+msgid "Privacy"
+msgstr "Privacidad"
+
+msgid "Settings saved."
+msgstr "Configuración guardada."
+
+msgid "Error: {error}"
+msgstr "Error: {error}"
+
+msgid "Ready · {agent}"
+msgstr "Listo · {agent}"
+
+msgid "Connection interrupted · retry {attempt}/{max}"
+msgstr "Conexión interrumpida · reintento {attempt}/{max}"
+
+msgid "Skill installed: {path}"
+msgstr "Skill instalado: {path}"
+
+msgid "{pct} % of the monthly quota used"
+msgstr "{pct} % de la cuota mensual usado"
+
+msgid "Send (or queue while Vibe is working)"
+msgstr "Enviar (o poner en cola mientras Vibe trabaja)"
+
+msgid "New line"
+msgstr "Nueva línea"
+
+msgid "Stop the running answer"
+msgstr "Detener la respuesta en curso"
+
+msgid "Search and commands"
+msgstr "Búsqueda y comandos"
+
+msgid "Ctrl L"
+msgstr "Ctrl L"
+
+msgid "Focus the input field"
+msgstr "Enfocar el campo de entrada"
+
+msgid "/ and @"
+msgstr "/ y @"
+
+msgid "Commands and files in the input field"
+msgstr "Comandos y archivos en el campo de entrada"
+
+msgid "Answer an approval (with an empty input field)"
+msgstr "Responder a un permiso (con el campo de entrada vacío)"
+
+msgid "<config folder>"
+msgstr "<carpeta de configuración>"
+
+msgid "settings.json in {dir} — holds no secrets."
+msgstr "settings.json en {dir} — no contiene secretos."
+
+msgid "Workspace “General”"
+msgstr "Espacio de trabajo «General»"
+
+msgid "chat-workspace/ in {dir} — the working folder of sessions without a project."
+msgstr "chat-workspace/ en {dir} — la carpeta de trabajo de las sesiones sin proyecto."
+
+msgid "Vibe sessions"
+msgstr "Sesiones de Vibe"
+
+msgid "are stored by Vibe in ~/.vibe — not by Catwright."
+msgstr "las guarda Vibe en ~/.vibe — no Catwright."
+
+msgid "Account & quota"
+msgstr "Cuenta y cuota"
+
+msgid "are only fetched through Vibe when you ask (or with the “at startup” option)."
+msgstr "solo se obtienen a través de Vibe cuando lo pides (o con la opción «al iniciar»)."
+
+msgid "Telemetry & network"
+msgstr "Telemetría y red"
+
+msgid "No telemetry. Network traffic only goes through vibe-acp (Vibe CLI)."
+msgstr "Sin telemetría. El tráfico de red solo pasa por vibe-acp (CLI de Vibe)."
+
+msgid "Changes are saved automatically."
+msgstr "Los cambios se guardan automáticamente."
+
+msgid "Default mode of new sessions"
+msgstr "Modo predeterminado de las sesiones nuevas"
+
+msgid "How much Vibe may do without asking."
+msgstr "Cuánto puede hacer Vibe sin preguntar."
+
+msgid "Config folder"
+msgstr "Carpeta de configuración"
+
+msgid "Path copied."
+msgstr "Ruta copiada."
+
+msgid "unknown"
+msgstr "desconocido"
+
+msgid "Connection"
+msgstr "Conexión"
+
+msgid "Connecting …"
+msgstr "Conectando …"
+
+msgid "Sign-in and subscription run through the Vibe CLI (`vibe` in a terminal). Catwright stores no Vibe keys."
+msgstr "El inicio de sesión y la suscripción se hacen a través de la CLI de Vibe (`vibe` en un terminal). Catwright no guarda claves de Vibe."
+
+msgid "Interactive answers"
+msgstr "Respuestas interactivas"
+
+msgid "Image: {file}"
+msgstr "Imagen: {file}"
+
+msgid "Installed"
+msgstr "Instalado"
+
+msgid "Outdated"
+msgstr "Desactualizado"
+
+msgid "Not installed"
+msgstr "No instalado"
+
+msgid "Update skill"
+msgstr "Actualizar skill"
+
+msgid "Install skill"
+msgstr "Instalar skill"
+
+msgid "No projects yet."
+msgstr "Aún no hay proyectos."
+
+msgid "Catwright only uses your Vibe account. The data is fetched from Mistral only when you ask."
+msgstr "Catwright solo usa tu cuenta de Vibe. Los datos solo se obtienen de Mistral cuando lo pides."
+
+msgid "Fetch account and quota"
+msgstr "Obtener cuenta y cuota"
+
+msgid "Vibe reports no quota for this account."
+msgstr "Vibe no informa de ninguna cuota para esta cuenta."
+
+msgid "Fetch quota at startup"
+msgstr "Obtener la cuota al iniciar"
+
+msgid "Shows your usage at the bottom of the sidebar right away. Asks Mistral at every start for it."
+msgstr "Muestra tu uso directamente abajo en la barra lateral. Se lo pide a Mistral en cada inicio."
+
+msgid "Folder “{path}” cannot be read: {error}"
+msgstr "No se puede leer la carpeta «{path}»: {error}"
+
+msgid "Close (Esc)"
+msgstr "Cerrar (Esc)"
+
+msgid "Home directory"
+msgstr "Directorio personal"
+
+msgid "Parent folder"
+msgstr "Carpeta superior"
+
+msgid "Hidden"
+msgstr "Ocultos"
+
+msgid "No subfolders."
+msgstr "Sin subcarpetas."
+
+msgid "Add this folder"
+msgstr "Añadir esta carpeta"
+
+msgid "Attach file"
+msgstr "Adjuntar archivo"
+
+msgid "Show hidden"
+msgstr "Mostrar ocultos"
+
+msgid "Link blocked: {url}"
+msgstr "Enlace bloqueado: {url}"
+
+msgid "runs locally, without network"
+msgstr "se ejecuta localmente, sin red"
+
+msgid "Loading tool…"
+msgstr "Cargando herramienta…"
+
+msgid "Source"
+msgstr "Código fuente"
+
+msgid "No data."
+msgstr "Sin datos."
+
+msgid "The settings could not be read: {error}"
+msgstr "No se pudo leer la configuración: {error}"
+
+msgid "The settings could not be saved: {error}"
+msgstr "No se pudo guardar la configuración: {error}"
+
+msgid "no config folder"
+msgstr "sin carpeta de configuración"
+
+msgid "The settings could not be backed up: {error}"
+msgstr "No se pudo hacer la copia de seguridad de la configuración: {error}"
+
+msgid " {path} backed up"
+msgstr " {path} respaldado"
+
+msgid "Expression too long (max. {max} characters)."
+msgstr "Expresión demasiado larga (máx. {max} caracteres)."
+
+msgid "Invalid number: {text}"
+msgstr "Número no válido: {text}"
+
+msgid "Unexpected character “{char}”."
+msgstr "Carácter inesperado «{char}»."
+
+msgid "Expression nested too deeply (max. {max})."
+msgstr "Anidación demasiado profunda (máx. {max})."
+
+msgid "Unknown variable “{name}”."
+msgstr "Variable desconocida «{name}»."
+
+msgid "{name} expects {n} argument(s)."
+msgstr "{name} espera {n} argumento(s)."
+
+msgid "{name} expects at least 2 arguments."
+msgstr "{name} espera al menos 2 argumentos."
+
+msgid "Unknown function “{name}”."
+msgstr "Función desconocida «{name}»."
+
+msgid "Empty expression."
+msgstr "Expresión vacía."
+
+msgid "Unexpected character in the expression."
+msgstr "Carácter inesperado en la expresión."
+
+msgid "The result is not a finite number."
+msgstr "El resultado no es un número finito."
+
+msgid "Division by 0."
+msgstr "División entre 0."
+
+msgid "Missing closing parenthesis."
+msgstr "Falta el paréntesis de cierre."
+
+msgid "Incomplete expression."
+msgstr "Expresión incompleta."
+
+msgid "sqrt of a negative number."
+msgstr "sqrt de un número negativo."
+
+msgid "Script error: the evaluation process could not be started."
+msgstr "Error de script: no se pudo iniciar el proceso de evaluación."
+
+msgid "Script error: time limit exceeded ({secs} s)."
+msgstr "Error de script: tiempo límite excedido ({secs} s)."
+
+msgid "Script error: the evaluation process failed."
+msgstr "Error de script: el proceso de evaluación ha fallado."
+
+msgid "Script error: the evaluation process crashed."
+msgstr "Error de script: el proceso de evaluación se ha bloqueado."
+
+msgid "Script error: no answer from the evaluation process."
+msgstr "Error de script: sin respuesta del proceso de evaluación."
+
+msgid "Script error: no valid answer from the evaluation process."
+msgstr "Error de script: sin respuesta válida del proceso de evaluación."
+
+msgid "Script error: the program path cannot be determined."
+msgstr "Error de script: no se puede determinar la ruta del programa."
+
+msgid "Script error: the request cannot be serialised."
+msgstr "Error de script: la solicitud no se puede serializar."
+
+msgid "Line is not valid JSON: {error}"
+msgstr "La línea no es un JSON válido: {error}"
+
+msgid "JSON-RPC message is not an object"
+msgstr "El mensaje JSON-RPC no es un objeto"
+
+msgid "JSON-RPC method is not a string"
+msgstr "El método JSON-RPC no es una cadena"
+
+msgid "Response id is not a positive integer"
+msgstr "El id de respuesta no es un entero positivo"
+
+msgid "JSON-RPC error is not an object"
+msgstr "El error JSON-RPC no es un objeto"
+
+msgid "JSON-RPC error.code is missing"
+msgstr "Falta JSON-RPC error.code"
+
+msgid "JSON-RPC error.message is missing"
+msgstr "Falta JSON-RPC error.message"
+
+msgid "{program} could not be started: {error}"
+msgstr "No se pudo iniciar {program}: {error}"
+
+msgid "{stream} not available"
+msgstr "{stream} no disponible"
+
+msgid "The child process could not be queried: {error}"
+msgstr "No se pudo consultar el proceso hijo: {error}"
+
+msgid "The {method} response could not be read"
+msgstr "No se pudo leer la respuesta de {method}"
+
+msgid "Internal error: write lock lost"
+msgstr "Error interno: se perdió el bloqueo de escritura"
+
+msgid "The connection to vibe-acp is already closed"
+msgstr "La conexión con vibe-acp ya está cerrada"
+
+msgid "The session/update message could not be read"
+msgstr "No se pudo leer el mensaje session/update"
+
+msgid "The session/request_permission could not be read"
+msgstr "No se pudo leer session/request_permission"
+
+msgid "JSON-RPC message has neither method nor result/error"
+msgstr "El mensaje JSON-RPC no tiene ni method ni result/error"
+
+msgid "JSON-RPC message has neither method nor id"
+msgstr "El mensaje JSON-RPC no tiene ni method ni id"
+
+msgid "starts 1 subagent"
+msgstr "inicia 1 subagente"
+
+msgid "starts {n} subagents"
+msgstr "inicia {n} subagentes"
+
+msgid "reads 1 file"
+msgstr "lee 1 archivo"
+
+msgid "reads {n} files"
+msgstr "lee {n} archivos"
+
+msgid "searches once"
+msgstr "busca 1 vez"
+
+msgid "searches {n} times"
+msgstr "busca {n} veces"
+
+msgid "edits 1 file"
+msgstr "edita 1 archivo"
+
+msgid "edits {n} files"
+msgstr "edita {n} archivos"
+
+msgid "runs 1 command"
+msgstr "ejecuta 1 comando"
+
+msgid "runs {n} commands"
+msgstr "ejecuta {n} comandos"
+
+msgid "fetches 1 web page"
+msgstr "obtiene 1 página web"
+
+msgid "fetches {n} web pages"
+msgstr "obtiene {n} páginas web"
+
+msgid "uses 1 tool"
+msgstr "usa 1 herramienta"
+
+msgid "uses {n} tools"
+msgstr "usa {n} herramientas"
+
+msgid "1 file"
+msgstr "1 archivo"
+
+msgid "1 tool"
+msgstr "1 herramienta"
+
+msgid "Sending to vibe-acp failed: {error}"
+msgstr "Error al enviar a vibe-acp: {error}"
+
+msgid "Response with unknown id {id}"
+msgstr "Respuesta con id desconocido {id}"
+
+msgid "Script error: the answer from the evaluation process is too large."
+msgstr "Error de script: la respuesta del proceso de evaluación es demasiado grande."
+
+msgid "Script error: request too large."
+msgstr "Error de script: solicitud demasiado grande."
+
+msgid "Script error: the state is too large (max. {kib} KiB)."
+msgstr "Error de script: el estado es demasiado grande (máx. {kib} KiB)."
+
+msgid "Script error: unreadable request."
+msgstr "Error de script: solicitud ilegible."
+
+msgid " – Messages that were not sent are waiting in the input field of session “{name}”."
+msgstr " – Los mensajes no enviados esperan en el campo de entrada de la sesión «{name}»."
+
+msgid " – Messages that were not sent are waiting in the input field of the start screen."
+msgstr " – Los mensajes no enviados esperan en el campo de entrada de la pantalla de inicio."
+
+msgid " – Attachments could not be restored; please add them again."
+msgstr " – No se pudieron restaurar los adjuntos; vuelve a añadirlos."
+
+msgid "Script error"
+msgstr "Error de script"
+
+msgid "Script error: onAction failed."
+msgstr "Error de script: onAction ha fallado."
+
+msgid "Script error: render(state) returned nothing."
+msgstr "Error de script: render(state) no devolvió nada."
+
+msgid "Script error: evaluation failed."
+msgstr "Error de script: la evaluación ha fallado."
+
+msgid "Script error: invalid node: {detail}"
+msgstr "Error de script: nodo no válido: {detail}"
+
+msgid "Script error: invalid JSON: {detail}"
+msgstr "Error de script: JSON no válido: {detail}"
+
+msgid "Script error: source too long (max. {chars} characters)."
+msgstr "Error de script: código fuente demasiado largo (máx. {chars} caracteres)."
+
+msgid "Script error: the script defines no function render(state)."
+msgstr "Error de script: el script no define ninguna función render(state)."
+
+msgid "Script error: init() must return an object."
+msgstr "Error de script: init() debe devolver un objeto."
+
+msgid "Script error: too many nodes ({count}, max. {max})."
+msgstr "Error de script: demasiados nodos ({count}, máx. {max})."
+
+msgid "Script error: result too large (max. {kib} KiB)."
+msgstr "Error de script: resultado demasiado grande (máx. {kib} KiB)."
+
+msgid "Script error: loop limit reached (endless loop or too deep recursion?)"
+msgstr "Error de script: límite de bucle alcanzado (¿bucle infinito o recursión demasiado profunda?)"
+
+msgid "Fork created without the transcript – the source session no longer exists."
+msgstr "Bifurcación creada sin la transcripción: la sesión de origen ya no existe."
+
+msgid " – Text typed meanwhile stays in the input field."
+msgstr " – El texto escrito mientras tanto permanece en el campo de entrada."
+
+msgid "The chat folder could not be created: {error}"
+msgstr "No se pudo crear la carpeta de chat: {error}"
+
+msgid "A permission of an unknown session was requested (maybe a subagent) – please answer on its card."
+msgstr "Se solicitó un permiso de una sesión desconocida (quizá un subagente): responde en tu tarjeta."
+
+msgid "vibe-acp ended{exit}{detail}"
+msgstr "vibe-acp terminó{exit}{detail}"
+
+msgid "initialize did not answer in time"
+msgstr "initialize no respondió a tiempo"
+
+msgid "Nested tools do not run."
+msgstr "Las herramientas anidadas no se ejecutan."
+
+msgid "The start mode could not be set ({detail})."
+msgstr "No se pudo establecer el modo de inicio ({detail})."
+
+msgid "Vibe’s answer to the message could not be read. The turn has ended; the message was delivered."
+msgstr "No se pudo leer la respuesta de Vibe al mensaje. El turno ha terminado; el mensaje se entregó."
+
+msgid "On click: “{action}”"
+msgstr "Al hacer clic: «{action}»"
+
+msgid "Creating worktree “{name}” …"
+msgstr "Creando el worktree «{name}» …"
+
+msgid "The worktree could not be created: {error}"
+msgstr "No se pudo crear el worktree: {error}"
+
+msgid "Catwright is already open in another window: changes to the settings and projects made here are not saved."
+msgstr "Catwright ya está abierto en otra ventana: los cambios en la configuración y los proyectos hechos aquí no se guardan."
+
+msgid "The skill “catwright-ui” teaches Vibe to answer with tables, charts, forms and calculators as real widgets. It is copied to ~/.vibe/skills/catwright-ui/."
+msgstr "El skill «catwright-ui» enseña a Vibe a responder con tablas, gráficos, formularios y calculadoras como widgets reales. Se copia a ~/.vibe/skills/catwright-ui/."
+
+msgid "{path} — the working folder of sessions without a project."
+msgstr "{path} — la carpeta de trabajo de las sesiones sin proyecto."
+
+msgid "The config folder could not be created: {error}"
+msgstr "No se pudo crear la carpeta de configuración: {error}"
+
+msgid "The config folder could not be read: {error}"
+msgstr "No se pudo leer la carpeta de configuración: {error}"
+
+msgid "The config folder could not be made private: {error}"
+msgstr "No se pudo hacer privada la carpeta de configuración: {error}"
+
+msgid "The agent sent a line longer than {bytes} bytes; it was skipped."
+msgstr "El agente envió una línea de más de {bytes} bytes; se omitió."
+
+msgid "The session list of {dir} stopped paging after {pages} pages."
+msgstr "La lista de sesiones de {dir} dejó de cargar páginas después de {pages}."
+
+msgid "… {count} older transcript items are not shown"
+msgstr "… {count} elementos de transcripción antiguos no se muestran"
+
+msgid "The config folder could not be used: {path}"
+msgstr "No se pudo usar la carpeta de configuración: {path}"
+
+msgid "Transcript detail while Vibe works"
+msgstr "Detalle de la transcripción mientras Vibe trabaja"
+
+msgid "How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."
+msgstr "Cuán abiertas están las llamadas a herramientas y los pensamientos durante un turno. Los cambios y los permisos permanecen visibles en todos los niveles."
+
+msgid "Compact"
+msgstr "Compacto"
+
+msgid "Standard"
+msgstr "Estándar"
+
+msgid "Detailed"
+msgstr "Detallado"
+
+msgid "Verbose"
+msgstr "Extenso"
+
+msgid "Open file preview"
+msgstr "Abrir vista previa del archivo"
+
+msgid "Close preview"
+msgstr "Cerrar vista previa"
+
+msgid "Comment"
+msgstr "Comentario"
+
+msgid "Send to Vibe"
+msgstr "Enviar a Vibe"
+
+msgid "Delete comment"
+msgstr "Eliminar comentario"
+
+msgid "Your comment …"
+msgstr "Tu comentario …"
+
+msgid "Comment on line {n}"
+msgstr "Comentar en la línea {n}"
+
+msgid "{n} comments on this file"
+msgstr "{n} comentarios en este archivo"
+
+msgid "Please address these review comments on {path}:"
+msgstr "Atiende estos comentarios de revisión en {path}:"
+
+msgid "Comments are in the input field — add to them and send."
+msgstr "Los comentarios están en el campo de entrada: añádeles y envía."
+
+msgid "Activity"
+msgstr "Actividad"
+
+msgid "Nothing yet — finished and waiting turns land here."
+msgstr "Aún nada: aquí llegan los turnos terminados y en espera."
+
+msgid "Finished"
+msgstr "Terminadas"
+
+msgid "Open"
+msgstr "Abrir"
+
+msgid "Mark as unread"
+msgstr "Marcar como no leído"
+
+msgid "Archive"
+msgstr "Archivar"
+
+msgid "Unarchive"
+msgstr "Desarchivar"
+
+msgid "Archived ({n})"
+msgstr "Archivados ({n})"
+
+msgid "Vibe asks a question"
+msgstr "Vibe hace una pregunta"
+
+msgid "Permission request"
+msgstr "Solicitud de permiso"
+
+msgid "Turn finished"
+msgstr "Turno terminado"
+
+msgid "Session"
+msgstr "Sesión"
+
+msgid "1 comment on this file"
+msgstr "1 comentario en este archivo"
+
+msgid " · {step}"
+msgstr " · {step}"
+
+msgid "Code"
+msgstr "Código"
+
+msgid "Diff"
+msgstr "Diff"
+
+msgid "No changes against the last commit."
+msgstr "Sin cambios respecto al último commit."
+
+msgid "FAILED"
+msgstr "FALLIDO"
+
+msgid "Desktop notifications"
+msgstr "Notificaciones de escritorio"
+
+msgid "When a turn finishes or Vibe needs an approval — but only while the window is not focused. Uses notify-send when it is installed."
+msgstr "Cuando termina un turno o Vibe necesita un permiso, pero solo si la ventana no está enfocada. Usa notify-send si está instalado."
+
+msgid "Vibe is done in {project}"
+msgstr "Vibe ha terminado en {project}"
+
+msgid "Vibe needs your approval in {project}"
+msgstr "Vibe necesita tu permiso en {project}"
+
+msgid "Vibe is done"
+msgstr "Vibe ha terminado"
+
+msgid "Vibe needs your approval"
+msgstr "Vibe necesita tu permiso"
+
+msgid "Vibe has a question in {project}"
+msgstr "Vibe tiene una pregunta en {project}"
+
+msgid "Vibe has a question"
+msgstr "Vibe tiene una pregunta"
+
+msgid "Round details"
+msgstr "Detalles de la ronda"
+
+msgid "Pending"
+msgstr "Pendiente"
+
+msgid "Running"
+msgstr "En curso"
+
+msgid "Worktrees"
+msgstr "Worktrees"
+
+msgid "Create worktree"
+msgstr "Crear worktree"
+
+msgid "Delete worktree"
+msgstr "Eliminar worktree"
+
+msgid "A new worktree of the current project, as its own workspace with its own sessions."
+msgstr "Un worktree nuevo del proyecto actual, como espacio de trabajo propio con sus propias sesiones."
+
+msgid "Start ref (branch, tag or commit) for the new branch — empty: HEAD"
+msgstr "Ref de inicio (rama, tag o commit) para la rama nueva — vacío: HEAD"
+
+msgid "Not a valid start ref."
+msgstr "No es una ref de inicio válida."
+
+msgid "Delete the worktree “{name}”? The files in the main project stay untouched."
+msgstr "¿Eliminar el worktree «{name}»? Los archivos del proyecto principal no se tocan."
+
+msgid "The worktree has uncommitted changes — they are lost."
+msgstr "El worktree tiene cambios sin confirmar: se perderán."
+
+msgid "Also delete the branch “{branch}”"
+msgstr "Eliminar también la rama «{branch}»"
+
+msgid "Deleting worktree …"
+msgstr "Eliminando worktree …"
+
+msgid "Worktree deleted."
+msgstr "Worktree eliminado."
+
+msgid "The worktree could not be deleted: {error}"
+msgstr "No se pudo eliminar el worktree: {error}"
+
+msgid "Enter a task and an interval first."
+msgstr "Introduce primero una tarea y un intervalo."
+
+msgid "Vibe sent no details for this approval — only the tool or call shown above."
+msgstr "Vibe no envió detalles para este permiso: solo la herramienta o llamada mostrada arriba."
+
+msgid "This request belongs to no open session — probably a subagent. Please answer, or Vibe waits forever."
+msgstr "Esta solicitud no pertenece a ninguna sesión abierta — probablemente sea un subagente. Responde, o Vibe esperará para siempre."
+
+msgid "“{title}” has now run {n} times in a row with the same input. Vibe cannot stop itself — you can cancel the running turn here."
+msgstr "«{title}» ya se ha ejecutado {n} veces seguidas con la misma entrada. Vibe no puede detenerse solo: puedes cancelar el turno en curso aquí."

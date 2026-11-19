@@ -12,7 +12,7 @@ Each point: what to do, what should happen. Tick off or note the failure.
       first). **Should:** the app connects, shows "Mistral Vibe 3.1.3" in the
       status bar, lists projects/sessions. If not signed in: a clear "please
       sign in" status, no crash.
-- [ ] First start asks for the language (English/Deutsch).
+- [ ] First start asks for the language (English, Deutsch, Français, Español, Italiano, Português).
 
 ## Sessions
 
@@ -101,8 +101,10 @@ Each point: what to do, what should happen. Tick off or note the failure.
 
 - [ ] Settings → General → Deutsch. **Should:** the whole UI switches to
       German (restart not needed); every new 0.3.0 screen (activity feed,
-      preview pane, comments, chips, drop hint) is translated too. Switch back
-      to English. **Should:** complete.
+      preview pane, comments, chips, drop hint) is translated too. Switch to
+      Français, Español, Italiano and Português. **Should:** the whole UI
+      switches to each of them as well. Switch back to English. **Should:**
+      complete.
 
 ## Notes
 

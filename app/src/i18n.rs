@@ -1,6 +1,6 @@
 //! UI translation. The UI text in the code is English; other languages come
-//! from gettext catalogs under `app/i18n/` (`de.po`), compiled into the
-//! binary. A missing translation falls back to the English text, so an
+//! from gettext catalogs under `app/i18n/` (`de.po`, `fr.po`, …), compiled
+//! into the binary. A missing translation falls back to the English text, so an
 //! incomplete catalog never shows a key or an empty label.
 //!
 //! The current language is process-wide (`set_lang`) and read on every
@@ -16,17 +16,25 @@ use std::sync::OnceLock;
 pub enum Lang {
     En,
     De,
+    Fr,
+    Es,
+    It,
+    Pt,
 }
 
 impl Lang {
     /// Every language, in the order the pickers list them.
-    pub const ALL: [Lang; 2] = [Lang::En, Lang::De];
+    pub const ALL: [Lang; 6] = [Lang::En, Lang::De, Lang::Fr, Lang::Es, Lang::It, Lang::Pt];
 
-    /// The code stored in the settings (`"en"`, `"de"`).
+    /// The code stored in the settings (`"en"`, `"de"`, `"fr"`, …).
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "en",
             Lang::De => "de",
+            Lang::Fr => "fr",
+            Lang::Es => "es",
+            Lang::It => "it",
+            Lang::Pt => "pt",
         }
     }
 
@@ -40,6 +48,10 @@ impl Lang {
         match self {
             Lang::En => "English",
             Lang::De => "Deutsch",
+            Lang::Fr => "Français",
+            Lang::Es => "Español",
+            Lang::It => "Italiano",
+            Lang::Pt => "Português",
         }
     }
 }
@@ -55,17 +67,53 @@ pub fn set_lang(lang: Lang) {
 pub fn lang() -> Lang {
     match CURRENT.load(Ordering::Relaxed) {
         1 => Lang::De,
+        2 => Lang::Fr,
+        3 => Lang::Es,
+        4 => Lang::It,
+        5 => Lang::Pt,
         _ => Lang::En,
     }
 }
 
 const DE_PO: &str = include_str!("../i18n/de.po");
+const FR_PO: &str = include_str!("../i18n/fr.po");
+const ES_PO: &str = include_str!("../i18n/es.po");
+const IT_PO: &str = include_str!("../i18n/it.po");
+const PT_PO: &str = include_str!("../i18n/pt.po");
+
+/// Every compiled catalog as `(file name, PO text)`, for the tests.
+#[cfg(test)]
+fn all_pos() -> [(&'static str, &'static str); 5] {
+    [
+        ("de.po", DE_PO),
+        ("fr.po", FR_PO),
+        ("es.po", ES_PO),
+        ("it.po", IT_PO),
+        ("pt.po", PT_PO),
+    ]
+}
+
+/// Parse `po` on first use, then return the cached catalog.
+fn po(
+    po: &'static str,
+    cell: &'static OnceLock<HashMap<String, String>>,
+) -> &'static HashMap<String, String> {
+    cell.get_or_init(|| parse_po(po))
+}
 
 fn catalog(lang: Lang) -> Option<&'static HashMap<String, String>> {
     static DE: OnceLock<HashMap<String, String>> = OnceLock::new();
+    static FR: OnceLock<HashMap<String, String>> = OnceLock::new();
+    static ES: OnceLock<HashMap<String, String>> = OnceLock::new();
+    static IT: OnceLock<HashMap<String, String>> = OnceLock::new();
+    static PT: OnceLock<HashMap<String, String>> = OnceLock::new();
     match lang {
         Lang::En => None,
-        Lang::De => Some(DE.get_or_init(|| parse_po(DE_PO))),
+        Lang::De => Some(po(DE_PO, &DE)),
+        Lang::Fr => Some(po(FR_PO, &FR)),
+        Lang::Es => Some(po(ES_PO, &ES)),
+        Lang::It => Some(po(IT_PO, &IT)),
+        Lang::Pt => Some(po(PT_PO, &PT)),
     }
 }
 
@@ -88,11 +136,11 @@ pub fn trf(english: &'static str, args: &[(&str, &dyn std::fmt::Display)]) -> St
 }
 
 /// A number already formatted with a `.` decimal point, in the current
-/// language's notation (German uses a decimal comma).
+/// language's notation (every language here but English uses a decimal comma).
 pub fn decimal(formatted: String) -> String {
     match lang() {
-        Lang::De => formatted.replace('.', ","),
         Lang::En => formatted,
+        Lang::De | Lang::Fr | Lang::Es | Lang::It | Lang::Pt => formatted.replace('.', ","),
     }
 }
 
@@ -235,7 +283,7 @@ msgstr ""
         for l in Lang::ALL {
             assert_eq!(Lang::from_code(l.code()), Some(l));
         }
-        assert_eq!(Lang::from_code("fr"), None);
+        assert_eq!(Lang::from_code("xx"), None);
     }
 
     /// The English texts the code passes to `tr`/`trf`, read from the
@@ -289,28 +337,46 @@ msgstr ""
         found
     }
 
-    /// Every text the code shows has a German translation.
+    /// Every text the code shows has a translation in every catalog.
     #[test]
-    fn german_catalog_covers_every_text_in_the_code() {
-        let de = parse_po(DE_PO);
-        let missing: Vec<String> = texts_in_sources()
+    fn every_catalog_covers_every_text_in_the_code() {
+        let texts = texts_in_sources()
             .into_iter()
             // this module only holds samples and the scanner itself
             .filter(|(f, _)| !f.ends_with("i18n.rs"))
-            .filter(|(_, t)| !de.contains_key(t))
-            .map(|(f, t)| format!("{t:?} ({f})"))
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "missing in de.po:\n{}",
-            missing.join("\n")
-        );
+            .collect::<Vec<_>>();
+        for (file, po) in all_pos() {
+            let catalog = parse_po(po);
+            let missing: Vec<String> = texts
+                .iter()
+                .filter(|(_, t)| !catalog.contains_key(t))
+                .map(|(f, t)| format!("{t:?} ({f})"))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "missing in {file}:\n{}",
+                missing.join("\n")
+            );
+        }
     }
 
-    /// Every German entry keeps the placeholders of its English text, so a
-    /// translation can never drop or misspell a `{name}`.
+    /// All catalogs translate exactly the same msgids (de.po is the
+    /// reference the others were copied from).
     #[test]
-    fn german_catalog_keeps_every_placeholder() {
+    fn catalogs_have_identical_keys() {
+        let de = parse_po(DE_PO);
+        let reference: std::collections::HashSet<&str> = de.keys().map(String::as_str).collect();
+        for (file, po) in all_pos() {
+            let parsed = parse_po(po);
+            let keys: std::collections::HashSet<&str> = parsed.keys().map(String::as_str).collect();
+            assert_eq!(keys, reference, "key set differs in {file}");
+        }
+    }
+
+    /// Every entry in every catalog keeps the placeholders of its English
+    /// text, so a translation can never drop or misspell a `{name}`.
+    #[test]
+    fn every_catalog_keeps_every_placeholder() {
         let placeholders = |s: &str| {
             let mut v: Vec<String> = s
                 .split('{')
@@ -320,12 +386,14 @@ msgstr ""
             v.sort();
             v
         };
-        for (en, de) in parse_po(DE_PO) {
-            assert_eq!(
-                placeholders(&en),
-                placeholders(&de),
-                "placeholders differ: {en:?} -> {de:?}"
-            );
+        for (file, po) in all_pos() {
+            for (en, translated) in parse_po(po) {
+                assert_eq!(
+                    placeholders(&en),
+                    placeholders(&translated),
+                    "placeholders differ in {file}: {en:?} -> {translated:?}"
+                );
+            }
         }
     }
 }

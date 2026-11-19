@@ -587,7 +587,8 @@ fn step_decimals(step: f64) -> usize {
 }
 
 /// Format a computed value: `decimals` digits (default 2) in the notation of
-/// `lang` (English: thousands commas, decimal point; German: thousands dots,
+/// `lang` (English: thousands commas, decimal point; German, Spanish, Italian,
+/// Portuguese: thousands dots, decimal comma; French: thousands spaces,
 /// decimal comma), plus an optional unit.
 fn format_computed(
     lang: i18n::Lang,
@@ -604,6 +605,8 @@ fn format_computed(
     let (group, point) = match lang {
         i18n::Lang::En => (',', '.'),
         i18n::Lang::De => ('.', ','),
+        i18n::Lang::Fr => (' ', ','),
+        i18n::Lang::Es | i18n::Lang::It | i18n::Lang::Pt => ('.', ','),
     };
     let mut out = group_thousands(int_part, group);
     if let Some(f) = frac {

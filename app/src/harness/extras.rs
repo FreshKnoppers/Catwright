@@ -519,7 +519,7 @@ pub fn iso_to_epoch(iso: &str) -> Option<i64> {
 
 /// Short age of an ISO-8601 timestamp relative to `now` (Unix seconds):
 /// "now", "5 min", "3 h", "yesterday", "4 d", "Oct 12" (German: "gerade",
-/// "5 Min", "3 Std", "gestern", "4 T", "12.10.").
+/// "5 Min", "3 Std", "gestern", "4 T", "12.10."; fr/es/it/pt: "12/10").
 pub fn relative_time(iso: &str, now: i64) -> Option<String> {
     relative_time_in(crate::i18n::lang(), iso, now)
 }
@@ -540,13 +540,14 @@ pub fn relative_time_in(lang: Lang, iso: &str, now: i64) -> Option<String> {
             match lang {
                 Lang::De => format!("{d:02}.{m:02}."),
                 Lang::En => format!("{} {d}", month_abbr(m)),
+                Lang::Fr | Lang::Es | Lang::It | Lang::Pt => format!("{d:02}/{m:02}"),
             }
         }
     })
 }
 
 /// Date of an ISO-8601 timestamp in the current language: "Dec 1, 2026"
-/// (German: "01.12.2026").
+/// (German: "01.12.2026", fr/es/it/pt: "01/12/2026").
 pub fn local_date(iso: &str) -> Option<String> {
     local_date_in(crate::i18n::lang(), iso)
 }
@@ -558,6 +559,7 @@ pub fn local_date_in(lang: Lang, iso: &str) -> Option<String> {
     Some(match lang {
         Lang::De => format!("{d:02}.{m:02}.{y}"),
         Lang::En => format!("{} {d}, {y}", month_abbr(m)),
+        Lang::Fr | Lang::Es | Lang::It | Lang::Pt => format!("{d:02}/{m:02}/{y}"),
     })
 }
 
@@ -968,6 +970,12 @@ mod tests {
         assert_eq!(
             local_date_in(Lang::En, "2026-12-01T00:00:00Z").as_deref(),
             Some("Dec 1, 2026")
+        );
+        let rt = |s: &str| relative_time_in(Lang::Fr, s, now).unwrap();
+        assert_eq!(rt("2026-09-12T10:00:00Z"), "12/09");
+        assert_eq!(
+            local_date_in(Lang::Fr, "2026-12-01T00:00:00Z").as_deref(),
+            Some("01/12/2026")
         );
         assert_eq!(relative_time("kaputt", now), None);
     }

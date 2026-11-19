@@ -7,7 +7,8 @@ A native desktop app for the **Mistral Vibe** coding agent, written in Rust
 Client Protocol) and shows sessions, tool calls, approvals, diffs, subagents
 and context usage in a window of its own.
 
-The app speaks English and German (Deutsch).
+The app speaks English, German, French, Spanish, Italian and Portuguese
+(English, Deutsch, Français, Español, Italiano, Português).
 
 > **Unofficial.** Catwright is a community project and is not affiliated
 > with Mistral AI. "Mistral" and "Vibe" are trademarks of their respective
@@ -83,9 +84,9 @@ The screenshots show demo projects with prepared sessions
   Vibe's own estimate of what fills it
 - Interactive ```ui blocks: Vibe can put forms and buttons into its answers
   (skill `catwright-ui`, installed on request)
-- English and German UI: the first start asks for the language; change it
-  later under Settings → General. More languages are one more gettext file in
-  `app/i18n/`.
+- UI in English, German, French, Spanish, Italian and Portuguese: the first
+  start asks for the language; change it later under Settings → General.
+  More languages are one more gettext file in `app/i18n/`.
 
 ## Privacy
 

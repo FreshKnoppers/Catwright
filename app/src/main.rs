@@ -18,7 +18,7 @@
 //!   catwright --screenshot out.png --headless   same without a window or display server: the
 //!                                                frame is rasterized on the CPU (softrender.rs),
 //!                                                1360 × 860 points, or `--size WxH`
-//!   catwright --lang en|de                      UI language for this run (not saved)
+//!   catwright --lang en|de|fr|es|it|pt          UI language for this run (not saved)
 //!   catwright --project <dir> --open <file>     open this file in the preview pane
 //!                                                (relative to --project); with
 //!                                                `--preview-diff` in Diff mode

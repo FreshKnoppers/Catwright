@@ -44,7 +44,7 @@ API keys.
 - Do not weaken, delete or `#[ignore]` existing tests.
 - UI text is written in English in the code and shown through
   `crate::i18n::tr("…")` / `trf("… {name} …", &[("name", &value)])`; every
-  such text needs a German entry in `app/i18n/de.po` (a test fails
+  such text needs an entry in every catalog in `app/i18n/` (a test fails
   otherwise). Never build UI text with bare string literals. Code, comments
   and identifiers are English.
 - Keep `cargo fmt --check`, `cargo clippy --all-targets` (no new warnings)
