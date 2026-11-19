@@ -5,45 +5,81 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
-- Security hardening: the preview pane and the artifacts view resolve the
-  opened path canonically and show an "Outside the workspace" badge when it
-  lies outside the session's workspace (an absolute path elsewhere, a
-  symlink or a `..`); file chips in answers no longer resolve through
-  symlinks that point outside the workspace. The containment check is
-  cached per path, so rendering stays cheap.
-- Security hardening against a malicious repository or a hostile agent
-  (seven review rounds, the git findings verified with proofs of concept
-  against git 2.56):
-  - Git (branch chip, status, worktrees, diff preview) runs only in
-    folders Vibe reports as trusted; elsewhere the header says "Git hidden
-    until the folder is trusted". In a trusted folder no code from the
-    repository's own git config runs through the app's git calls: filter
-    drivers from every scope are switched off (git-lfs included), the
-    repository's hooks never run, the diff preview reads the old version
-    without textconv, and git never fetches or starts ssh. A repository
-    whose own config has `include`, `includeIf` or `hook` entries, or whose
-    config files are not plain files, gets no git calls at all.
-  - Deleting a worktree warns when its changes could not be checked,
-    instead of treating it as clean.
-  - Opening a file outside the session's workspace from a tool row, a diff
-    or an artifact asks first and names the absolute path.
-  - Permission cards show every argument of a tool call, not only the
-    command.
-  - Buttons and forms in `ui` blocks show what they send and need a second
-    click within 5 seconds.
-  - Limits against floods: a session keeps at most 64 MiB of transcript in
-    memory (the oldest items leave first; Vibe keeps the full history),
-    single texts and tool calls are capped, tables show at most 32 columns
-    and 200 rows, at most 64 live ui-js tools run at once and never block
-    the window, too many open approvals or questions are cancelled instead
-    of piling up, and preview reads are capped and never hang on a FIFO.
-  - The config folder is refused if it is a symlink, instead of being
-    followed.
-- Known limitations of the hardening: worktrees that Catwright creates in a
-  Git LFS repository contain LFS pointer files instead of the real content
-  (`git lfs pull` inside the worktree fetches it), LFS-tracked files may
-  show as modified in the app's git status, and changes inside submodules
-  are not shown.
+## v0.6.0
+
+**Security release.** All earlier releases (v0.2.0 to v0.5.1) run git in
+the background in every open project folder, also untrusted ones, without
+protection against the folder's own git configuration: a folder with a
+crafted `.git` directory (for example from a zip or tarball, a shared
+folder, or written by a manipulated agent) could run any command as you
+as soon as it was open in Catwright. A plain `git clone` does not bring a
+repository's config or hooks along. Please update.
+
+**Download:** `catwright-v0.6.0-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.6.0-x86_64-linux.tar.gz
+cd catwright-v0.6.0-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.6.0-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.6.0-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**Security fixes** (seven review rounds against a malicious repository or a
+hostile agent, the git findings verified with proofs of concept against
+git 2.56):
+
+- Git (branch chip, status, worktrees, diff preview) runs only in folders
+  Vibe reports as trusted. In a trusted folder no code from the
+  repository's own git config runs through the app's git calls: filter
+  drivers from every scope are switched off (git-lfs included), the
+  repository's hooks never run, the diff preview reads the old version
+  without textconv, and git never fetches or starts ssh. A repository
+  whose own config has `include`, `includeIf` or `hook` entries, or whose
+  config files are not plain files, gets no git calls at all.
+- Permission cards show every argument of a tool call, not only the
+  command.
+- Buttons and forms in `ui` blocks show what they send and need a second
+  click within 5 seconds.
+- Opening a file outside the session's workspace from a tool row, a diff
+  or an artifact asks first and names the absolute path. The preview pane
+  and the artifacts view show an "Outside the workspace" badge for such
+  files, and file chips in answers no longer resolve through symlinks
+  that point outside the workspace.
+- Limits against floods: a session keeps at most 64 MiB of transcript in
+  memory (the oldest items leave first; Vibe keeps the full history),
+  single texts and tool calls are capped, tables show at most 32 columns
+  and 200 rows, at most 64 live ui-js tools run at once and never block
+  the window, too many open approvals or questions are cancelled instead
+  of piling up, and preview reads are capped and never hang on a FIFO.
+- The config folder is refused if it is a symlink, instead of being
+  followed.
+- Deleting a worktree warns when its changes could not be checked,
+  instead of treating it as clean.
+
+**What you will notice:** in a folder you have not trusted in Vibe the
+header says "Git hidden until the folder is trusted", and there is no
+branch chip, worktree list or diff preview until you trust it. `ui`
+buttons turn amber on the first click ("Click again to send …").
+
+**Known limitations:** worktrees that Catwright creates in a Git LFS
+repository contain LFS pointer files instead of the real content (`git lfs
+pull` inside the worktree fetches it), LFS-tracked files may show as
+modified in the app's git status, and changes inside submodules are not
+shown.
 
 ## v0.5.1
 
