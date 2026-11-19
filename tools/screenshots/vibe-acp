@@ -55,13 +55,18 @@ for line in sys.stdin:
                      "_meta": {"workspace_trust": {"status": "trusted", "details": None}}})
         update(p["sessionId"], {"sessionUpdate": "available_commands_update", "availableCommands": COMMANDS})
     elif method == "session/prompt":
-        live = sc.get("live")
+        # a session's own live turn (subagents), else the shared one
+        live = sc.get("live_by_session", {}).get(p.get("sessionId", "")) or sc.get("live")
         if not live:
             result(rid, {})
         else:
             # scripted live turn for the screenshots: updates, a permission
             # request that stays open, then the prompt finishes (or fails)
             sid = p.get("sessionId", "")
+            # like Vibe, echo the prompt as the turn's user message first
+            text = "".join(b.get("text", "") for b in p.get("prompt", []) if b.get("type") == "text")
+            update(sid, {"sessionUpdate": "user_message_chunk", "messageId": f"user-live-{rid}",
+                         "content": {"type": "text", "text": text}})
             for act in live.get("on_prompt", []):
                 if "update" in act:
                     update(sid, act["update"])

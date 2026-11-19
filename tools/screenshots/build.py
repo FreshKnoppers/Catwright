@@ -124,25 +124,46 @@ stats_updates = [info("Daily temperature stats"),
     usage(17200, 400000)]
 
 # ---------------------------------------------------------------- weather-station: subagents
+# History: one short earlier round. The screenshot then sends a prompt and
+# the stand-in plays a live turn (`live_by_session`): three subagents start,
+# `agents.list` reports one of them done, and the wait stays open, so two
+# cats run after their balls of yarn while the third one sits.
 S_SUB = "4c0a9e77-subagents"
-README_NEW = "# weather-station\n" + "\n".join(f"line {i}" for i in range(79))
-spawn_meta = lambda name, task, child: {"tool_name": "agents.spawn", "effect_kind": "subagent", "agent": "generic", "task": task, "child_session_id": child}
 sub_updates = [info("Weather station data and README"),
-    user("u-b1", "Start two subagents in parallel: one checks readings.csv for missing readings and outliers, the other drafts a better README.md. Apply the draft when both are done."),
-    plan(["Inspect repo (readings.csv, README.md)", "Spawn subagent A: missing readings + outliers in readings.csv", "Spawn subagent B: draft better README.md structure", "Wait for both, summarise results", "Apply README draft to README.md"]),
-    tool("Reading readings.csv", "read", {"filePath": f"{WS}/readings.csv"}, out=csv_head, meta={"tool_name": "read_file"}),
+    user("u-b0", "What is in this repository?"),
     tool("Reading README.md", "read", {"filePath": f"{WS}/README.md"}, out="# weather-station", meta={"tool_name": "read_file"}),
-    tool("Starting data-analyst", "think", {"task": "Analyze readings.csv for missing readings and outliers", "agent": "generic"}, out="Started data-analyst",
-         meta=spawn_meta("data-analyst", "Analyze readings.csv for missing readings and outliers", "child-3f1e")),
-    tool("Starting readme-drafter", "think", {"task": "Read the project files and draft a better README.md", "agent": "generic"}, out="Started readme-drafter",
-         meta=spawn_meta("readme-drafter", "Read the project files and draft a better README.md", "child-8a2c")),
-    tool("Waiting for input", "other", {"timeout_ms": 600000}, out="both subagents delivered", meta={"tool_name": "self.wait"}),
-    tool("Writing README.md", "edit", {"filePath": f"{WS}/README.md"}, diff=(f"{WS}/README.md", "", README_NEW), meta={"tool_name": "write_file"}),
-    tool("bash: python3 analysis.py", "execute", {"command": "python3 analysis.py"}, out="83 readings loaded", meta={"tool_name": "bash"}),
-    tool("bash: python3 -m unittest test_analysis -v", "execute", {"command": "python3 -m unittest test_analysis -v"}, out="Ran 5 tests in 0.001s\n\nOK", meta={"tool_name": "bash"}),
-    tool("bash: git diff --stat", "execute", {"command": "git diff --stat"}, out=" README.md | 79 +++++\n 1 file changed", meta={"tool_name": "bash"}),
-    agent("a-b1", "Both subagents finished, and the README draft is applied. Summary:\n\n## Subagent 1 — data quality (`data-analyst`)\n\nChecked `readings.csv` (83 data rows, CRLF, 2-hour cadence from 2026-10-01T00:00 to 2026-10-07T22:00) with actual computation:\n\n- **Missing readings:** 84 expected, 83 present — exactly one gap: `2026-10-04T14:00`. No duplicates, no off-schedule timestamps, no malformed rows.\n- **Outliers (Tukey IQR fences + physical plausibility):** exactly one — `temperature_c = 48.3` **at** `2026-10-04T08:00` (median 11.1, upper fence 25.95). It's an isolated spike (neighbours 7.0 °C at 06:00, 12.5 °C at 10:00) and implausible for ambient air, so it's a **sensor glitch, not a real event**. Humidity and pressure are clean by both tests.\n- Notably, the gap and the glitch are both on **2026-10-04** — that day looks like a period of station trouble.\n\n## Subagent 2 — README draft (`readme-drafter`)\n\nProduced a full README grounded in the actual files: data schema table, verified data-quality caveats, run instructions (`python analysis.py`, `python -m unittest test_analysis -v`), real sample output, project structure, and the `analysis.py` API. I verified its claims before applying: `python analysis.py` prints exactly the quoted table, and all **5 tests pass** (`Ran 5 tests ... OK`).\n\n## Applied\n\n`README.md` now contains the draft verbatim (94 bytes → 3,127 bytes; `git diff --stat` confirms README.md is the only file I touched — the `analysis.py`/`test_analysis.py` modifications predate this session). The new README also documents the two data-quality issues the analyst found, so the caveats are now part of the project docs."),
-    usage(21300, 400000)]
+    agent("a-b0", "A small weather-station project: `readings.csv` (two-hourly temperature, humidity and pressure for a week), `analysis.py` with daily statistics and its tests."),
+    usage(9800, 400000)]
+SUB_PROMPT = "Start three subagents in parallel: check readings.csv for gaps and outliers, draft a better README.md and sketch a temperature chart."
+def spawn(name, task, child):
+    _n[0] += 1
+    return {"sessionUpdate": "tool_call", "toolCallId": f"call-{_n[0]}", "title": f"Starting {name}", "kind": "think",
+            "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": f"Started {name}"}}],
+            "rawInput": {"task": task, "agent": "generic"},
+            "rawOutput": {"_meta": {"mistral.vibe.subagent": {"agentName": name, "childSessionId": child, "generation": 1}},
+                          "content": [], "structured_content": {"type": "success"}, "type": "success"},
+            "_meta": {"tool_name": "agents.spawn", "effect_kind": "subagent", "agent": "generic", "task": task, "child_session_id": child}}
+def live_plan(entries):
+    return {"sessionUpdate": "plan", "entries": [{"content": c, "priority": "medium", "status": st} for c, st in entries]}
+sub_live = {"on_prompt": [
+    {"update": live_plan([("Inspect readings.csv and README.md", "completed"),
+                          ("Spawn three subagents: data check, README draft, chart", "completed"),
+                          ("Wait for all three, summarise results", "in_progress"),
+                          ("Apply the README draft", "pending")])},
+    {"update": tool("Reading readings.csv", "read", {"filePath": f"{WS}/readings.csv"}, out=csv_head, meta={"tool_name": "read_file"})},
+    {"update": spawn("data-analyst", "Check readings.csv for missing readings and outliers", "child-3f1e")},
+    {"update": spawn("readme-drafter", "Read the project files and draft a better README.md", "child-8a2c")},
+    {"update": spawn("chart-maker", "Sketch a line chart of the daily temperatures", "child-c47d")},
+    {"update": {"sessionUpdate": "tool_call", "toolCallId": "call-list", "title": "agents.list", "kind": "other", "status": "completed",
+                "rawOutput": {"content": [], "type": "success", "structured_content": {"agents": [
+                    {"name": "data-analyst", "status": "running", "pending_turn": True, "config_name": None},
+                    {"name": "readme-drafter", "status": "idle", "pending_turn": False, "config_name": None},
+                    {"name": "chart-maker", "status": "running", "pending_turn": True, "config_name": None}]}},
+                "_meta": {"tool_name": "agents.list", "effect_kind": "tool"}}},
+    {"update": {"sessionUpdate": "tool_call", "toolCallId": "call-wait", "title": "Waiting for input", "kind": "other", "status": "in_progress",
+                "rawInput": {"timeout_ms": 600000}, "_meta": {"tool_name": "self.wait", "effect_kind": "tool"}}},
+    # no finish: the turn keeps running, so the cats keep running too
+]}
 
 # ---------------------------------------------------------------- home-climate: dashboard
 S_DASH = "9e41b2c0-dashboard"
@@ -204,6 +225,7 @@ scenario = {
                  S_ACT: {"updates": act_updates, "modes": modes("accept-edits"), "configOptions": config("accept-edits", "mistral-large-4-0-3", "high")}},
     # a live prompt lifecycle for the activity-feed screenshot: a tool call,
     # a permission request that stays open, then the turn finishes
+    "live_by_session": {S_SUB: sub_live},
     "live": {"on_prompt": [
         {"update": tool("Editing analysis.py", "edit", {"filePath": f"{WS}/analysis.py"},
                         diff=(f"{WS}/analysis.py", ANALYSIS_V1, ANALYSIS_V2), meta={"tool_name": "search_replace"})},
@@ -222,5 +244,5 @@ def settings(name, projects, mode):
     json.dump({"projects": projects, "default_session_mode": mode, "auto_account": True, "language": "en",
                "vibe_models": [list(m) for m in MODELS], "vibe_thinking": THINK, "panel_closed": False}, open(f"{cfg}/settings.json", "w"))
 settings("start", [WS], "ask"); settings("session", [WS], "accept-edits"); settings("subagents", [WS], "accept-edits"); settings("dashboard", [HC], "auto-approve"); settings("activity", [WS], "accept-edits")
-for k, v in {"WS": WS, "HC": HC, "S_STATS": S_STATS, "S_SUB": S_SUB, "S_DASH": S_DASH, "S_ACT": S_ACT}.items():
+for k, v in {"WS": WS, "HC": HC, "S_STATS": S_STATS, "S_SUB": S_SUB, "S_DASH": S_DASH, "S_ACT": S_ACT, "SUB_PROMPT": json.dumps(SUB_PROMPT)}.items():
     print(f"{k}={v}")

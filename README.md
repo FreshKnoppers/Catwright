@@ -32,7 +32,7 @@ updates while you drag the sliders:
 
 Subagents with the plan and their status bars in the side panel:
 
-![Two finished subagents with the summary in the conversation](docs/screenshots/subagents.png)
+![Three subagents at work: two cats chase their balls of yarn, the third one is done and sits](docs/screenshots/subagents.png)
 
 A project's start screen:
 
