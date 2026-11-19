@@ -12,6 +12,9 @@ tag (`## v0.2.0`) as that release's description.
   requests.
 - `catwright --version` (or `-V`) prints the version and exits; before,
   it was ignored and the window opened.
+- Subagents: with several running, a returned or timed-out wait no longer
+  marks all of them done. Their state comes from Vibe's `agents.list`
+  where the agent reports it.
 
 ## v0.3.1
 

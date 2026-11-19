@@ -129,14 +129,58 @@ fn meta_or_input_str(tc: &ToolCall, key: &str) -> Option<String> {
     from_meta.or(from_input).map(str::to_string)
 }
 
-/// True for the parent's wait call that completes once the child delivered
-/// its result.
-fn is_wait_call(tc: &ToolCall) -> bool {
+/// `_meta.tool_name` of a tool call.
+fn tool_name(tc: &ToolCall) -> Option<&str> {
     tc.meta
         .as_ref()
         .and_then(|m| m.get("tool_name"))
         .and_then(Value::as_str)
-        == Some("self.wait")
+}
+
+/// True for the parent's wait call. It returns when input arrived for the
+/// parent (a subagent delivered, among others) or when its timeout ran out;
+/// it does not name the subagent it woke for (docs/acp.md, "Subagents").
+fn is_wait_call(tc: &ToolCall) -> bool {
+    tool_name(tc) == Some("self.wait")
+}
+
+/// A `self.wait` that ended because its timeout ran out: nobody delivered.
+fn wait_timed_out(tc: &ToolCall) -> bool {
+    tc.raw_output
+        .as_ref()
+        .and_then(|o| o.pointer("/structured_content/reason"))
+        .and_then(Value::as_str)
+        == Some("timeout")
+}
+
+/// The name Vibe gave the subagent of a completed spawn (the name
+/// `agents.list` reports it under), from the spawn's `rawOutput`.
+fn spawn_agent_name(tc: &ToolCall) -> Option<&str> {
+    tc.raw_output
+        .as_ref()?
+        .get("_meta")?
+        .get("mistral.vibe.subagent")?
+        .get("agentName")?
+        .as_str()
+}
+
+/// `(name, status)` of every subagent a completed `agents.list` call
+/// reported; empty for any other tool call.
+fn listed_agents(tc: &ToolCall) -> Vec<(&str, &str)> {
+    if tool_name(tc) != Some("agents.list") || tc.status != ToolStatus::Completed {
+        return Vec::new();
+    }
+    tc.raw_output
+        .as_ref()
+        .and_then(|o| o.pointer("/structured_content/agents"))
+        .and_then(Value::as_array)
+        .map(|agents| {
+            agents
+                .iter()
+                .filter_map(|a| Some((a.get("name")?.as_str()?, a.get("status")?.as_str()?)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The whole renderable state of one session. Build it with `new`, feed it
@@ -545,12 +589,13 @@ impl SessionView {
     /// cancelled (N5): `subagents()` shows them as Cancelled from here on,
     /// so the next `begin_turn` — which clears `last_stop_reason` — cannot
     /// show long-dead subagents as running again. Failed spawns keep their
-    /// own state, and a subagent whose `self.wait` already completed has
-    /// delivered its result: both stay out of the freeze. The freeze is
+    /// own state, and a subagent the parent already reported as finished
+    /// (`reported_subagent_states`) stays out of the freeze too. The freeze is
     /// bounded to the cancelled turn's own items: a spawn an earlier turn
     /// left unfinished is not rewritten by a later turn's stop (final
     /// audit E) — it keeps the state it already had.
     fn cancel_unfinished_subagents(&mut self) {
+        let reported = self.reported_subagent_states();
         let mut frozen = Vec::new();
         for (pos, item) in self
             .items
@@ -567,7 +612,7 @@ impl SessionView {
             if !is_subagent(tc) || tc.status == ToolStatus::Failed {
                 continue;
             }
-            if !self.waited_for(pos) {
+            if matches!(reported.get(&pos), None | Some(SubagentState::Running)) {
                 frozen.push(tc.tool_call_id.clone());
             }
         }
@@ -576,17 +621,62 @@ impl SessionView {
         }
     }
 
-    /// Whether the parent's `self.wait` for the tool call at `items[pos]`
-    /// already completed (so the subagent delivered its result).
-    fn waited_for(&self, pos: usize) -> bool {
-        self.items[pos + 1..].iter().any(|later| {
-            let Item::Tool(later_id) = later else {
-                return false;
+    /// What the parent reported about its started subagents, by the
+    /// position of the spawn in `items`, read in order: the last
+    /// `agents.list` naming a subagent sets its state (running, idle =
+    /// done, failed; stopped keeps a known Done, else counts as cancelled),
+    /// and a `self.wait` that returned with input marks the subagent Done
+    /// only if it was the only one still running — with several, the wait
+    /// does not say which one delivered. A timed-out wait says nothing.
+    /// Spawns without an entry have no report.
+    fn reported_subagent_states(&self) -> HashMap<usize, SubagentState> {
+        let mut started: Vec<usize> = Vec::new();
+        let mut by_name: HashMap<&str, usize> = HashMap::new();
+        let mut states: HashMap<usize, SubagentState> = HashMap::new();
+        for (pos, item) in self.items.iter().enumerate() {
+            let Item::Tool(id) = item else {
+                continue;
             };
-            self.tool_calls.get(later_id).is_some_and(|later_tc| {
-                is_wait_call(later_tc) && later_tc.status == ToolStatus::Completed
-            })
-        })
+            let Some(tc) = self.tool_calls.get(id) else {
+                continue;
+            };
+            if is_subagent(tc) {
+                if matches!(tc.status, ToolStatus::Completed | ToolStatus::Other) {
+                    started.push(pos);
+                    if let Some(name) = spawn_agent_name(tc) {
+                        by_name.insert(name, pos);
+                    }
+                }
+                continue;
+            }
+            for (name, status) in listed_agents(tc) {
+                let Some(&spawn) = by_name.get(name) else {
+                    continue;
+                };
+                let state = match status {
+                    "running" => SubagentState::Running,
+                    "idle" => SubagentState::Done,
+                    "failed" => SubagentState::Failed,
+                    "stopped" if states.get(&spawn) == Some(&SubagentState::Done) => {
+                        SubagentState::Done
+                    }
+                    "stopped" => SubagentState::Cancelled,
+                    _ => continue,
+                };
+                states.insert(spawn, state);
+            }
+            if is_wait_call(tc) && tc.status == ToolStatus::Completed && !wait_timed_out(tc) {
+                let running: Vec<usize> = started
+                    .iter()
+                    .copied()
+                    .filter(|p| matches!(states.get(p), None | Some(SubagentState::Running)))
+                    .collect();
+                if let [only] = running[..] {
+                    states.insert(only, SubagentState::Done);
+                }
+            }
+        }
+        states
     }
 
     /// The model was switched (ConfigOptionsChanged). Vibe sends no
@@ -679,13 +769,16 @@ impl SessionView {
 
     /// All subagents of this session, in the order of their `Item::Tool`
     /// entries. The state follows the real flow (docs/acp.md): a failed spawn
-    /// is `Failed`, a pending/running spawn is `Running`, a completed spawn is
-    /// `Done` once a later `self.wait` call completed, the turn ended
-    /// without a cancel or a later turn began, and `Cancelled` for the subagents that were still
-    /// unfinished when a turn ended cancelled — frozen in
+    /// is `Failed`, a pending/running spawn is `Running`, a completed spawn
+    /// takes what the parent reported about it (`reported_subagent_states`:
+    /// `agents.list`, or a `self.wait` while it was the only one running),
+    /// and without a report it is `Done` once the turn ended without a
+    /// cancel or a later turn began. `Cancelled` marks the subagents that
+    /// were still unfinished when a turn ended cancelled — frozen in
     /// `cancelled_tools` at that moment, so it survives the next
     /// `begin_turn` (N5).
     pub fn subagents(&self) -> Vec<SubagentInfo> {
+        let reported = self.reported_subagent_states();
         let mut out = Vec::new();
         for (pos, item) in self.items.iter().enumerate() {
             let Item::Tool(id) = item else {
@@ -707,15 +800,14 @@ impl SessionView {
                     ToolStatus::Failed => SubagentState::Failed,
                     ToolStatus::Pending | ToolStatus::InProgress => SubagentState::Running,
                     ToolStatus::Completed | ToolStatus::Other => {
-                        let waited = self.waited_for(pos);
                         let turn_ended = self.turn == TurnState::Idle;
                         // a spawn of an earlier turn: that turn is over, so
                         // the next turn must not set its cat walking again
                         let earlier_turn = self.turn_start.is_some_and(|start| pos < start);
-                        if waited || turn_ended || earlier_turn {
-                            SubagentState::Done
-                        } else {
-                            SubagentState::Running
+                        match reported.get(&pos) {
+                            Some(state) if *state != SubagentState::Running => state.clone(),
+                            _ if turn_ended || earlier_turn => SubagentState::Done,
+                            _ => SubagentState::Running,
                         }
                     }
                 }
@@ -2358,6 +2450,139 @@ mod tests {
             SubagentState::Running,
             "the cancel of turn 2 does not freeze turn 1's spawn"
         );
+    }
+
+    /// A completed spawn of the subagent `name`, as Vibe 3.1.3 sends it:
+    /// the name sits in `rawOutput._meta["mistral.vibe.subagent"]`.
+    fn named_spawn(id: &str, name: &str) -> SessionUpdate {
+        serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": format!("Starting {name}"),
+            "kind": "think",
+            "status": "completed",
+            "rawInput": {"task": "translate", "agent": "generic"},
+            "rawOutput": {
+                "_meta": {"mistral.vibe.subagent": {"agentName": name, "generation": 1}},
+                "content": [],
+                "structured_content": {"type": "success"},
+                "type": "success",
+            },
+            "_meta": {"tool_name": "agents.spawn", "effect_kind": "subagent"},
+        }))
+        .unwrap()
+    }
+
+    /// A completed `agents.list` reporting `(name, status)` pairs.
+    fn agents_list(id: &str, agents: &[(&str, &str)]) -> SessionUpdate {
+        let agents: Vec<Value> = agents
+            .iter()
+            .map(|(name, status)| json!({"name": name, "status": status, "config_name": null}))
+            .collect();
+        serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "agents.list",
+            "kind": "other",
+            "status": "completed",
+            "rawOutput": {"content": [], "structured_content": {"agents": agents}, "type": "success"},
+            "_meta": {"tool_name": "agents.list", "effect_kind": "tool"},
+        }))
+        .unwrap()
+    }
+
+    /// A completed `self.wait` that returned for `reason`
+    /// (`input_available` or `timeout`).
+    fn wait_returned(id: &str, reason: &str) -> SessionUpdate {
+        serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "Waiting for input",
+            "kind": "other",
+            "status": "completed",
+            "rawOutput": {"type": "success", "content": [], "structured_content": {"reason": reason}},
+            "_meta": {"tool_name": "self.wait", "effect_kind": "tool"},
+        }))
+        .unwrap()
+    }
+
+    fn states(view: &SessionView) -> Vec<SubagentState> {
+        view.subagents().into_iter().map(|a| a.state).collect()
+    }
+
+    /// Seen in a real session (2026-11-19): four subagents, the parent's
+    /// wait ran out after ten minutes. A timeout is no delivery, so nobody
+    /// is done yet.
+    #[test]
+    fn timed_out_wait_finishes_no_subagent() {
+        use SubagentState::*;
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&named_spawn("sp-a", "a"));
+        view.apply_update(&wait_returned("w-1", "timeout"));
+        assert_eq!(states(&view), [Running]);
+        view.apply_update(&named_spawn("sp-b", "b"));
+        view.apply_update(&wait_returned("w-2", "timeout"));
+        assert_eq!(states(&view), [Running, Running]);
+    }
+
+    /// A wait that returned with input while several subagents run does not
+    /// say which one delivered: all stay running instead of all turning
+    /// done. Once one is left, the next wait with input is its result.
+    #[test]
+    fn wait_with_several_running_subagents_finishes_none() {
+        use SubagentState::*;
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&named_spawn("sp-a", "a"));
+        view.apply_update(&named_spawn("sp-b", "b"));
+        view.apply_update(&wait_returned("w-1", "input_available"));
+        assert_eq!(states(&view), [Running, Running]);
+        view.apply_update(&agents_list("ls-1", &[("a", "idle"), ("b", "running")]));
+        assert_eq!(states(&view), [Done, Running]);
+        view.apply_update(&wait_returned("w-2", "input_available"));
+        assert_eq!(states(&view), [Done, Done]);
+    }
+
+    /// `agents.list` reports each subagent by name: running, idle (= done),
+    /// failed; stopped keeps a known Done and reads as cancelled otherwise.
+    /// Names the session never started are ignored.
+    #[test]
+    fn agents_list_sets_each_subagent_by_name() {
+        use SubagentState::*;
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        for (id, name) in [("sp-a", "a"), ("sp-b", "b"), ("sp-c", "c"), ("sp-d", "d")] {
+            view.apply_update(&named_spawn(id, name));
+        }
+        view.apply_update(&agents_list(
+            "ls-1",
+            &[
+                ("a", "idle"),
+                ("b", "running"),
+                ("c", "failed"),
+                ("x", "idle"),
+            ],
+        ));
+        assert_eq!(states(&view), [Done, Running, Failed, Running]);
+        view.apply_update(&agents_list("ls-2", &[("a", "stopped"), ("d", "stopped")]));
+        assert_eq!(states(&view), [Done, Running, Failed, Cancelled]);
+        // the turn ends: unreported subagents count as done, reports stay
+        view.finish_turn(&end_turn());
+        assert_eq!(states(&view), [Done, Done, Failed, Cancelled]);
+    }
+
+    /// A cancel freezes only the subagents not reported as finished.
+    #[test]
+    fn cancel_freezes_only_unfinished_reported_subagents() {
+        use SubagentState::*;
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&named_spawn("sp-a", "a"));
+        view.apply_update(&named_spawn("sp-b", "b"));
+        view.apply_update(&agents_list("ls-1", &[("a", "idle"), ("b", "running")]));
+        view.finish_turn(&cancelled_turn());
+        assert_eq!(states(&view), [Done, Cancelled]);
     }
 
     #[test]

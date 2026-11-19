@@ -221,6 +221,31 @@ Child sessions cannot be opened: `session/load` with a child id fails with
 not appear in `session/list`. A client can only show goal, agent, status and
 the parent's waiting state.
 
+### Several subagents (Vibe 3.1.3, verified 2026-11-19)
+
+Taken from the session store of a real session with four parallel
+subagents and from Vibe's source (`mistralai_vibe_local_harness/vibe/_subagents/`),
+not from a wire recording; ACP forwards a finished effect's output as
+`rawOutput`.
+
+- The completed spawn's `rawOutput._meta["mistral.vibe.subagent"]` names the
+  child: `{"agentName": "i18n-fr", "childSessionId": "child-…",
+  "generation": 1, "spawnCallId": "…"}`.
+- `self.wait` has `rawInput: {"timeout_ms", "deadline_unix_ms"}` and does
+  **not** name a subagent. Its `rawOutput.structured_content.reason` is
+  `input_available` (some input for the parent arrived, e.g. one child
+  delivered) or `timeout` (nobody delivered; seen after 600 s). With
+  several children running, a client cannot tell which one woke the wait.
+- The parent may call `agents.list` (`_meta.tool_name: "agents.list"`).
+  Its `rawOutput.structured_content.agents` lists every child by name:
+  `{"name", "status", "pending_turn", "config_name"}` with `status`
+  `running`, `idle` (its turn is over: done), `stopped` (closed for good)
+  or `failed`.
+
+Catwright reads a subagent's state from the last `agents.list` naming it;
+a `self.wait` that returned with input counts as its result only while it
+is the only subagent still running, and a timed-out wait counts for none.
+
 Worktree sessions (Vibe `--worktree`, or delegated runs) have their own
 `cwd` under `~/.vibe/worktrees/...`. `session/list` with a project `cwd`
 returns only sessions whose `cwd` is exactly that directory.
