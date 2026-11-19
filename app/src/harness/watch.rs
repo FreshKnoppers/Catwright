@@ -591,14 +591,19 @@ pub fn parse_scoped_filter_list(out: &str) -> Vec<String> {
 /// to git through `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
 /// env (verified against git 2.56 to beat `.git/config`, and to survive
 /// driver names containing `=` or spaces, which a `-c key=value` argument
-/// would misparse): `cat` passes content through unchanged, an empty
-/// `process` disables the long-running filter process.
+/// would misparse): `cat` replaces the configured clean/smudge command, an
+/// empty `process` disables the long-running filter process, and
+/// `required=false` keeps git WORKING for existing setups such as git-lfs:
+/// with the real driver gone, a leftover `filter.<d>.required=true` (set by
+/// `git lfs install`) makes `status` and `worktree add` fail hard with exit
+/// 128 — verified against git 2.56.1 — instead of falling back to no filter.
 pub fn filter_neutralizers(drivers: &[String]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for d in drivers {
         out.push((format!("filter.{d}.clean"), "cat".to_string()));
         out.push((format!("filter.{d}.smudge"), "cat".to_string()));
         out.push((format!("filter.{d}.process"), String::new()));
+        out.push((format!("filter.{d}.required"), "false".to_string()));
     }
     out
 }
@@ -677,6 +682,10 @@ fn git_raw(
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.fsmonitor=false")
+        // hooksPath like run_git: no current caller starts hooks, but
+        // `git_output` is pub(crate) — belt and braces for future callers
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
         // no fetching, ever: a shipped partial-clone config
         // (`extensions.partialClone` + a promisor remote) would make git
         // lazily fetch missing objects, and an ssh remote would run the
@@ -1108,7 +1117,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_neutralizers_are_env_config_pairs_covering_all_three_keys() {
+    fn filter_neutralizers_are_env_config_pairs_covering_all_four_keys() {
         let args = filter_neutralizers(&["pwn".to_string(), "x=y".to_string()]);
         assert_eq!(
             args,
@@ -1116,10 +1125,12 @@ mod tests {
                 ("filter.pwn.clean".to_string(), "cat".to_string()),
                 ("filter.pwn.smudge".to_string(), "cat".to_string()),
                 ("filter.pwn.process".to_string(), String::new()),
+                ("filter.pwn.required".to_string(), "false".to_string()),
                 // a driver name with '=' must survive as an env KEY
                 ("filter.x=y.clean".to_string(), "cat".to_string()),
                 ("filter.x=y.smudge".to_string(), "cat".to_string()),
                 ("filter.x=y.process".to_string(), String::new()),
+                ("filter.x=y.required".to_string(), "false".to_string()),
             ]
         );
     }
