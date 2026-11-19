@@ -65,8 +65,11 @@ before committing (`feature_screenshots` + `CATWRIGHT_SHOT_DIR`, plus
 
 ## Open questions
 
-- Does vibe-acp 3.1.3 accept a cron expression in `_loops/create`'s
-  `interval` (test plan covers it; `docs/acp.md` now documents it)?
+- ~~Does vibe-acp 3.1.3 accept a cron expression in `_loops/create`'s
+  `interval`?~~ No: `LoopsCreateRequest` has only `interval` and `prompt`,
+  and `interval` goes through `parse_interval` (`<number><unit>`). The
+  backend's cron path is not reachable over ACP. `docs/acp.md` and the test
+  plan are corrected.
 - Should notifications also fire for questions (`elicitation/create`), not
   only approvals?
 - Worktree delete on a dirty worktree currently relies on git refusing

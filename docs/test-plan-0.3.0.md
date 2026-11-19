@@ -83,11 +83,12 @@ Each point: what to do, what should happen. Tick off or note the failure.
 
 ## Routines
 
-- [ ] Create a routine (sidebar → routines, e.g. daily summary), with a
-      plain interval **and** with a cron expression in the interval field
-      (e.g. `0 9 * * 1-5`). **Should:** both are accepted and listed; the cron
-      one shows its schedule. Delete a routine. **Should:** gone from the
-      list.
+- [ ] Create a routine (sidebar → routines, e.g. daily summary) with a
+      plain interval (`1d`, `30m`). **Should:** accepted and listed with its
+      next run. A cron expression (`0 9 * * 1-5`) is not accepted by
+      vibe-acp 3.1.3 (`_loops/create` takes `<number><unit>` only).
+      **Should:** Vibe's error shows in the status line, no crash. Delete a
+      routine, then "Delete all". **Should:** gone from the list.
 
 ## Fork and rewind
 
