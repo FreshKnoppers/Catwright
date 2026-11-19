@@ -242,7 +242,9 @@ def settings(name, projects, mode):
     cfg = f"{D}/cfg-{name}/catwright"
     os.makedirs(cfg, exist_ok=True)
     json.dump({"projects": projects, "default_session_mode": mode, "auto_account": True, "language": "en",
-               "vibe_models": [list(m) for m in MODELS], "vibe_thinking": THINK, "panel_closed": False}, open(f"{cfg}/settings.json", "w"))
+               "vibe_models": [list(m) for m in MODELS], "vibe_thinking": THINK, "panel_closed": False,
+               # the composer shows the microphone, answers get the speaker
+               "voice_dictation": True, "voice_narration": True}, open(f"{cfg}/settings.json", "w"))
 settings("start", [WS], "ask"); settings("session", [WS], "accept-edits"); settings("subagents", [WS], "accept-edits"); settings("dashboard", [HC], "auto-approve"); settings("activity", [WS], "accept-edits")
 for k, v in {"WS": WS, "HC": HC, "S_STATS": S_STATS, "S_SUB": S_SUB, "S_DASH": S_DASH, "S_ACT": S_ACT, "SUB_PROMPT": json.dumps(SUB_PROMPT)}.items():
     print(f"{k}={v}")

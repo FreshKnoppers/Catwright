@@ -79,7 +79,10 @@ The screenshots show demo projects with prepared sessions
   while the window is in the background (Settings → General, off by default)
 - Routines: a prompt Vibe repeats on an interval (`30m`, `2h`, `1d`) while
   the session is open
-- Subagents with status bars (and a small pixel cat)
+- Voice, optional and off by default: dictate into the composer, have
+  answers read aloud (see [Voice input and output](#voice-input-and-output)
+  for what that sends where)
+- Subagents with status bars (and a small pixel cat chasing a ball of yarn)
 - Context usage as Vibe reports it (the same numbers as the CLI footer), with
   Vibe's own estimate of what fills it
 - Interactive ```ui blocks: Vibe can put forms and buttons into its answers
@@ -99,6 +102,53 @@ The screenshots show demo projects with prepared sessions
   the project, never the session title, the prompt or the answer.
 - File chips only check whether a mentioned file exists; the file is read
   only when you open it.
+- Voice input and output are off by default. When you use them, audio and
+  text go to Mistral through Vibe, as described in the next section.
+
+## Voice input and output
+
+Both are optional and switched on under Settings → General. Catwright itself
+contains no audio code: it only asks Vibe, and Vibe records, plays and talks
+to Mistral. Exactly what happens:
+
+**Dictation** (microphone button in the composer)
+
+- While the button is on, Vibe records your microphone on your machine and
+  streams the audio to Mistral's realtime transcription
+  (`voxtral-mini-transcribe-realtime` at `api.mistral.ai`). **The
+  transcription is not local**; it runs on your Vibe account, like your
+  prompts.
+- The recognised text comes back piece by piece and lands in the composer.
+  Nothing goes to the agent until you send the message yourself.
+- Vibe needs an open session to record. On the start screen the first click
+  starts the project's session, as sending the first message would.
+
+**Reading answers aloud** (speaker button under an answer, optionally after
+every turn)
+
+- Vibe does **not** read the answer word for word. A model writes a short
+  summary of the round (an extra request on your plan), Mistral's
+  text-to-speech (`voxtral-mini-tts`) speaks it, and Vibe plays it on your
+  machine.
+- The voice comes from Vibe's configuration, not from Catwright's language.
+  Vibe's default is `gb_jane_neutral` (British English), so a German or
+  French summary sounds English. To change it, add to `~/.vibe/config.toml`
+  (here the German voice "Heidi"; all voices are in
+  [Mistral's voice list](https://docs.mistral.ai/studio/audio/text-to-speech/voices)):
+
+  ```toml
+  [[tts_models]]
+  name = "voxtral-mini-tts-latest"
+  provider = "mistral"
+  alias = "voxtral-tts"
+  voice = "voice_481"
+  ```
+
+  This changes Vibe's voice everywhere, also in the Vibe CLI.
+- The language of the summary cannot be set either: Vibe's prompt for it is
+  fixed. The model usually answers in the language of your message.
+
+Catwright never logs or stores the dictated, summarised or spoken text.
 
 ## Requirements
 
@@ -107,6 +157,8 @@ The screenshots show demo projects with prepared sessions
   signed in: run `vibe` once in a terminal and follow the login. Tested with
   Vibe 3.1.0 to 3.1.3.
 - Optional: `notify-send` (libnotify) for desktop notifications.
+- Optional, for voice: a microphone and speakers. Vibe records and plays
+  through PulseAudio or PipeWire (tested with Vibe 3.1.3).
 - To build: a current stable Rust toolchain (`rustup`).
 
 ## Known limits
@@ -119,6 +171,9 @@ The screenshots show demo projects with prepared sessions
   (winit 0.30) reports dropped files only on X11. Use the "+" button, or
   start Catwright under XWayland (`WAYLAND_DISPLAY= catwright`) if you need
   it. Pasting a file copied in the file manager does not work either.
+- Reading aloud uses Vibe's configured voice (British English by default)
+  and Vibe's fixed summary prompt. Catwright cannot choose a voice per UI
+  language: Vibe's ACP interface takes none.
 - Routines run only while their session is open in Catwright and idle;
   Vibe's ACP interface takes intervals only, no cron expressions.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
@@ -129,8 +184,8 @@ Each [release](https://github.com/FreshKnoppers/Catwright/releases) has a
 ready-built archive for Linux x86_64 (glibc 2.39 or newer):
 
 ```sh
-tar xzf catwright-v0.4.0-x86_64-linux.tar.gz
-cd catwright-v0.4.0-x86_64-linux
+tar xzf catwright-v0.5.0-x86_64-linux.tar.gz
+cd catwright-v0.5.0-x86_64-linux
 ./dist/install.sh
 ```
 
