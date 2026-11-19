@@ -10,6 +10,8 @@ tag (`## v0.2.0`) as that release's description.
 - `SECURITY.md`: how to report vulnerabilities privately.
 - `CONTRIBUTING.md`, a code of conduct and forms for issues and pull
   requests.
+- `catwright --version` (or `-V`) prints the version and exits; before,
+  it was ignored and the window opened.
 
 ## v0.3.1
 

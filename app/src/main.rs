@@ -23,6 +23,7 @@
 //!                                                (relative to --project); with
 //!                                                `--preview-diff` in Diff mode
 //!   catwright --activity                        open the activity feed on start
+//!   catwright --version                         print the version and exit (also `-V`)
 //!   catwright --ui-js-worker                    internal: one ui-js evaluation (stdin→stdout), then exit
 
 // acp is wired into the harness UI; not every pub item is used by the bin yet
@@ -75,6 +76,8 @@ struct Cli {
     preview_diff: bool,
     /// `--activity`: open the activity feed on start.
     activity: bool,
+    /// `--version` / `-V`: print the version and exit, no window.
+    version: bool,
 }
 
 fn parse_cli(args: &[String]) -> Cli {
@@ -91,6 +94,7 @@ fn parse_cli(args: &[String]) -> Cli {
         open_file: None,
         preview_diff: false,
         activity: false,
+        version: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -125,6 +129,10 @@ fn parse_cli(args: &[String]) -> Cli {
             }
             "--preview-diff" => {
                 cli.preview_diff = true;
+                i += 1;
+            }
+            "--version" | "-V" => {
+                cli.version = true;
                 i += 1;
             }
             "--activity" => {
@@ -198,6 +206,10 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     let cli = parse_cli(argv.get(1..).unwrap_or(&[]));
+    if cli.version {
+        println!("catwright {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -325,6 +337,15 @@ mod tests {
         assert!(!c.preview_diff);
         let c = cli(&[]);
         assert!(c.open_file.is_none() && !c.preview_diff && !c.activity);
+    }
+
+    #[test]
+    fn version_flag_parses_long_and_short() {
+        assert!(cli(&["--version"]).version);
+        assert!(cli(&["-V"]).version);
+        assert!(cli(&["--project", "/tmp/p", "--version"]).version);
+        assert!(!cli(&[]).version);
+        assert!(!cli(&["--project", "/tmp/p"]).version);
     }
 
     #[test]

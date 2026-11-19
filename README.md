@@ -170,6 +170,7 @@ catwright --project ~/my/project --session <id> --open analysis.py
 catwright --project ~/my/project --open analysis.py --preview-diff
                                                  # ... in Diff mode (against the last commit)
 catwright --activity                             # open the activity feed
+catwright --version                              # print the version and exit
 ```
 
 `--prompt <text>` sits in the process arguments, which other local users
