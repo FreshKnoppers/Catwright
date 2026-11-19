@@ -5,10 +5,41 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
-- `catwright --dictate` starts a voice dictation as soon as Vibe is ready
-  (also usable from a desktop shortcut); the microphone shows for that run
-  even with the setting off.
+## v0.5.1
+
+**Download:** `catwright-v0.5.1-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.5.1-x86_64-linux.tar.gz
+cd catwright-v0.5.1-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.5.1-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.5.1-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
+- `catwright --dictate` starts a voice dictation as soon as Vibe is ready,
+  in the `--session` if one is given, else from the start screen. Handy on
+  a desktop shortcut. Asking for it on the command line counts as consent
+  for that run: the microphone shows even with the setting off, so the
+  dictation can be stopped. As with the button, Vibe records locally and
+  Mistral transcribes (README, "Voice input and output").
 - README: a screenshot of a running dictation.
+
 ## v0.5.0
 
 **Download:** `catwright-v0.5.0-x86_64-linux.tar.gz` below, then:
