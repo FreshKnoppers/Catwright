@@ -133,4 +133,8 @@ information on their own (always with a label).
 ## Backlog
 
 - Done: the animated pixel cat (own few-frame bitmap) runs in the subagent
-  status bar, the busy row of a turn and on the start screen.
+  status bar, the busy row of a turn and on the start screen. In the
+  subagent bar a running cat chases a rolling ball of yarn (`theme::YARN`,
+  YELLOW with ORANGE_DIM strands, a YELLOW thread on the ground); each
+  subagent's cat keeps its own phase (`theme::cat_stagger`). Finished
+  states show only the sitting cat.

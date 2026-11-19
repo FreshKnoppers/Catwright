@@ -311,13 +311,19 @@ pub fn status_color(status: &crate::acp::protocol::ToolStatus) -> Color32 {
     }
 }
 
-/// Deterministic 3×3 colour raster derived from the project key (FNV-1a-64).
-pub fn project_icon_colors(key: &str) -> [Color32; 9] {
+/// FNV-1a-64 of `key`: a stable hash for colours and animation phases.
+fn fnv1a(key: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for b in key.as_bytes() {
         hash ^= u64::from(*b);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
+    hash
+}
+
+/// Deterministic 3×3 colour raster derived from the project key (FNV-1a-64).
+pub fn project_icon_colors(key: &str) -> [Color32; 9] {
+    let hash = fnv1a(key);
     let mut out = [PROJECT_PALETTE[0]; 9];
     for (i, cell) in out.iter_mut().enumerate() {
         let index = ((hash >> (i * 7)) % 9) as usize;
@@ -379,6 +385,24 @@ pub const CAT_BLINK: [&str; 8] = [
     "#...#######.",
     ".##########.",
 ];
+
+/// The ball of yarn a running subagent's cat chases: 7×7, `y` = YELLOW,
+/// `s` = a wound strand (ORANGE_DIM), `.` = empty. It rolls by turning
+/// this bitmap a quarter clockwise at a time (`yarn_cell`).
+pub const YARN: [&str; 7] = [
+    "..yyy..", ".ssyyy.", "yyssyyy", "syyssyy", "ysyyssy", ".ysyys.", "..yss..",
+];
+
+/// Cell `(row, col)` of the yarn ball turned `quarters` × 90° clockwise.
+fn yarn_cell(quarters: usize, row: usize, col: usize) -> char {
+    let n = YARN.len();
+    let (mut r, mut c) = (row, col);
+    // one clockwise quarter: new[r][c] = old[n - 1 - c][r]
+    for _ in 0..quarters % 4 {
+        (r, c) = (n - 1 - c, r);
+    }
+    YARN[r].as_bytes()[c] as char
+}
 
 /// Which bitmap the cat shows right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -457,9 +481,19 @@ pub fn pixel_cat(ui: &mut egui::Ui, time: f64, running: bool, pixel: f32) -> egu
     response
 }
 
+/// A stable time offset (0 to 10 s) for the cat of `key` (a subagent's
+/// tool call id): add it to the clock so several running cats do not walk
+/// in step, each keeps its own place on its track.
+pub fn cat_stagger(key: &str) -> f64 {
+    (fnv1a(key) % 10_000) as f64 / 1000.0
+}
+
 /// Status bar of a subagent card: a 4 px track of pixel blocks (RAISED) with
-/// the cat (2 px pixels) on top. Running: the cat walks from left to right
-/// and starts over at the left, the track behind it is ORANGE_DIM. Done: the
+/// the cat (2 px pixels) on top. Running: the cat chases a rolling ball of
+/// yarn (`YARN`) from left to right and starts over at the left; the gap
+/// swings (the cat closes in, the ball gets away), a loose YELLOW thread
+/// lies on the ground between ball and paws, the track behind the cat is
+/// ORANGE_DIM. Done: the
 /// track up to the cat is GREEN and the cat sits at the right end. Failed:
 /// RED track, cat sits at the left. Cancelled: DIM track, cat sits at the
 /// left. A sitting cat has no track under it (its bitmap has transparent
@@ -478,9 +512,15 @@ pub fn subagent_bar(
     const PIXEL: f32 = 2.0;
     const CAT_W: f32 = 12.0 * PIXEL;
     const CAT_H: f32 = 8.0 * PIXEL;
+    const BALL_W: f32 = 7.0 * PIXEL;
+    // the gap between cat and ball swings between these two
+    const GAP_MIN: f32 = 2.0;
+    const GAP_MAX: f32 = 8.0;
 
-    let width = width.max(CAT_W);
+    let width = width.max(CAT_W + BALL_W + GAP_MAX);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CAT_H), egui::Sense::hover());
+    // start on a whole point, so the whole-point offsets below stay on it
+    let rect = rect.translate(rect.min.round() - rect.min);
     let track = egui::Rect::from_min_size(
         egui::pos2(rect.left(), rect.center().y - TRACK_H / 2.0),
         egui::vec2(width, TRACK_H),
@@ -488,9 +528,12 @@ pub fn subagent_bar(
     let painter = ui.painter();
 
     let running = *state == SubagentState::Running;
+    // the ball runs ahead of the cat by a swinging gap
+    let gap = (GAP_MIN + (GAP_MAX - GAP_MIN) * (0.5 + 0.5 * (time * 4.0).sin() as f32)).round();
     let cat_x = if running {
-        // walk inside the track (the cat is CAT_W wide), then start over
-        ((time * 40.0) % (width - CAT_W).max(1.0) as f64) as f32
+        // run inside the track with room for the ball, then start over;
+        // whole points only, or the pixel cells get seams between them
+        ((time * 40.0) % (width - CAT_W - BALL_W - GAP_MAX).max(1.0) as f64).floor() as f32
     } else if *state == SubagentState::Done {
         width - CAT_W
     } else {
@@ -530,6 +573,40 @@ pub fn subagent_bar(
             color,
         );
         x += BLOCK + GAP;
+    }
+
+    if running {
+        // the loose thread on the ground, from under the front paws to the ball
+        let ball_x = cat_x + CAT_W + gap;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + cat_x + CAT_W - PIXEL, rect.bottom() - PIXEL),
+                egui::pos2(rect.left() + ball_x + PIXEL, rect.bottom()),
+            ),
+            egui::Rounding::same(0.0),
+            YELLOW,
+        );
+        // the ball rests on the ground and turns a quarter per 11 points rolled
+        let quarters = (ball_x / 11.0) as usize;
+        let top = rect.bottom() - BALL_W;
+        for row in 0..YARN.len() {
+            for col in 0..YARN.len() {
+                let color = match yarn_cell(quarters, row, col) {
+                    'y' => YELLOW,
+                    's' => ORANGE_DIM,
+                    _ => continue,
+                };
+                let pos = egui::pos2(
+                    rect.left() + ball_x + col as f32 * PIXEL,
+                    top + row as f32 * PIXEL,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(pos, egui::vec2(PIXEL, PIXEL)),
+                    egui::Rounding::same(0.0),
+                    color,
+                );
+            }
+        }
     }
 
     // the cat, drawn on top of the track
@@ -626,6 +703,37 @@ mod tests {
         assert_eq!(meter_blocks(0.5, 20), 10);
         assert_eq!(meter_blocks(1.7, 20), 20); // clamped to 1
         assert_eq!(meter_blocks(f32::NAN, 20), 0);
+    }
+
+    #[test]
+    fn yarn_turns_clockwise_and_back_after_four_quarters() {
+        let n = YARN.len();
+        for (row, line) in YARN.iter().enumerate() {
+            assert_eq!(line.chars().count(), n, "the ball is square");
+            for col in 0..n {
+                let c = yarn_cell(0, row, col);
+                assert!(matches!(c, 'y' | 's' | '.'), "unknown cell {c}");
+                assert_eq!(yarn_cell(4, row, col), c, "four quarters = no turn");
+                // one clockwise quarter moves the top row to the right column
+                assert_eq!(yarn_cell(1, col, n - 1 - row), c);
+            }
+        }
+    }
+
+    #[test]
+    fn cat_stagger_is_stable_bounded_and_differs() {
+        let a = cat_stagger("effect-7aac2d77");
+        assert_eq!(a, cat_stagger("effect-7aac2d77"));
+        let offsets: Vec<f64> = ["sp-a", "sp-b", "sp-c", "sp-d"]
+            .iter()
+            .map(|k| cat_stagger(k))
+            .collect();
+        assert!(offsets.iter().all(|o| (0.0..10.0).contains(o)));
+        for (i, x) in offsets.iter().enumerate() {
+            for y in &offsets[i + 1..] {
+                assert_ne!(x, y, "every subagent walks on its own phase");
+            }
+        }
     }
 
     #[test]

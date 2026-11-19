@@ -596,6 +596,8 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
         ui.add(egui::Label::new(job).truncate())
             .on_hover_text(&a.task);
     }
+    // each cat on its own phase, so running subagents do not walk in step
+    let time = time + theme::cat_stagger(&a.tool_call_id);
     theme::subagent_bar(ui, &a.state, time, ui.available_width());
     let (text, color) = match a.state {
         SubagentState::Running => (tr("Running …").to_string(), theme::YELLOW),

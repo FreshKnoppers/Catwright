@@ -15,6 +15,8 @@ tag (`## v0.2.0`) as that release's description.
 - Subagents: with several running, a returned or timed-out wait no longer
   marks all of them done. Their state comes from Vibe's `agents.list`
   where the agent reports it.
+- Subagents: each cat chases its own rolling ball of yarn, and running
+  cats no longer walk in step.
 
 ## v0.3.1
 
