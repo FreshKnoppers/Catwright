@@ -5,6 +5,10 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- Release archives carry a build provenance attestation; check one with
+  `gh attestation verify <archive> --repo FreshKnoppers/Catwright`.
+- `SECURITY.md`: how to report vulnerabilities privately.
+
 ## v0.3.1
 
 **Download:** `catwright-v0.3.1-x86_64-linux.tar.gz` below, then:

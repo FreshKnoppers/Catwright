@@ -133,6 +133,9 @@ cd catwright-v0.3.1-x86_64-linux
 ./dist/install.sh
 ```
 
+To check a download, see [SECURITY.md](SECURITY.md#verifying-a-download).
+Security problems are reported privately as described there.
+
 ## Build and install
 
 To build it yourself instead:

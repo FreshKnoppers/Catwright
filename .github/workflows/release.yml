@@ -1,6 +1,8 @@
 # Pushing a tag like v0.2.0 builds the Linux binary and publishes a GitHub
 # release with it. The release text is the tag's section in CHANGELOG.md.
-# Uses only the built-in GITHUB_TOKEN of this repository.
+# Uses only the built-in GITHUB_TOKEN of this repository. The archive gets a
+# build provenance attestation (`gh attestation verify`), which needs the
+# id-token and attestations permissions.
 name: Release
 
 on:
@@ -9,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -49,6 +53,11 @@ jobs:
           tar czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.NAME }}.tar.gz
 
       - name: Release notes from CHANGELOG.md
         run: |
