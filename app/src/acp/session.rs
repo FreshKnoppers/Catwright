@@ -483,29 +483,85 @@ impl SessionView {
     }
 
     /// Retention bound of one session's transcript (audit N1): the child
-    /// drives every byte of it, and its memory needs a bound. This one
-    /// counts ITEMS: past this many the oldest leave (the raw payloads
-    /// of each tool call are bounded separately, in `ToolCall`). What
-    /// it does not bound: the text of a single item — chunks of one
-    /// message id merge into one growing item — and a tool's `content`
-    /// list. Two thousand remaining items keep whole days of normal
-    /// work, and a trim only ever removes display memory — Vibe keeps
-    /// the authoritative history, a rewind restores from there.
+    /// drives every byte of it, and its memory needs a bound. Two bounds:
+    /// ITEMS (past this many the oldest leave) and BYTES (past this total
+    /// the oldest leave, too — a few huge items must not outgrow memory on
+    /// their own). The text of a single item and a tool's `content` list
+    /// are bounded separately at intake (`push_capped`, `ToolCall::apply`).
+    /// Two thousand remaining items keep whole days of normal work, and a
+    /// trim only ever removes display memory — Vibe keeps the
+    /// authoritative history, a rewind restores from there.
     const MAX_RETAINED_ITEMS: usize = 4_000;
     /// How many items survive a trim.
     const RETAINED_KEEP_ITEMS: usize = 2_000;
+    /// Total approximate bytes the retained transcript may hold.
+    const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Approximate retained size of the transcript in bytes (estimates:
+    /// text lengths plus each tool call's [`ToolCall::approx_bytes`]).
+    pub fn approx_bytes(&self) -> usize {
+        let mut n: usize = self
+            .items
+            .iter()
+            .map(|i| match i {
+                Item::User { text, .. } | Item::Agent { text, .. } | Item::Thought { text, .. } => {
+                    text.len()
+                }
+                Item::Tool(id) => self
+                    .tool_calls
+                    .get(id)
+                    .map(|t| t.approx_bytes())
+                    .unwrap_or(0),
+                Item::Plan => 0,
+            })
+            .sum();
+        n += self.plan.iter().map(|e| e.content.len()).sum::<usize>();
+        n
+    }
 
     /// Drop the oldest items once the transcript outgrew the retention
-    /// bound. The same forgetting rules as `cut_items` apply (tools still
-    /// referenced stay, plan entries without their item go), `turn_start`
-    /// shifts with the items, and the count feeds the transcript's hint.
-    /// One visible cost: the folding keys of pre-trim rounds change, so
-    /// their fold state resets — once, when the trim happened.
+    /// bound — first by count, then by total bytes. The same forgetting
+    /// rules as `cut_items` apply (tools still referenced stay, plan
+    /// entries without their item go), `turn_start` shifts with the items,
+    /// and the count feeds the transcript's hint. One visible cost: the
+    /// folding keys of pre-trim rounds change, so their fold state resets —
+    /// once, when the trim happened.
     fn trim_front(&mut self) {
-        if self.items.len() <= Self::MAX_RETAINED_ITEMS {
-            return;
+        if self.items.len() > Self::MAX_RETAINED_ITEMS {
+            let remove = self.items.len() - Self::RETAINED_KEEP_ITEMS;
+            self.drain_front(remove);
         }
-        let remove = self.items.len() - Self::RETAINED_KEEP_ITEMS;
+        let bytes = self.approx_bytes();
+        if bytes > Self::MAX_RETAINED_BYTES {
+            // one pass: how many oldest items must go to get under the
+            // byte budget (their sizes are known without re-walking)
+            let mut remove = 0;
+            let mut acc = 0;
+            for i in &self.items {
+                if bytes - acc <= Self::MAX_RETAINED_BYTES || remove >= self.items.len() - 1 {
+                    break;
+                }
+                acc += match i {
+                    Item::User { text, .. }
+                    | Item::Agent { text, .. }
+                    | Item::Thought { text, .. } => text.len(),
+                    Item::Tool(id) => self
+                        .tool_calls
+                        .get(id)
+                        .map(|t| t.approx_bytes())
+                        .unwrap_or(0),
+                    Item::Plan => 0,
+                };
+                remove += 1;
+            }
+            if remove > 0 {
+                self.drain_front(remove);
+            }
+        }
+    }
+
+    /// Remove the `remove` oldest items, with the forgetting rules of a trim.
+    fn drain_front(&mut self, remove: usize) {
         self.items.drain(..remove);
         self.trimmed_front = self.trimmed_front.saturating_add(remove as u32);
         let keep: std::collections::HashSet<&String> = self
@@ -861,16 +917,39 @@ impl SessionView {
         if append {
             if let Some(last) = self.items.last_mut() {
                 if let Some(t) = last.text_mut() {
-                    t.push_str(text);
+                    push_capped(t, text);
                 }
             }
         } else {
             let mut item = new_item;
             if let Some(t) = item.text_mut() {
-                t.push_str(text);
+                push_capped(t, text);
             }
             self.items.push(item);
         }
+    }
+}
+
+/// How large one item's text may grow (flood hardening): a child streaming
+/// chunks of one message id merges them into a single item — without this
+/// cap that one String grows without bound.
+const MAX_ITEM_TEXT_BYTES: usize = 512 * 1024;
+
+/// Append `text` to `t`, cutting at a char boundary once the item's cap is
+/// reached (a marker says so). Without the boundary walk `truncate` could
+/// split a multi-byte char and panic.
+fn push_capped(t: &mut String, text: &str) {
+    if t.len() >= MAX_ITEM_TEXT_BYTES {
+        return;
+    }
+    t.push_str(text);
+    if t.len() > MAX_ITEM_TEXT_BYTES {
+        let mut end = MAX_ITEM_TEXT_BYTES;
+        while end > 0 && !t.is_char_boundary(end) {
+            end -= 1;
+        }
+        t.truncate(end);
+        t.push_str("… [truncated]");
     }
 }
 

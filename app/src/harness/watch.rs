@@ -179,7 +179,15 @@ impl Watcher {
     }
 
     /// The last known git state of `dir`; re-reads it when it is stale.
-    pub fn git(&mut self, dir: &Path) -> Option<&GitInfo> {
+    /// Only `trusted` folders are scanned: until Vibe reports the folder as
+    /// trusted, running git in it is not acceptable — the folder may be a
+    /// malicious download that ships its own `.git/config` (filter drivers,
+    /// fsmonitor; both executable by git). Callers pass
+    /// `trust.get(dir).is_some_and(|t| t.trusted)`.
+    pub fn git(&mut self, dir: &Path, trusted: bool) -> Option<&GitInfo> {
+        if !trusted {
+            return None;
+        }
         let stale = self
             .git_asked
             .get(dir)
@@ -246,24 +254,26 @@ impl Watcher {
 /// success, else the first line of git's stderr (or what went wrong).
 /// Meant for a background thread; never call it on the UI thread.
 pub(crate) fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    // The repository's own config must not run code on our calls.
+    // Overridden here, on the command line (which beats .git/config):
+    // `core.fsmonitor` — executable at scan time (verified against
+    // git 2.56: `worktree add` calls it even under
+    // `--no-optional-locks`) — the hook directory, so a `worktree add`
+    // cannot run the repo's post-checkout hook (verified: `/dev/null`
+    // suppresses it), and every filter driver the repo's own
+    // `.git/config` defines: a folder shipped as zip/tarball can carry
+    // one, and `worktree add` would run its smudge filter on checkout
+    // (PoC-verified against git 2.56; `cat`/empty-`process` neutralize).
+    let mut all = filter_neutralizers(&local_filter_drivers(dir));
+    all.extend(args.iter().map(|s| s.to_string()));
     let mut child = Command::new("git")
-        // The repository's own config must not run code on our calls.
-        // Overridden here, on the command line (which beats .git/config):
-        // `core.fsmonitor` — executable at scan time (verified against
-        // git 2.56: `worktree add` calls it even under
-        // `--no-optional-locks`) — and the hook directory, so a
-        // `worktree add` cannot run the repo's post-checkout hook
-        // (verified: `/dev/null` suppresses it). Not covered by this:
-        // smudge/clean filters on checkout, which a working tree needs
-        // to work — those stay the repo's own, and their .gitattributes
-        // are the same privilege as the files they live in.
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
         .arg("-C")
         .arg(dir)
-        .args(args)
+        .args(&all)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
@@ -337,14 +347,108 @@ pub(crate) fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
     git_output_bounded(dir, args, GIT_TIMEOUT)
 }
 
+/// Filter drivers defined in the repo's own `.git/config`
+/// (`filter.<name>.clean|smudge|process|required`). Probed with
+/// `git config --local --get-regexp`, which only reads config files and runs
+/// no repo code. A folder that ships its own `.git` (zip/tarball/shared
+/// directory — `git clone` never copies `.git/config`) can define these,
+/// and `git status` then executes the clean driver on racy-clean entries.
+/// Verified against git 2.56: with `--no-optional-locks` the index is never
+/// refreshed, so the filter runs on *every* scan, not just the first.
+pub fn local_filter_drivers(dir: &Path) -> Vec<String> {
+    match git_raw(
+        dir,
+        &["config", "--local", "--get-regexp", r"^filter\."],
+        GIT_TIMEOUT,
+    ) {
+        Some(out) => parse_filter_drivers(&out),
+        None => Vec::new(),
+    }
+}
+
+/// Parse `git config --get-regexp` output into the distinct driver names.
+/// Lines look like `filter.<name>.<key> <value>`: the value may itself
+/// contain dots, so the head is cut at the first space first; the key is
+/// then the part of the head after its *last* dot (the subsection may
+/// contain dots).
+pub fn parse_filter_drivers(out: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in out.lines() {
+        let Some(rest) = line.strip_prefix("filter.") else {
+            continue;
+        };
+        let Some((head, _value)) = rest.split_once(' ') else {
+            continue;
+        };
+        let Some((name, key)) = head.rsplit_once('.') else {
+            continue;
+        };
+        if matches!(key, "clean" | "smudge" | "process" | "required")
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// Command-line overrides that neutralize each driver: `cat` passes content
+/// through unchanged, an empty `process` disables the long-running filter
+/// process (both verified against git 2.56). A command-line `-c` beats
+/// `.git/config`, so the repo's own filter command never runs.
+pub fn filter_neutralizers(drivers: &[String]) -> Vec<String> {
+    let mut args = Vec::new();
+    for d in drivers {
+        for key in ["clean", "smudge"] {
+            args.push("-c".to_string());
+            args.push(format!("filter.{d}.{key}=cat"));
+        }
+        args.push("-c".to_string());
+        args.push(format!("filter.{d}.process="));
+    }
+    args
+}
+
+/// Default stdout cap for one git call: a scan's answer is small; anything
+/// bigger (a huge blob from `git show`) counts as "none" instead of
+/// becoming a huge String on the caller's thread.
+const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
+/// `git_output` with a probe first: every call neutralizes the repo's own
+/// filter drivers, because `status` executes `filter.<name>.clean` on
+/// racy-clean entries and `worktree add` runs smudge filters on checkout
+/// (PoC-verified against git 2.56).
 fn git_output_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    let mut all = filter_neutralizers(&local_filter_drivers(dir));
+    all.extend(args.iter().map(|s| s.to_string()));
+    git_raw_bounded(dir, &all, timeout, MAX_GIT_OUTPUT_BYTES)
+}
+
+/// `git_output` with an explicit stdout cap (and the same filter probe).
+pub fn git_output_sized(dir: &Path, args: &[&str], max_bytes: usize) -> Option<String> {
+    let mut all = filter_neutralizers(&local_filter_drivers(dir));
+    all.extend(args.iter().map(|s| s.to_string()));
+    git_raw_bounded(dir, &all, GIT_TIMEOUT, max_bytes)
+}
+
+/// The probe itself: `git config` reads config files only, so it needs no
+/// neutralizers (and must not probe again — no recursion).
+fn git_raw(dir: &Path, args: &[&str], timeout: Duration) -> Option<String> {
+    let all: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    git_raw_bounded(dir, &all, timeout, MAX_GIT_OUTPUT_BYTES)
+}
+
+fn git_raw_bounded(
+    dir: &Path,
+    args: &[String],
+    timeout: Duration,
+    max_bytes: usize,
+) -> Option<String> {
     let mut child = Command::new("git")
         // see run_git: repo config must not execute on the scans —
         // `core.fsmonitor` runs on `ls-files`/`status` despite
-        // `--no-optional-locks` (verified against git 2.56). Not covered
-        // here: `status` may run the repo's clean filter on worktree
-        // files whose index entry looks racy-clean — that filter is part
-        // of how the worktree reports itself, so the lookup lets it.
+        // `--no-optional-locks` (verified against git 2.56). Filter
+        // drivers are neutralized by the caller (git_output_bounded).
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-C")
@@ -359,38 +463,59 @@ fn git_output_bounded(dir: &Path, args: &[&str], timeout: Duration) -> Option<St
         .spawn()
         .ok()?;
     // stdout is drained while waiting: a big `git status` must not block
-    // on a full pipe until the timeout (same pipe shape as script.rs)
+    // on a full pipe until the timeout (same pipe shape as script.rs). The
+    // read itself is capped at `max_bytes + 1`: one byte over the cap proves
+    // the output was truncated, and then the child (blocked on a full pipe)
+    // is killed at once instead of running until the deadline.
     let stdout = child.stdout.take()?;
     let (reader_tx, reader_rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         let mut out = String::new();
-        let _ = std::io::Read::read_to_string(&mut std::io::BufReader::new(stdout), &mut out);
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut limited = std::io::Read::take(&mut reader, max_bytes as u64 + 1);
+        let _ = std::io::Read::read_to_string(&mut limited, &mut out);
         let _ = reader_tx.send(out);
     });
     let deadline = Instant::now() + timeout;
+    let mut received: Option<String> = None;
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return None;
-                }
-                // The child exited and the pipe should hit EOF any moment,
-                // but a grandchild holding the write end keeps it open (see
-                // above): the receive is bounded by the remaining budget,
-                // so even that case returns instead of hanging.
-                let rest = deadline.saturating_duration_since(Instant::now());
-                return reader_rx.recv_timeout(rest).ok();
+        if received.is_none() {
+            // The child exited and the pipe should hit EOF any moment, but
+            // a grandchild holding the write end keeps it open (see above):
+            // the receive is bounded by the remaining budget, so even that
+            // case returns instead of hanging.
+            let rest = deadline.saturating_duration_since(Instant::now());
+            if rest.is_zero() {
+                break;
             }
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+            match reader_rx.recv_timeout(rest) {
+                Ok(s) => received = Some(s),
+                Err(_) => break,
             }
         }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let out = received.take().unwrap_or_default();
+                if !status.success() || out.len() > max_bytes {
+                    return None;
+                }
+                return Some(out);
+            }
+            Ok(None) => {
+                if received.as_ref().is_some_and(|s| s.len() > max_bytes) {
+                    break; // reader hit the cap, child still writing: kill now
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
     }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 /// Tracked and untracked-but-not-ignored files of a git repository, else a
@@ -698,5 +823,137 @@ mod tests {
             let root = info.root.expect("a repository has a root");
             assert!(Path::new(env!("CARGO_MANIFEST_DIR")).starts_with(&root));
         }
+    }
+
+    #[test]
+    fn parse_filter_drivers_reads_names_with_dots_in_subsection() {
+        // the value may contain dots — the head is cut at the first space
+        let out = "filter.pwn.clean sh -c evil.sh --flag\n\
+                   filter.pwn.smudge cat\n\
+                   filter.pwn.required false\n\
+                   filter.a.b.clean cat\n\
+                   core.fsmonitor true\n";
+        assert_eq!(parse_filter_drivers(out), vec!["pwn", "a.b"]);
+        assert!(parse_filter_drivers("").is_empty());
+    }
+
+    #[test]
+    fn filter_neutralizers_cover_clean_smudge_and_process() {
+        let args = filter_neutralizers(&["pwn".to_string(), "a.b".to_string()]);
+        assert_eq!(
+            args,
+            vec![
+                "-c",
+                "filter.pwn.clean=cat",
+                "-c",
+                "filter.pwn.smudge=cat",
+                "-c",
+                "filter.pwn.process=",
+                "-c",
+                "filter.a.b.clean=cat",
+                "-c",
+                "filter.a.b.smudge=cat",
+                "-c",
+                "filter.a.b.process=",
+            ]
+        );
+    }
+
+    /// PoC regression: a repo that ships its own `.git/config` with a clean
+    /// filter must not execute it when we scan — `git status` would run it
+    /// on racy-clean entries, and `--no-optional-locks` keeps the entries
+    /// racy forever. The filter writes a marker file; the scan must not.
+    #[test]
+    fn status_scan_does_not_run_a_shipped_clean_filter() {
+        let base = tmp_base("filter-poc");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        git(&["init", "-q", "."]);
+        let marker = base.join("marker");
+        git(&[
+            "config",
+            "--local",
+            "filter.pwn.clean",
+            &format!("sh -c 'echo PWNED > {}'", marker.display()),
+        ]);
+        git(&["config", "--local", "filter.pwn.required", "false"]);
+        std::fs::write(repo.join(".gitattributes"), "* filter=pwn\n").unwrap();
+        std::fs::write(repo.join("file.txt"), "hello\n").unwrap();
+        git(&["add", ".gitattributes", "file.txt"]);
+        // `git add` itself runs the clean filter — drop its marker, the
+        // assertion below is about OUR scan only
+        let _ = std::fs::remove_file(&marker);
+        // entries added just now are racy-clean (entry mtime == index mtime),
+        // so `status` re-checks their content through the clean filter; with
+        // `--no-optional-locks` the refreshed stat is never written back and
+        // they stay racy forever
+
+        // the probe sees the driver …
+        let drivers = local_filter_drivers(&repo);
+        assert_eq!(drivers, vec!["pwn"]);
+        // … and our scan runs `status` with the filter neutralized
+        let out = git_output(&repo, &["status", "--porcelain", "-z"]);
+        assert!(out.is_some(), "status still answers");
+        assert!(
+            !marker.exists(),
+            "the shipped clean filter must not have run (marker exists)"
+        );
+        // sanity: without the neutralizer the filter WOULD run (the PoC)
+        let _ = std::fs::remove_file(&marker);
+        git(&["status", "--porcelain"]);
+        assert!(
+            marker.exists(),
+            "PoC premise: plain git status runs the filter"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The watcher must not run any git scan in a folder that is not
+    /// trusted, and must start scanning once it is.
+    #[test]
+    fn git_scan_requires_trust() {
+        let base = tmp_base("trust-gate");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "-q", "."])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let mut w = Watcher::default();
+        assert!(w.git(&repo, false).is_none(), "untrusted: no scan result");
+        w.poll();
+        std::thread::sleep(Duration::from_millis(100));
+        w.poll();
+        assert!(
+            w.git(&repo, false).is_none(),
+            "untrusted: the scan must not even have been started"
+        );
+        assert!(w.git(&repo, true).is_none(), "first call starts the scan");
+        let mut tries = 0;
+        while w.git(&repo, true).is_none() && tries < 100 {
+            w.poll();
+            std::thread::sleep(Duration::from_millis(20));
+            tries += 1;
+        }
+        assert!(w.git(&repo, true).is_some(), "trusted: the scan ran");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

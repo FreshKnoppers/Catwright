@@ -108,6 +108,17 @@ pub enum Confirm {
         session_id: String,
         count: usize,
     },
+    /// Previewing a path that resolves outside the session's workspace
+    /// (agent-named tool/diff paths can point anywhere on disk): the read
+    /// itself is capped, but the user decides whether to look at all.
+    PreviewOutside {
+        session_id: Option<String>,
+        path: PathBuf,
+        diff: bool,
+        /// The pick came from the Artefakte view (select it there instead of
+        /// opening the side preview pane).
+        artifacts: bool,
+    },
 }
 
 /// The worktree-create dialog: optional start ref (branch, tag or commit).

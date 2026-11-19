@@ -861,7 +861,9 @@ fn environment_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     let git = if is_chat {
         None
     } else {
-        h.watcher.git(&cwd).cloned()
+        // git scans only run in folders Vibe reported as trusted
+        let trusted = trust.as_ref().is_some_and(|t| t.trusted);
+        h.watcher.git(&cwd, trusted).cloned()
     };
     let mut fork = false;
     card(

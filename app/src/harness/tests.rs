@@ -82,7 +82,13 @@ fn setup(projects: Vec<PathBuf>, start_mode: &str) -> (Harness, Agent) {
 }
 
 fn new_session_result(sid: &str) -> proto::NewSessionResult {
-    serde_json::from_value(json!({"sessionId": sid})).unwrap()
+    // like the real vibe-acp for a trusted folder: `_meta.workspace_trust`
+    // (the harness only runs its background git scans in trusted folders)
+    serde_json::from_value(json!({
+        "sessionId": sid,
+        "_meta": {"workspace_trust": {"status": "trusted", "details": {}}}
+    }))
+    .unwrap()
 }
 
 /// session/new result that reports a ModeState (like the real vibe-acp).
@@ -4077,10 +4083,14 @@ fn open_preview_resolves_relative_paths_against_the_session() {
 }
 
 /// Paths that resolve outside the session's workspace (a `..`, an absolute
-/// path elsewhere, a symlink pointing out) set `outside_workspace`, so the
-/// preview header can show the badge; inside paths leave it clear.
+/// path elsewhere, a symlink pointing out) do not open the preview directly:
+/// they raise `Confirm::PreviewOutside` first (the agent names these paths,
+/// so reading e.g. a key file into the UI needs a deliberate user decision).
+/// Confirming opens the preview with `outside_workspace` set, so the header
+/// still shows the badge; inside paths open right away with the flag clear.
 #[test]
-fn open_preview_flags_paths_outside_the_workspace() {
+fn open_preview_asks_before_paths_outside_the_workspace() {
+    use crate::harness::state::Confirm;
     let base = std::env::temp_dir().join(format!("cw-prev-outside-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let ws = base.join("ws");
@@ -4093,18 +4103,53 @@ fn open_preview_flags_paths_outside_the_workspace() {
     h.sessions
         .insert("s1".to_string(), SessionView::new("s1", ws.clone()));
     let flag = |h: &Harness| h.ui.preview.as_ref().map(|p| p.outside_workspace);
+    let confirm_path = |h: &Harness| match &h.ui.confirm {
+        Some(Confirm::PreviewOutside { path, .. }) => Some(path.clone()),
+        _ => None,
+    };
     h.open_preview("s1", "inside.txt");
     assert_eq!(flag(&h), Some(false), "a file inside the workspace");
-    h.open_preview("s1", "../outside.txt");
-    assert_eq!(flag(&h), Some(true), "a .. path escaping the workspace");
-    h.open_preview("s1", outside.to_string_lossy().as_ref());
-    assert_eq!(
-        flag(&h),
-        Some(true),
-        "an absolute path outside the workspace"
+    assert!(h.ui.confirm.is_none(), "no confirm for an inside path");
+    for (label, arg) in [
+        ("a .. path escaping the workspace", "../outside.txt"),
+        (
+            "an absolute path outside the workspace",
+            outside.to_string_lossy().as_ref(),
+        ),
+        ("a symlink pointing outside", "link.txt"),
+    ] {
+        h.ui.preview = None;
+        h.open_preview("s1", arg);
+        let Some(p) = confirm_path(&h) else {
+            panic!("{label}: no PreviewOutside confirm, got {:?}", h.ui.confirm);
+        };
+        assert!(
+            crate::render::is_outside_workspace(&ws, &p),
+            "{label}: the confirmed path really is outside"
+        );
+        assert!(h.ui.preview.is_none(), "{label}: nothing opened yet");
+        // the user confirms: the preview opens, flagged
+        let Some(Confirm::PreviewOutside {
+            session_id,
+            path,
+            diff,
+            ..
+        }) = h.ui.confirm.take()
+        else {
+            unreachable!()
+        };
+        h.preview_now(session_id.as_deref(), &path, diff);
+        assert_eq!(flag(&h), Some(true), "{label}: opened, flagged");
+    }
+    // the diff preview of an outside path asks as well
+    h.open_preview_diff(&outside);
+    assert!(
+        matches!(
+            h.ui.confirm,
+            Some(Confirm::PreviewOutside { diff: true, .. })
+        ),
+        "open_preview_diff on an outside path raises the confirm"
     );
-    h.open_preview("s1", "link.txt");
-    assert_eq!(flag(&h), Some(true), "a symlink pointing outside");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -5382,7 +5427,7 @@ fn feature_screenshots() {
     h.ui.preview = None;
     // the header's "N changed" menu (the git state arrives in the background)
     let mut tries = 0;
-    while h.watcher.git(&dir).is_none_or(|g| g.changed == 0) && tries < 100 {
+    while h.watcher.git(&dir, true).is_none_or(|g| g.changed == 0) && tries < 100 {
         h.watcher.poll();
         std::thread::sleep(std::time::Duration::from_millis(20));
         tries += 1;
@@ -5581,6 +5626,100 @@ fn feature_screenshots() {
             &["worktree", "remove", "--force", &wt.to_string_lossy()],
         );
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Render the hardening-pass UI states to PNGs when CATWRIGHT_SHOT_DIR is
+/// set (AGENTS.md "Seeing the UI"): the permission card with ALL arguments
+/// (scrollable, cut-count noted), the outside-workspace confirm dialog, and
+/// a ui block with a button (inline action line), a form (note) and a table
+/// past the render cap (truncation note).
+#[test]
+fn safety_ui_screenshots() {
+    let dir = std::env::temp_dir().join(format!("cw-safe-shots-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+
+    let shot = |h: &mut Harness, name: &str| {
+        let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+            let _ = crate::harness::ui::show(h, ctx);
+            crate::harness::ui::show_dialogs(h, ctx);
+        });
+        let bg = crate::theme::BG;
+        assert!(
+            img.pixels().any(|p| p.0[..3] != [bg.r(), bg.g(), bg.b()]),
+            "{name}: something was painted"
+        );
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            let p = std::path::Path::new(&out).join(format!("{name}.png"));
+            img.save(&p).unwrap();
+        }
+    };
+
+    // 1) a permission whose tool call has a command AND twelve more
+    //    arguments (plus one long value): the card must list them all
+    let mut raw = serde_json::Map::new();
+    raw.insert("command".into(), json!("rm -rf /tmp/x"));
+    for i in 0..12 {
+        raw.insert(format!("arg{i:02}"), json!(format!("value-{i}")));
+    }
+    raw.insert("secret".into(), json!("s".repeat(500)));
+    let tool_call = serde_json::from_value::<proto::SessionUpdate>(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Run command",
+        "kind": "execute",
+        "status": "pending",
+        "rawInput": Value::Object(raw),
+    }))
+    .unwrap();
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: tool_call,
+    });
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    shot(&mut h, "20-permission-all-args");
+    h.answer_permission("s1", &json!(0), "reject_once");
+
+    // 2) the outside-workspace confirm dialog
+    h.ui.confirm = Some(crate::harness::state::Confirm::PreviewOutside {
+        session_id: Some("s1".to_string()),
+        path: std::path::PathBuf::from("/home/tomm/.ssh/id_ed25519"),
+        diff: false,
+        artifacts: false,
+    });
+    shot(&mut h, "21-confirm-preview-outside");
+    h.ui.confirm = None;
+
+    // 3) a ui block with a button (inline action line) and a form (note)
+    let small_block = "```ui\n{\"type\":\"columns\",\"children\":[\
+        {\"type\":\"button\",\"label\":\"OK\",\"action\":\"yes, push --force\"},\
+        {\"type\":\"form\",\"submit\":\"Send\",\"fields\":[{\"name\":\"key\",\"label\":\"API key\",\"kind\":\"text\",\"value\":\"\"}]}\
+    ]}\n```";
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: agent_chunk("a1", small_block),
+    });
+    shot(&mut h, "22-ui-button-form");
+
+    // 4) a 300-row table: rendered capped, with the truncation note
+    let rows = (0..300)
+        .map(|i| format!("[\"r{i}\"]"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let big_table =
+        format!("```ui\n{{\"type\":\"table\",\"columns\":[\"n\"],\"rows\":[{rows}]}}\n```");
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: agent_chunk("a2", &big_table),
+    });
+    shot(&mut h, "23-ui-table-truncated");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -6174,12 +6313,16 @@ fn changed_files_open_as_a_commentable_preview_diff() {
     create_session(&mut h, &mut agent, &sub, "s1");
     h.active = Some("s1".to_string());
     let mut tries = 0;
-    while h.watcher.git(&sub).is_none_or(|g| g.changed == 0) && tries < 100 {
+    while h.watcher.git(&sub, true).is_none_or(|g| g.changed == 0) && tries < 100 {
         h.watcher.poll();
         std::thread::sleep(std::time::Duration::from_millis(20));
         tries += 1;
     }
-    let info = h.watcher.git(&sub).cloned().expect("git state arrives");
+    let info = h
+        .watcher
+        .git(&sub, true)
+        .cloned()
+        .expect("git state arrives");
     assert_eq!(info.changed, 2, "{info:?}");
 
     // the open menu: the file relative to the project, the one above it

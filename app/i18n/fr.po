@@ -1766,3 +1766,39 @@ msgstr "Hors de l'espace de travail"
 
 msgid "This file lies outside the session's workspace."
 msgstr "Ce fichier est hors de l'espace de travail de la session."
+
+msgid "Open file outside the workspace?"
+msgstr "Ouvrir un fichier hors de l'espace de travail ?"
+
+msgid "Show “{path}” in the preview? The path lies outside the session's workspace."
+msgstr "Afficher « {path} » dans l'aperçu ? Le chemin est en dehors de l'espace de travail de la session."
+
+msgid "Show"
+msgstr "Afficher"
+
+msgid "Table truncated: {rows} more rows, {cols} more columns not shown."
+msgstr "Tableau tronqué : {rows} lignes et {cols} colonnes de plus non affichées."
+
+msgid "Click again to send “{action}”"
+msgstr "Recliquer pour envoyer « {action} »"
+
+msgid "Sends: {action}"
+msgstr "Envoie : {action}"
+
+msgid "Click again to send “{submit}”"
+msgstr "Recliquer pour envoyer « {submit} »"
+
+msgid "On submit, the values above are sent to the agent."
+msgstr "À l'envoi, les valeurs ci-dessus sont transmises à l'agent."
+
+msgid "Arguments ({n})"
+msgstr "Arguments ({n})"
+
+msgid "… {n} values cut to {chars} characters"
+msgstr "… {n} valeurs tronquées à {chars} caractères"
+
+msgid "Script error: the evaluation process died."
+msgstr "Erreur de script : le processus d'évaluation est mort."
+
+msgid "The config folder is a symlink: {path}"
+msgstr "Le dossier de configuration est un lien symbolique : {path}"

@@ -113,6 +113,11 @@ fn file_state(path: &str) -> (bool, u64) {
             size,
         },
     );
+    // the keys are agent-controlled path strings: bound the map (wholesale
+    // clear at the cap, same pattern as render.rs's file_exists cache)
+    if cache.len() > 4096 {
+        cache.clear();
+    }
     (exists, size)
 }
 
@@ -202,7 +207,38 @@ fn cached_capped(path: &str) -> Preview {
             preview: preview.clone(),
         },
     );
+    // keys are agent-controlled paths and each entry can hold up to
+    // MAX_PREVIEW_BYTES: bound the map (wholesale clear at the cap)
+    if cache.len() > 64 {
+        cache.clear();
+    }
     preview
+}
+
+/// Capped lossy text read for previews that always render as text (the
+/// diff mode): the same handle-based caps as [`load_preview_capped`], so an
+/// uncapped `read_to_string` on an agent-named path is impossible there too.
+pub fn load_text_capped(path: &str) -> Preview {
+    match load_preview_capped(path, MAX_PREVIEW_BYTES) {
+        Preview::Image(bytes) => text_preview(bytes),
+        other => other,
+    }
+}
+
+/// `File::open` for preview reads that must never block on the open itself.
+/// On unix the open carries `O_NONBLOCK`, so a FIFO swapped in after the
+/// path's type check opens instantly instead of hanging the UI thread; the
+/// caller rejects it right after via the handle's `fstat`. Regular files
+/// ignore the flag, so their reads are unchanged.
+fn open_nonblock(path: &str) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(0o4000); // O_NONBLOCK
+    }
+    opts.open(path)
 }
 
 fn load_preview_capped(path: &str, cap: u64) -> Preview {
@@ -222,7 +258,10 @@ fn load_preview_capped(path: &str, cap: u64) -> Preview {
     // Reading without a size-check window (TOCTOU): open the file and read
     // at most `cap + 1` bytes through the very same handle, so a file that
     // grows between a `stat` and the read can no longer be loaded whole.
-    let file = match std::fs::File::open(path) {
+    // The open itself is non-blocking (see open_nonblock), so a FIFO raced
+    // in between the two checks cannot hang here either — the handle's
+    // fstat below rejects it.
+    let file = match open_nonblock(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Preview::Missing,
         Err(_) => return Preview::Unreadable,

@@ -83,7 +83,32 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
         h.artifacts_open = false;
     }
     if let Some(p) = pick {
-        h.artifact_selected = Some(p);
+        // an agent-named path can resolve outside its workspace: ask first
+        // (the read is capped, but e.g. a key file should not appear in the
+        // UI without a deliberate click)
+        let base = found
+            .iter()
+            .find(|a| a.path == p)
+            .map(|a| a.cwd.clone())
+            .or_else(|| h.current_project.clone());
+        let outside = base
+            .as_deref()
+            .map(|b| crate::render::is_outside_workspace(b, std::path::Path::new(&p)))
+            .unwrap_or(false);
+        if outside {
+            let session_id = found
+                .iter()
+                .find(|a| a.path == p)
+                .map(|a| a.session_id.clone());
+            h.ui.confirm = Some(crate::harness::state::Confirm::PreviewOutside {
+                session_id,
+                path: std::path::PathBuf::from(&p),
+                diff: false,
+                artifacts: true,
+            });
+        } else {
+            h.artifact_selected = Some(p);
+        }
     }
     egui::CentralPanel::default()
         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(20.0, 14.0)))
@@ -292,18 +317,30 @@ fn diff_content(
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs());
-    let key = (
-        path.to_string(),
-        mtime,
-        meta.as_ref().map(|m| m.len()).unwrap_or(0),
-    );
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    if len > artifacts::MAX_PREVIEW_BYTES {
+        // same notice as the code-mode preview: never read the whole file
+        notice(
+            ui,
+            &trf(
+                "Too large for the preview ({size}, max. {max}).",
+                &[
+                    ("size", &human_size(len)),
+                    ("max", &human_size(artifacts::MAX_PREVIEW_BYTES)),
+                ],
+            ),
+        );
+        return;
+    }
+    let key = (path.to_string(), mtime, len);
     let (old, current) = {
         let mut c = cache.lock().unwrap();
         if let Some(t) = c.get(&key) {
             t.clone()
         } else {
             // git runs in the workspace, or next to the file when it lies
-            // outside (a changed file above a sub-folder project)
+            // outside (a changed file above a sub-folder project); the
+            // call neutralizes the repo's own filter drivers (watch.rs)
             let dir = base
                 .filter(|b| std::path::Path::new(path).starts_with(b))
                 .map(|b| b.to_path_buf())
@@ -317,13 +354,23 @@ fn diff_content(
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| path.to_string());
-            // `HEAD:./path` is relative to the folder git runs in, plain
-            // `HEAD:path` to the repository root
-            let head = crate::harness::watch::git_output(&dir, &["rev-parse", "HEAD"]);
-            let old = head.filter(|h| !h.trim().is_empty()).and_then(|_| {
-                crate::harness::watch::git_output(&dir, &["show", &format!("HEAD:./{rel}")])
-            });
-            let current = std::fs::read_to_string(path).unwrap_or_default();
+            // one bounded call: `HEAD:./path` is relative to the folder git
+            // runs in; no commit yet or untracked file -> non-zero exit ->
+            // None. The output is capped at the preview size: a huge blob
+            // counts as "no old version" instead of a huge String on the
+            // UI thread.
+            let old = crate::harness::watch::git_output_sized(
+                &dir,
+                &["show", &format!("HEAD:./{rel}")],
+                artifacts::MAX_PREVIEW_BYTES as usize,
+            );
+            // capped, handle-based read — never a whole-file read_to_string
+            // on an agent-named path, never a blocking FIFO open (see
+            // artifacts::load_preview_capped / open_nonblock)
+            let current = match artifacts::load_text_capped(path) {
+                artifacts::Preview::Text(t) => t,
+                _ => String::new(),
+            };
             let entry = (old, current);
             c.insert(key.clone(), entry.clone());
             if c.len() > 64 {
