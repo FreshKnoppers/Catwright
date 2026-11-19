@@ -9,7 +9,7 @@ use crate::acp::session::{
     diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
 };
 use crate::diff::{self, LineKind, Segment};
-use crate::harness::state::{CommentEdit, DiffComment, TurnDiffView, TurnDiffs};
+use crate::harness::state::{CommentEdit, DiffComment, Narration, TurnDiffView, TurnDiffs};
 use crate::harness::{extras, stop_reason_note};
 use crate::i18n::{tr, trf};
 use crate::icons;
@@ -43,6 +43,9 @@ pub(crate) enum MessageOp {
         key: String,
         path: String,
     },
+    /// The speaker of the agent answer at this item position: read it aloud,
+    /// or stop the narration of the answer being read.
+    Narrate(usize),
 }
 
 pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
@@ -104,6 +107,7 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 });
             }
             MessageOp::SendComments { key, path } => send_comments(h, &key, &path),
+            MessageOp::Narrate(index) => h.toggle_narration(sid, index),
         }
     }
     // the pills of the NEXT frame jump to the positions this frame drew
@@ -212,6 +216,8 @@ fn render_items(
         turn_started,
         retrying,
         last_turn_secs,
+        voice_narration,
+        narration,
         ui: h_ui,
         ..
     } = h;
@@ -336,6 +342,8 @@ fn render_items(
                 form_values,
                 scripts,
                 ops,
+                voice_narration: *voice_narration,
+                narration,
             };
             render_range(&mut ctx, ui, s, &groups, round.range.clone());
             // painted where the tool calls would be; without any tool call
@@ -371,6 +379,8 @@ fn render_items(
             form_values,
             scripts,
             ops,
+            voice_narration: *voice_narration,
+            narration,
         };
         render_range(&mut ctx, ui, s, &groups, range);
         // the files this round changed, under its user message (also under
@@ -428,6 +438,11 @@ struct ItemCtx<'a, 'c> {
     form_values: &'a mut HashMap<String, String>,
     scripts: &'a mut HashMap<String, crate::script::ScriptTool>,
     ops: &'a mut Vec<MessageOp>,
+    /// The speaker buttons are shown (Settings → General → Read answers
+    /// aloud).
+    voice_narration: bool,
+    /// The answer being read aloud, if any.
+    narration: &'a Narration,
 }
 
 /// Draw `items[range]`, tool calls through their groups. Ranges start at a
@@ -520,7 +535,7 @@ fn render_range(
                     );
                 }
             }
-            Item::Agent { text, .. } => {
+            Item::Agent { text, message_id } => {
                 let blocks = crate::markdown::parse_cached(text);
                 let top = ui.cursor().top();
                 // path-like words naming a file of the session's workspace
@@ -538,7 +553,11 @@ fn render_range(
                 for p in chip_opens {
                     ctx.ops.push(MessageOp::OpenFile(p));
                 }
-                agent_actions(ui, top, text);
+                let reading = ctx.narration.is_answer(ctx.sid, message_id.as_deref(), i);
+                let speaker = speaker_button(ctx.voice_narration, reading);
+                if agent_actions(ui, top, text, speaker) {
+                    ctx.ops.push(MessageOp::Narrate(i));
+                }
             }
             Item::Thought { text, message_id } => {
                 let streaming = ctx.running && i + 1 == s.items.len();
@@ -964,12 +983,69 @@ fn attachment_rows(
     }
 }
 
-/// Copy button in the top right corner of an agent answer while hovered.
-fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str) {
+/// The speaker button of one agent answer: `None` while the setting is off.
+/// The tooltip says what a click does; the icon is ORANGE while this answer
+/// is being read, and then the button stays visible without hovering.
+pub(crate) fn speaker_button(voice_narration: bool, reading: bool) -> Option<SpeakerButton> {
+    if !voice_narration {
+        return None;
+    }
+    Some(if reading {
+        SpeakerButton {
+            icon: Icon::Stop,
+            tooltip: tr("Stop reading"),
+            color: theme::ORANGE,
+            pinned: true,
+        }
+    } else {
+        SpeakerButton {
+            icon: Icon::Speaker,
+            tooltip: tr("Read aloud"),
+            color: theme::MUTED,
+            pinned: false,
+        }
+    })
+}
+
+/// The speaker button of one agent answer, as `agent_actions` draws it.
+pub(crate) struct SpeakerButton {
+    pub icon: Icon,
+    pub tooltip: &'static str,
+    pub color: egui::Color32,
+    /// Shown permanently instead of only while the answer is hovered.
+    pub pinned: bool,
+}
+
+/// Copy button in the top right corner of an agent answer while hovered, and
+/// left of it the speaker (with the setting on). Returns true when the
+/// speaker was clicked; the caller decides what that means.
+fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str, speaker: Option<SpeakerButton>) -> bool {
     let bottom = ui.cursor().top();
     let right = ui.max_rect().right();
     let body = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(right, bottom));
-    if ui.rect_contains_pointer(body) {
+    let hovered = ui.rect_contains_pointer(body);
+    let mut clicked = false;
+    // The speaker keeps its place left of the copy button, so it does not
+    // jump away from the pointer when the hover actions appear; while the
+    // answer is read it is shown without hovering.
+    if let Some(speaker) = speaker {
+        if hovered || speaker.pinned {
+            let r = Rect::from_min_size(pos2(right - 44.0, top), vec2(22.0, 22.0));
+            if widgets::place(
+                ui,
+                r,
+                IconButton::new(speaker.icon, speaker.tooltip)
+                    .side(22.0)
+                    .color(speaker.color)
+                    .fill(theme::BG),
+            )
+            .clicked()
+            {
+                clicked = true;
+            }
+        }
+    }
+    if hovered {
         let r = Rect::from_min_size(pos2(right - 22.0, top), vec2(22.0, 22.0));
         if widgets::place(
             ui,
@@ -983,6 +1059,7 @@ fn agent_actions(ui: &mut egui::Ui, top: f32, text: &str) {
             ui.ctx().copy_text(text.to_string());
         }
     }
+    clicked
 }
 
 #[allow(clippy::too_many_arguments)]

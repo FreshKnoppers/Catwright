@@ -1736,3 +1736,27 @@ msgstr "Das Diktat konnte nicht gestartet werden."
 
 msgid "Voice dictation could not be stopped."
 msgstr "Das Diktat konnte nicht beendet werden."
+
+msgid "Read answers aloud"
+msgstr "Antworten vorlesen"
+
+msgid "Shows a speaker button on Vibe's answers. Vibe summarises the answer in a few sentences and Mistral speaks it (an extra request on your plan)."
+msgstr "Zeigt einen Lautsprecher-Knopf an Vibes Antworten. Vibe fasst die Antwort in wenigen Sätzen zusammen, Mistral spricht sie (eine zusätzliche Anfrage über dein Abo)."
+
+msgid "Read every answer automatically"
+msgstr "Jede Antwort automatisch vorlesen"
+
+msgid "When a turn of the open session ends, its answer is read aloud."
+msgstr "Wenn ein Durchlauf des geöffneten Verlaufs endet, wird seine Antwort vorgelesen."
+
+msgid "Read aloud"
+msgstr "Vorlesen"
+
+msgid "Stop reading"
+msgstr "Vorlesen beenden"
+
+msgid "The answer could not be read aloud."
+msgstr "Die Antwort konnte nicht vorgelesen werden."
+
+msgid "Vibe did not start reading aloud."
+msgstr "Vibe hat das Vorlesen nicht gestartet."

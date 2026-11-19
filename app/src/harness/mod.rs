@@ -27,8 +27,8 @@ use extras::{
 };
 use serde_json::{json, Value};
 use state::{
-    ActivityEvent, ActivityKind, Dictation, PreviewMode, PreviewState, QueuedPrompt, TurnDiffView,
-    TurnDiffs, UiState,
+    ActivityEvent, ActivityKind, Dictation, Narration, NarrationTarget, PreviewMode, PreviewState,
+    QueuedPrompt, TurnDiffView, TurnDiffs, UiState,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -199,6 +199,23 @@ pub struct Harness {
     /// in vibe-acp (Vibe's voice needs one): the session/new for this
     /// project is in flight, and the transcription starts once it answers.
     dictation_session: Option<PathBuf>,
+    /// Mirror of Settings::voice_narration, refreshed by the app shell every
+    /// frame: the transcript shows the speaker buttons only while it is on.
+    pub voice_narration: bool,
+    /// Mirror of Settings::auto_narrate: read every finished answer of the
+    /// session on screen aloud.
+    pub auto_narrate: bool,
+    /// The answer being read aloud (Vibe summarises, speaks and plays it).
+    pub narration: Narration,
+    /// `_voice/narrationPrep` arrived for the current narration. Only then do
+    /// done/error belong to it: before, they are the late reports of a
+    /// narration that was replaced or cancelled (Vibe reports those, and a
+    /// cancel may even report done twice).
+    narration_prepared: bool,
+    /// When `_voice/narrate` went out: Vibe starts nothing (and reports
+    /// nothing) when it cannot summarise or speak, so a narration without a
+    /// prep after `NARRATION_PREP_TIMEOUT` is given up.
+    narration_since: Option<Instant>,
     /// Whether the window has focus (refreshed by the app shell every
     /// frame). Notifications only fire while it does not.
     pub window_focused: bool,
@@ -359,6 +376,11 @@ impl Harness {
             dictation: Dictation::Idle,
             dictation_first_delta: false,
             dictation_session: None,
+            voice_narration: false,
+            auto_narrate: false,
+            narration: Narration::Idle,
+            narration_prepared: false,
+            narration_since: None,
             window_focused: true,
             pending_notify: Vec::new(),
             prompt_on_ready: None,
@@ -485,6 +507,7 @@ impl Harness {
     /// Drain all pending events into `handle_event`.
     pub fn poll(&mut self) {
         self.watcher.poll();
+        self.expire_narration(Instant::now());
         self.poll_worktree();
         self.poll_worktree_delete();
         // Start watchdog (review M6): a child that lives but never answers
@@ -875,6 +898,37 @@ impl Harness {
                     self.append_dictation(&text);
                 }
             }
+            AcpEvent::NarrationStarted { ok, error } => {
+                // a failed start ends the narration; a late answer to a
+                // narration cancelled meanwhile is stale and changes nothing
+                if !ok && matches!(self.narration, Narration::Narrating(_)) {
+                    self.end_narration();
+                    self.status =
+                        error.unwrap_or_else(|| tr("The answer could not be read aloud.").into());
+                }
+            }
+            // the state already went Idle when the cancel went out
+            AcpEvent::NarrationCancelled => {}
+            // Vibe is summarising the current narration: from now on its
+            // done/error count (the button already shows the stop state)
+            AcpEvent::NarrationPrep => {
+                if matches!(self.narration, Narration::Narrating(_)) {
+                    self.narration_prepared = true;
+                }
+            }
+            // before the prep, done/error are late reports of a replaced or
+            // cancelled narration and must not end the current one
+            AcpEvent::NarrationDone => {
+                if self.narration_prepared {
+                    self.end_narration();
+                }
+            }
+            AcpEvent::NarrationError { error } => {
+                if self.narration_prepared {
+                    self.end_narration();
+                    self.status = error;
+                }
+            }
             AcpEvent::Retrying {
                 session_id,
                 category,
@@ -937,6 +991,22 @@ impl Harness {
                 if let Some(v) = self.sessions.get_mut(&session_id) {
                     v.finish_turn(&result);
                     cwd = Some(v.cwd.clone());
+                }
+                // Read every answer aloud (Settings → General): only the
+                // session on screen, and only a turn that really ended — a
+                // cancelled or failed one has nothing to read.
+                if self.auto_narrate
+                    && self.voice_narration
+                    && result.stop_reason == StopReason::EndTurn
+                    && self.active.as_deref() == Some(session_id.as_str())
+                {
+                    let last_answer = self
+                        .sessions
+                        .get(&session_id)
+                        .and_then(|v| v.folded_rounds().last().and_then(|r| r.answer));
+                    if let Some(index) = last_answer {
+                        self.narrate_answer(&session_id, index);
+                    }
                 }
                 if let Some(dir) = &cwd {
                     self.watcher.invalidate_git(dir);
@@ -2477,6 +2547,8 @@ impl Harness {
 
     /// begin_turn + `session/prompt` for `sid` (queued and held prompts).
     fn send_prompt(&mut self, sid: &str, blocks: &[PromptBlock]) {
+        // a message goes out: the answer being read aloud stops here
+        self.cancel_narration();
         // a new turn clears the failed mark of the last one
         self.failed.remove(sid);
         // remember what is being sent: Vibe echoes the prompt back only on
@@ -2757,6 +2829,10 @@ impl Harness {
     /// one. A click while a request is in flight is ignored — its answer
     /// decides the next state.
     pub fn toggle_dictation(&mut self) {
+        // the microphone must not record the speech output
+        if self.dictation == Dictation::Idle {
+            self.cancel_narration();
+        }
         match self.dictation {
             Dictation::Idle if self.sessions.is_empty() => {
                 // Vibe records with the first session open in its process,
@@ -2805,6 +2881,91 @@ impl Harness {
         if matches!(self.dictation, Dictation::Starting | Dictation::Recording) {
             self.send_ext(ExtKind::VoiceTranscribeCancel);
             self.dictation = Dictation::Idle;
+        }
+    }
+
+    /// The speaker of one answer: read it aloud, or stop the narration of the
+    /// answer that is being read.
+    pub fn toggle_narration(&mut self, session_id: &str, index: usize) {
+        if self.narrating(session_id, index) {
+            self.cancel_narration();
+        } else {
+            self.narrate_answer(session_id, index);
+        }
+    }
+
+    /// Is the answer at `index` of `session_id` the one being read aloud?
+    pub fn narrating(&self, session_id: &str, index: usize) -> bool {
+        let Narration::Narrating(target) = &self.narration else {
+            return false;
+        };
+        let message_id = self
+            .sessions
+            .get(session_id)
+            .and_then(|v| v.items.get(index))
+            .and_then(|item| match item {
+                Item::Agent { message_id, .. } => message_id.as_deref(),
+                _ => None,
+            });
+        target.is(session_id, message_id, index)
+    }
+
+    /// Read one answer aloud: Vibe summarises it, speaks the summary through
+    /// Mistral and plays it. The user message of the round goes along, so the
+    /// summary can say what was asked; the answer text is the whole round's
+    /// agent text up to that answer.
+    pub fn narrate_answer(&mut self, session_id: &str, index: usize) {
+        let Some(view) = self.sessions.get(session_id) else {
+            return;
+        };
+        let Some((user_message, assistant_text)) = narration_texts(&view.items, index) else {
+            return;
+        };
+        let message_id = match &view.items[index] {
+            Item::Agent { message_id, .. } => message_id.clone(),
+            _ => None,
+        };
+        let target = NarrationTarget {
+            session_id: session_id.to_string(),
+            message_id,
+            index,
+        };
+        if self.send_ext(ExtKind::VoiceNarrate {
+            user_message,
+            assistant_text,
+        }) {
+            self.narration = Narration::Narrating(target);
+            self.narration_prepared = false;
+            self.narration_since = Some(Instant::now());
+        }
+    }
+
+    /// The narration is over (done, error, failed start, cancel).
+    fn end_narration(&mut self) {
+        self.narration = Narration::Idle;
+        self.narration_prepared = false;
+        self.narration_since = None;
+    }
+
+    /// Vibe answered `_voice/narrate` but never began (it starts nothing when
+    /// it cannot summarise or has no speech output): give up after
+    /// `NARRATION_PREP_TIMEOUT` instead of showing "stop" forever.
+    pub(crate) fn expire_narration(&mut self, now: Instant) {
+        let waiting = matches!(self.narration, Narration::Narrating(_)) && !self.narration_prepared;
+        if let (true, Some(since)) = (waiting, self.narration_since) {
+            if now.duration_since(since) >= NARRATION_PREP_TIMEOUT {
+                self.end_narration();
+                self.status = tr("Vibe did not start reading aloud.").to_string();
+            }
+        }
+    }
+
+    /// Stop the running narration: a message goes out, a dictation starts, the
+    /// setting is switched off, or the user clicked the stop button.
+    pub(crate) fn cancel_narration(&mut self) {
+        if matches!(self.narration, Narration::Narrating(_)) {
+            self.send_ext(ExtKind::VoiceNarrateCancel);
+            self.end_narration();
         }
     }
 
@@ -3337,6 +3498,9 @@ impl Harness {
             ExtKind::VoiceTranscribeStart { .. }
             | ExtKind::VoiceTranscribeStop
             | ExtKind::VoiceTranscribeCancel => {}
+            // likewise the narration answers (`NarrationStarted` /
+            // `NarrationCancelled`)
+            ExtKind::VoiceNarrate { .. } | ExtKind::VoiceNarrateCancel => {}
         }
     }
 
@@ -3381,6 +3545,16 @@ impl Harness {
                 self.dictation = Dictation::Idle;
                 return;
             }
+            // a narration request the wire rejected (an older Vibe without
+            // the extension, a broken pipe): the narration is over either way
+            ExtKind::VoiceNarrate { .. } => {
+                self.end_narration();
+                tr("Read aloud")
+            }
+            ExtKind::VoiceNarrateCancel => {
+                self.end_narration();
+                return;
+            }
             // background refreshes: an older Vibe or a busy session is no
             // reason to bother the user
             ExtKind::LoopsList { .. } | ExtKind::ReviewState { .. } => return,
@@ -3404,6 +3578,45 @@ impl Harness {
 // ---------------------------------------------------------------------------
 // pure helpers
 // ---------------------------------------------------------------------------
+
+/// The two texts `_voice/narrate` takes for the answer at `index`: the user
+/// message of its round (the nearest one before it) and the round's agent
+/// text up to that answer, joined with blank lines. `None` when `index` is no
+/// agent answer or there is no text to read.
+fn narration_texts(items: &[Item], index: usize) -> Option<(String, String)> {
+    if !matches!(items.get(index), Some(Item::Agent { .. })) {
+        return None;
+    }
+    let user_at = items[..index]
+        .iter()
+        .rposition(|i| matches!(i, Item::User { .. }));
+    let user_message = match user_at {
+        Some(at) => match &items[at] {
+            Item::User { text, .. } => text.clone(),
+            _ => String::new(),
+        },
+        // a transcript that starts with an answer (a trimmed front): the
+        // summary has only the answer to go on
+        None => String::new(),
+    };
+    let from = user_at.map_or(0, |at| at + 1);
+    let assistant_text = items[from..=index]
+        .iter()
+        .filter_map(|i| match i {
+            Item::Agent { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<&str>>()
+        .join("\n\n");
+    if assistant_text.is_empty() {
+        return None;
+    }
+    Some((user_message, assistant_text))
+}
+
+/// How long Vibe may take to begin a narration (its `_voice/narrationPrep`)
+/// before Catwright gives it up.
+const NARRATION_PREP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a worktree checkout may take (a big repository on a slow disk).
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);

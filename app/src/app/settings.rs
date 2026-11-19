@@ -361,6 +361,38 @@ impl App {
                 }
             },
         );
+        setting_row(
+            ui,
+            tr("Read answers aloud"),
+            tr("Shows a speaker button on Vibe's answers. Vibe summarises the answer in a few sentences and Mistral speaks it (an extra request on your plan)."),
+            |ui| {
+                let on = self.settings.voice_narration;
+                if widgets::toggle(ui, on, "").clicked() {
+                    self.settings.voice_narration = !on;
+                    self.harness.voice_narration = !on;
+                    if !on {
+                        // the button goes away: a running narration must not
+                        // keep playing without a way to stop it
+                        self.harness.cancel_narration();
+                    }
+                }
+            },
+        );
+        // only effective with the speaker buttons on, so it only shows with them
+        if self.settings.voice_narration {
+            setting_row(
+                ui,
+                tr("Read every answer automatically"),
+                tr("When a turn of the open session ends, its answer is read aloud."),
+                |ui| {
+                    let on = self.settings.auto_narrate;
+                    if widgets::toggle(ui, on, "").clicked() {
+                        self.settings.auto_narrate = !on;
+                        self.harness.auto_narrate = !on;
+                    }
+                },
+            );
+        }
         section(ui, tr("Config folder"));
         ui.horizontal(|ui| {
             if let Some(dir) = store::config_dir() {

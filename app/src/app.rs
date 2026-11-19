@@ -229,6 +229,8 @@ impl App {
         self.harness.window_focused = ctx.input(|i| i.focused);
         self.harness.notify_events = self.settings.notify_turn_events;
         self.harness.voice_dictation = self.settings.voice_dictation;
+        self.harness.voice_narration = self.settings.voice_narration;
+        self.harness.auto_narrate = self.settings.auto_narrate;
         self.harness.poll();
         // desktop notifications (opt-in, only while the window has no
         // focus); the bodies name the project only

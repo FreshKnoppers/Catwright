@@ -45,11 +45,12 @@ pub enum Icon {
     Pin,
     Clock,
     Mic,
+    Speaker,
 }
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 35] = [
+    pub const ALL: [Icon; 36] = [
         Icon::Plus,
         Icon::Search,
         Icon::Artifacts,
@@ -85,6 +86,7 @@ impl Icon {
         Icon::Pin,
         Icon::Clock,
         Icon::Mic,
+        Icon::Speaker,
     ];
 
     /// The bitmap: `#` = filled, `.` = empty.
@@ -194,6 +196,9 @@ impl Icon {
             ],
             Icon::Mic => [
                 "..###..", "..###..", "#.###.#", "#.###.#", ".#...#.", "..###..", "...#...",
+            ],
+            Icon::Speaker => [
+                "...#...", "..##.#.", "####..#", "####..#", "####..#", "..##.#.", "...#...",
             ],
         }
     }

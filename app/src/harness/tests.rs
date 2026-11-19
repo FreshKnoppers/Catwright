@@ -40,7 +40,7 @@ use super::*;
 use crate::acp::client::{AcpClient, SessionOrigin};
 use crate::acp::protocol as proto;
 use crate::acp::session::repeated_tool_call;
-use crate::harness::state::Dictation;
+use crate::harness::state::{Dictation, Narration, NarrationTarget};
 use crate::i18n::{tr_in, Lang};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -5454,6 +5454,43 @@ fn feature_screenshots() {
     shot(&mut h, "15b-dictation-recording");
     h.dictation = Dictation::Idle;
     h.voice_dictation = false;
+    // the speaker on an agent answer (Settings → General → Read answers
+    // aloud): the hover action while idle, and the stop button in ORANGE
+    // while the answer is being read
+    h.voice_narration = true;
+    let answer = h.sessions["s1"]
+        .folded_rounds()
+        .last()
+        .and_then(|r| r.answer)
+        .expect("the demo round has an answer");
+    {
+        // the pointer has to be over the answer for its hover actions
+        let h = &mut h;
+        let img = crate::softrender::render_ui_with(
+            [1440, 900],
+            4,
+            |raw| {
+                raw.events
+                    .push(egui::Event::PointerMoved(egui::pos2(700.0, 352.0)));
+            },
+            |ctx| {
+                let _ = crate::harness::ui::show(h, ctx);
+                crate::harness::ui::show_dialogs(h, ctx);
+            },
+        );
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            img.save(std::path::Path::new(&out).join("16-narration-idle.png"))
+                .unwrap();
+        }
+    }
+    h.narration = Narration::Narrating(NarrationTarget {
+        session_id: "s1".to_string(),
+        message_id: None,
+        index: answer,
+    });
+    shot(&mut h, "16b-narration-reading");
+    h.narration = Narration::Idle;
+    h.voice_narration = false;
     // a worktree of the project shows in the sidebar; the delete dialog warns
     {
         let wt = std::env::temp_dir().join(format!("cw-wt-{}", std::process::id()));
@@ -6510,4 +6547,348 @@ fn a_failed_dictation_session_ends_the_dictation() {
         },
     });
     assert_eq!(h.dictation, Dictation::Idle);
+}
+
+// ---------------------------------------------------------------------------
+// Reading answers aloud: Vibe summarises, speaks and plays; Catwright only
+// asks (`_voice/narrate*`, docs/acp.md)
+// ---------------------------------------------------------------------------
+
+/// A harness with one open session, one round and the speaker setting on.
+/// The round is a user message plus one answer (items 0 and 1).
+fn narration_harness() -> (Harness, Agent) {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    h.voice_narration = true;
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: user_chunk("m1", "Fasse den Stand zusammen"),
+    });
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: agent_chunk("a1", "Die Tests laufen."),
+    });
+    (h, agent)
+}
+
+fn prompt_result(stop_reason: &str) -> proto::PromptResult {
+    serde_json::from_value(json!({"stopReason": stop_reason})).unwrap()
+}
+
+/// The methods of the next `n` messages the harness sends.
+fn next_methods(agent: &mut Agent, n: usize) -> Vec<String> {
+    (0..n)
+        .map(|_| {
+            agent.read_msg()["method"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The speaker sends the round's user message and answer text, and the state
+/// lasts from the request until Vibe reports the narration done.
+#[test]
+fn the_speaker_reads_the_answer_aloud() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/narrate");
+    assert_eq!(
+        msg["params"]["userMessage"],
+        json!("Fasse den Stand zusammen")
+    );
+    assert_eq!(msg["params"]["assistantText"], json!("Die Tests laufen."));
+    assert!(h.narrating("s1", 1));
+    assert!(
+        !h.narrating("s1", 0),
+        "only the answer being read shows the stop state"
+    );
+
+    // Vibe summarises, then plays; there is no "playback started"
+    h.handle_event(AcpEvent::NarrationPrep);
+    assert!(h.narrating("s1", 1));
+    h.handle_event(AcpEvent::NarrationStarted {
+        ok: true,
+        error: None,
+    });
+    assert!(h.narrating("s1", 1));
+    h.handle_event(AcpEvent::NarrationDone);
+    assert!(!h.narrating("s1", 1));
+    assert!(h.status.is_empty(), "no error to show: {}", h.status);
+}
+
+/// The answer text is the whole round's agent text up to the clicked answer,
+/// joined with blank lines.
+#[test]
+fn the_narration_reads_the_whole_round() {
+    let (mut h, mut agent) = narration_harness();
+    // a second answer of the same round (its own message id: its own item)
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: agent_chunk("a2", "Nichts offen."),
+    });
+    h.toggle_narration("s1", 2);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/narrate");
+    assert_eq!(
+        msg["params"]["userMessage"],
+        json!("Fasse den Stand zusammen")
+    );
+    assert_eq!(
+        msg["params"]["assistantText"],
+        json!("Die Tests laufen.\n\nNichts offen.")
+    );
+}
+
+/// A failed start goes back to Idle and shows Vibe's own text.
+#[test]
+fn a_failed_narration_start_keeps_vibes_text() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationStarted {
+        ok: false,
+        error: Some("No active session".into()),
+    });
+    assert!(!h.narrating("s1", 1));
+    assert_eq!(h.status, "No active session");
+}
+
+/// A narration error ends the narration and shows Vibe's text.
+#[test]
+fn a_narration_error_ends_the_narration() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    // Vibe reports the prep first; an error during preparation follows it
+    h.handle_event(AcpEvent::NarrationPrep);
+    h.handle_event(AcpEvent::NarrationError {
+        error: "No audio output device found".into(),
+    });
+    assert!(!h.narrating("s1", 1));
+    assert_eq!(h.status, "No audio output device found");
+}
+
+/// A narrate request the wire rejected (an older Vibe, a broken pipe) ends
+/// the narration too.
+#[test]
+fn a_rejected_narrate_request_ends_the_narration() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::RequestFailed {
+        request: RequestKind::Ext(ExtKind::VoiceNarrate {
+            user_message: "Fasse den Stand zusammen".into(),
+            assistant_text: "Die Tests laufen.".into(),
+        }),
+        error: rpc::RpcError {
+            code: -32601,
+            message: "Method not found".into(),
+            data: None,
+        },
+    });
+    assert!(!h.narrating("s1", 1));
+    assert!(h.status.contains("Read aloud"), "{}", h.status);
+}
+
+/// A click on the speaker of the answer being read stops it.
+#[test]
+fn a_click_while_narrating_stops_the_reading() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.toggle_narration("s1", 1);
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/narrateCancel");
+    assert_eq!(msg["params"], json!({}));
+    assert!(!h.narrating("s1", 1));
+    // Vibe confirms the cancel and then reports the narration done
+    h.handle_event(AcpEvent::NarrationCancelled);
+    h.handle_event(AcpEvent::NarrationDone);
+    assert!(!h.narrating("s1", 1));
+    assert!(h.status.is_empty(), "no error to show: {}", h.status);
+}
+
+/// Sending a message stops the reading first.
+#[test]
+fn sending_a_message_cancels_the_narration() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.draft = "Weiter".into();
+    h.send();
+    assert_eq!(agent.read_msg()["method"], "_voice/narrateCancel");
+    assert_eq!(agent.read_msg()["method"], "session/prompt");
+    assert!(!h.narrating("s1", 1));
+}
+
+/// The microphone must not record the speech output: starting a dictation
+/// stops the reading first.
+#[test]
+fn starting_a_dictation_cancels_the_narration() {
+    let (mut h, mut agent) = narration_harness();
+    h.voice_dictation = true;
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.toggle_dictation();
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/narrateCancel");
+    assert_eq!(msg["params"], json!({}));
+    assert!(!h.narrating("s1", 1));
+    assert_eq!(agent.read_msg()["method"], "_voice/transcribeStart");
+    assert_eq!(h.dictation, Dictation::Starting);
+}
+
+/// Auto: a turn of the session on screen that ended reads its last answer.
+#[test]
+fn auto_narrate_reads_the_finished_answer() {
+    let (mut h, mut agent) = narration_harness();
+    h.auto_narrate = true;
+    h.handle_event(AcpEvent::PromptFinished {
+        session_id: "s1".to_string(),
+        result: prompt_result("end_turn"),
+    });
+    let msg = agent.read_msg();
+    assert_eq!(msg["method"], "_voice/narrate");
+    assert_eq!(
+        msg["params"]["userMessage"],
+        json!("Fasse den Stand zusammen")
+    );
+    assert_eq!(msg["params"]["assistantText"], json!("Die Tests laufen."));
+    assert!(h.narrating("s1", 1));
+    // the rest of the turn's bookkeeping follows
+    assert_eq!(
+        next_methods(&mut agent, 3),
+        vec!["session/list", "_loops/list", "_review/state"]
+    );
+}
+
+/// Auto: not for a cancelled turn, not for another session, not with the
+/// setting off.
+#[test]
+fn auto_narrate_ignores_cancelled_turns_and_other_sessions() {
+    let (mut h, mut agent) = narration_harness();
+    h.auto_narrate = true;
+    // a cancelled turn has nothing to read
+    h.handle_event(AcpEvent::PromptFinished {
+        session_id: "s1".to_string(),
+        result: prompt_result("cancelled"),
+    });
+    let sent = next_methods(&mut agent, 3);
+    assert!(!sent.iter().any(|m| m == "_voice/narrate"), "{sent:?}");
+    assert!(!h.narrating("s1", 1));
+
+    // another session's turn is not read while this one is on screen
+    let dir = std::env::temp_dir();
+    create_session(&mut h, &mut agent, &dir, "s2");
+    h.active = Some("s1".to_string());
+    h.handle_event(AcpEvent::PromptFinished {
+        session_id: "s2".to_string(),
+        result: prompt_result("end_turn"),
+    });
+    let sent = next_methods(&mut agent, 3);
+    assert!(!sent.iter().any(|m| m == "_voice/narrate"), "{sent:?}");
+
+    // the setting off: nothing is read
+    h.auto_narrate = false;
+    h.handle_event(AcpEvent::PromptFinished {
+        session_id: "s1".to_string(),
+        result: prompt_result("end_turn"),
+    });
+    let sent = next_methods(&mut agent, 3);
+    assert!(!sent.iter().any(|m| m == "_voice/narrate"), "{sent:?}");
+    assert!(!h.narrating("s1", 1));
+}
+
+/// The speaker button exists only while the setting is on, and its tooltip
+/// says what a click does.
+#[test]
+fn the_speaker_button_follows_the_setting() {
+    use crate::harness::ui::transcript::speaker_button;
+    assert!(
+        speaker_button(false, false).is_none(),
+        "the setting is off: no speaker"
+    );
+    let idle = speaker_button(true, false).expect("idle speaker");
+    assert_eq!(idle.icon, crate::icons::Icon::Speaker);
+    assert_eq!(idle.tooltip, "Read aloud");
+    assert_eq!(idle.color, crate::theme::MUTED);
+    assert!(!idle.pinned, "idle: a hover action like the copy button");
+    let reading = speaker_button(true, true).expect("stop button");
+    assert_eq!(reading.icon, crate::icons::Icon::Stop);
+    assert_eq!(reading.tooltip, "Stop reading");
+    assert_eq!(reading.color, crate::theme::ORANGE, "reading is orange");
+    assert!(reading.pinned, "the stop button stays visible");
+}
+
+/// Switching to another answer while one is read: Vibe cancels the old one
+/// itself and reports it (done, or an error when it was still preparing).
+/// That late report must not end the new narration.
+#[test]
+fn a_replaced_narration_does_not_end_the_new_one() {
+    let (mut h, mut agent) = narration_harness();
+    h.handle_event(AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: agent_chunk("a2", "Nichts offen."),
+    });
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationPrep);
+    h.toggle_narration("s1", 2);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    assert!(h.narrating("s1", 2));
+    h.handle_event(AcpEvent::NarrationError {
+        error: "Narration failed during preparation".into(),
+    });
+    assert!(h.narrating("s1", 2), "the old narration's report is stale");
+    assert!(h.status.is_empty(), "no stale error shown: {}", h.status);
+    h.handle_event(AcpEvent::NarrationPrep);
+    h.handle_event(AcpEvent::NarrationDone);
+    assert!(!h.narrating("s1", 2));
+}
+
+/// Stop, then read another answer right away: the done Vibe reports for the
+/// cancel arrives late and must not end the new narration.
+#[test]
+fn a_late_done_after_a_cancel_is_ignored() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationPrep);
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrateCancel");
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationDone);
+    h.handle_event(AcpEvent::NarrationDone);
+    assert!(h.narrating("s1", 1), "both dones belong to the cancel");
+}
+
+/// Vibe answered the narrate but never began (it starts nothing without a
+/// summary or speech output): after the timeout the button goes back.
+#[test]
+fn a_narration_that_never_begins_is_given_up() {
+    let (mut h, mut agent) = narration_harness();
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationStarted {
+        ok: true,
+        error: None,
+    });
+    let start = Instant::now();
+    h.expire_narration(start);
+    assert!(h.narrating("s1", 1), "not yet");
+    h.expire_narration(start + Duration::from_secs(11));
+    assert!(!h.narrating("s1", 1));
+    assert_eq!(h.status, tr("Vibe did not start reading aloud."));
+    // a narration that began is never given up by the timeout
+    h.toggle_narration("s1", 1);
+    assert_eq!(agent.read_msg()["method"], "_voice/narrate");
+    h.handle_event(AcpEvent::NarrationPrep);
+    h.expire_narration(Instant::now() + Duration::from_secs(60));
+    assert!(h.narrating("s1", 1));
 }

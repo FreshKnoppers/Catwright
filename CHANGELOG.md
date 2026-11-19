@@ -8,6 +8,9 @@ tag (`## v0.2.0`) as that release's description.
 - Voice dictation in the composer (Settings → General): a microphone button
   starts and stops Vibe's transcription, the recognised text streams into the
   draft.
+- Read answers aloud (Settings → General): a speaker button on Vibe's answers
+  has Vibe summarise and speak the answer, and an option reads every finished
+  answer automatically.
 
 ## v0.4.0
 

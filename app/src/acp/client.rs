@@ -182,6 +182,16 @@ pub enum ExtKind {
     VoiceTranscribeStop,
     /// Abort the transcription without flushing (`_voice/transcribeCancel`).
     VoiceTranscribeCancel,
+    /// Read one answer aloud (`_voice/narrate`): Vibe summarises it, speaks
+    /// the summary through Mistral and plays it. A new narrate cancels a
+    /// narration that is still playing.
+    VoiceNarrate {
+        user_message: String,
+        assistant_text: String,
+    },
+    /// Stop the narration (`_voice/narrateCancel`); Vibe then also sends
+    /// `_voice/narrationDone`.
+    VoiceNarrateCancel,
 }
 
 impl ExtKind {
@@ -300,6 +310,14 @@ impl ExtKind {
             }
             ExtKind::VoiceTranscribeStop => ("_voice/transcribeStop", json!({})),
             ExtKind::VoiceTranscribeCancel => ("_voice/transcribeCancel", json!({})),
+            ExtKind::VoiceNarrate {
+                user_message,
+                assistant_text,
+            } => (
+                "_voice/narrate",
+                json!({ "userMessage": user_message, "assistantText": assistant_text }),
+            ),
+            ExtKind::VoiceNarrateCancel => ("_voice/narrateCancel", json!({})),
         }
     }
 }
@@ -384,6 +402,22 @@ pub enum AcpEvent {
     VoiceDelta {
         text: Option<String>,
         error: Option<String>,
+    },
+    /// `_voice/narrate` answered: `ok`, or Vibe's own error text.
+    NarrationStarted {
+        ok: bool,
+        error: Option<String>,
+    },
+    /// `_voice/narrateCancel` answered (the payload carries nothing).
+    NarrationCancelled,
+    /// Vibe is summarising the answer (`_voice/narrationPrep`).
+    NarrationPrep,
+    /// The playback finished or was cancelled (`_voice/narrationDone`).
+    NarrationDone,
+    /// The narration failed (`_voice/narrationError`); `error` is Vibe's own
+    /// text.
+    NarrationError {
+        error: String,
     },
     RequestFailed {
         request: RequestKind,
@@ -1021,6 +1055,20 @@ fn handle_line(line: &str, shared: &Shared) -> Option<AcpEvent> {
                     text: field("text"),
                     error: field("error"),
                 })
+            } else if method == "_voice/narrationPrep" {
+                // Vibe is summarising the answer; there is no "playback
+                // started" notification
+                Some(AcpEvent::NarrationPrep)
+            } else if method == "_voice/narrationDone" {
+                Some(AcpEvent::NarrationDone)
+            } else if method == "_voice/narrationError" {
+                Some(AcpEvent::NarrationError {
+                    error: params
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                })
             } else {
                 None // unknown notifications are ignored
             }
@@ -1176,6 +1224,11 @@ fn route_response(kind: RequestKind, value: Value) -> Result<AcpEvent, rpc::RpcE
                 Ok(AcpEvent::VoiceStopped { ok, error })
             }
             ExtKind::VoiceTranscribeCancel => Ok(AcpEvent::VoiceCancelled),
+            ExtKind::VoiceNarrate { .. } => {
+                let (ok, error) = voice_answer(&value);
+                Ok(AcpEvent::NarrationStarted { ok, error })
+            }
+            ExtKind::VoiceNarrateCancel => Ok(AcpEvent::NarrationCancelled),
             kind => Ok(AcpEvent::ExtResult {
                 kind,
                 result: value,
@@ -1293,6 +1346,19 @@ mod tests {
         let (m, p) = ExtKind::VoiceTranscribeCancel.wire();
         assert_eq!(m, "_voice/transcribeCancel");
         assert_eq!(p, json!({}));
+        let (m, p) = ExtKind::VoiceNarrate {
+            user_message: "Fasse das zusammen".into(),
+            assistant_text: "Kurz: es geht.".into(),
+        }
+        .wire();
+        assert_eq!(m, "_voice/narrate");
+        assert_eq!(
+            p,
+            json!({"userMessage": "Fasse das zusammen", "assistantText": "Kurz: es geht."})
+        );
+        let (m, p) = ExtKind::VoiceNarrateCancel.wire();
+        assert_eq!(m, "_voice/narrateCancel");
+        assert_eq!(p, json!({}));
     }
 
     /// `_voice/transcriptionDelta` carries either a piece of text or Vibe's
@@ -1378,6 +1444,75 @@ mod tests {
         )
         .expect("cancelled");
         assert!(matches!(cancelled, AcpEvent::VoiceCancelled));
+    }
+
+    /// The two narration answers are routed to their own events, with Vibe's
+    /// error text kept as it came.
+    #[test]
+    fn narration_answers_are_routed() {
+        let narrate = |value: Value| {
+            route_response(
+                RequestKind::Ext(ExtKind::VoiceNarrate {
+                    user_message: "Fasse das zusammen".into(),
+                    assistant_text: "Kurz: es geht.".into(),
+                }),
+                value,
+            )
+            .expect("narrate answer")
+        };
+        match narrate(json!({"ok": true})) {
+            AcpEvent::NarrationStarted { ok, error } => {
+                assert!(ok);
+                assert_eq!(error, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        match narrate(json!({"ok": false, "error": "No active session"})) {
+            AcpEvent::NarrationStarted { ok, error } => {
+                assert!(!ok);
+                assert_eq!(error.as_deref(), Some("No active session"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let cancelled = route_response(
+            RequestKind::Ext(ExtKind::VoiceNarrateCancel),
+            json!({"ok": true}),
+        )
+        .expect("cancel answer");
+        assert!(matches!(cancelled, AcpEvent::NarrationCancelled));
+    }
+
+    /// The three narration notifications reach the harness; the error text is
+    /// Vibe's own.
+    #[test]
+    fn narration_notifications_become_events() {
+        let (tx, rx) = mpsc::channel::<AcpEvent>();
+        std::mem::forget(rx);
+        let shared = Shared {
+            tx,
+            writer_slot: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            stderr_tail: Arc::new(Mutex::new(Vec::new())),
+            stderr_handle: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
+        };
+        let line = r#"{"jsonrpc":"2.0","method":"_voice/narrationPrep","params":{}}"#;
+        assert!(matches!(
+            handle_line(line, &shared),
+            Some(AcpEvent::NarrationPrep)
+        ));
+        let line = r#"{"jsonrpc":"2.0","method":"_voice/narrationDone","params":{}}"#;
+        assert!(matches!(
+            handle_line(line, &shared),
+            Some(AcpEvent::NarrationDone)
+        ));
+        let line = r#"{"jsonrpc":"2.0","method":"_voice/narrationError","params":{"error":"No audio output device found"}}"#;
+        match handle_line(line, &shared) {
+            Some(AcpEvent::NarrationError { error }) => {
+                assert_eq!(error, "No audio output device found");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     /// `elicitation/create` is delivered to the harness instead of being

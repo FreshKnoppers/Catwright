@@ -273,6 +273,19 @@ fn top_left(a: Pos2, b: Pos2, flipped: bool) -> bool {
 pub fn render_ui(
     [w, h]: [u32; 2],
     frames: usize,
+    ui: impl FnMut(&egui::Context),
+) -> image::RgbaImage {
+    render_ui_with([w, h], frames, |_| {}, ui)
+}
+
+/// Like [`render_ui`], but `input` may adjust every frame's raw input first —
+/// a pointer position for hover states, dropped files, … (the pointer has to
+/// be in the input before the frame starts, so it cannot be pushed from `ui`).
+#[cfg(test)]
+pub fn render_ui_with(
+    [w, h]: [u32; 2],
+    frames: usize,
+    mut input: impl FnMut(&mut egui::RawInput),
     mut ui: impl FnMut(&egui::Context),
 ) -> image::RgbaImage {
     let ctx = egui::Context::default();
@@ -281,7 +294,7 @@ pub fn render_ui(
     let mut textures = Textures::default();
     let mut last = None;
     for i in 0..frames.max(1) {
-        let input = egui::RawInput {
+        let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 Pos2::ZERO,
                 egui::vec2(w as f32, h as f32),
@@ -289,7 +302,8 @@ pub fn render_ui(
             time: Some(i as f64 / 60.0),
             ..Default::default()
         };
-        let out = ctx.run(input, |ctx| ui(ctx));
+        input(&mut raw);
+        let out = ctx.run(raw, |ctx| ui(ctx));
         textures.set(&out.textures_delta);
         if i + 1 == frames.max(1) {
             let prims = ctx.tessellate(out.shapes, out.pixels_per_point);

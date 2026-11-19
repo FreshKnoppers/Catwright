@@ -228,6 +228,14 @@ pub struct Settings {
     /// stops Vibe's transcription. Off by default.
     #[serde(default)]
     pub voice_dictation: bool,
+    /// Read answers aloud: a speaker button on Vibe's answers. Vibe
+    /// summarises the answer, speaks it and plays it. Off by default.
+    #[serde(default)]
+    pub voice_narration: bool,
+    /// Read every finished answer aloud automatically (only while
+    /// `voice_narration` is on). Off by default.
+    #[serde(default)]
+    pub auto_narrate: bool,
     /// Pinned session ids: they sort to the top of their workspace's list.
     #[serde(default)]
     pub pinned_sessions: Vec<String>,
@@ -285,6 +293,8 @@ impl Default for Settings {
             auto_account: false,
             notify_turn_events: false,
             voice_dictation: false,
+            voice_narration: false,
+            auto_narrate: false,
             pinned_sessions: Vec::new(),
             transcript_detail: default_transcript_detail(),
             archived_sessions: Vec::new(),

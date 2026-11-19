@@ -212,6 +212,52 @@ pub enum Dictation {
     Stopping,
 }
 
+/// The answer a narration belongs to: its session and its place in the
+/// transcript (the message id Vibe gave it, or its position when there is
+/// none), so only that answer's button shows the stop state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NarrationTarget {
+    pub session_id: String,
+    pub message_id: Option<String>,
+    pub index: usize,
+}
+
+impl NarrationTarget {
+    /// Is this the answer at `index` (with `message_id`) of `session_id`?
+    /// The message id wins when both sides have one: a rewind or a trim can
+    /// move an answer's position, never its id.
+    pub fn is(&self, session_id: &str, message_id: Option<&str>, index: usize) -> bool {
+        self.session_id == session_id
+            && match (self.message_id.as_deref(), message_id) {
+                (Some(mine), Some(theirs)) => mine == theirs,
+                _ => self.index == index,
+            }
+    }
+}
+
+/// State of reading answers aloud. Vibe summarises the answer, speaks the
+/// summary through Mistral and plays it; Catwright only sends the two
+/// `_voice/narrate*` requests and shows the button.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Narration {
+    #[default]
+    Idle,
+    /// `_voice/narrate` went out for this answer. It lasts until Vibe reports
+    /// the narration done, an error, a failed start, or a cancel.
+    Narrating(NarrationTarget),
+}
+
+impl Narration {
+    /// Is the answer at `index` (with `message_id`) of `session_id` the one
+    /// being read aloud?
+    pub fn is_answer(&self, session_id: &str, message_id: Option<&str>, index: usize) -> bool {
+        match self {
+            Narration::Idle => false,
+            Narration::Narrating(target) => target.is(session_id, message_id, index),
+        }
+    }
+}
+
 /// What the composer's popup list currently offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ComposerPopup {

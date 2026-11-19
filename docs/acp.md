@@ -211,6 +211,33 @@ Vibe's error texts are shown as they are (they are not ours to translate):
 audio input device found…", "Voice transcription needs an API key: set …". The
 transcribed text is never logged.
 
+### Reading answers aloud
+
+Vibe speaks as well: it summarises the answer with an extra model call,
+synthesises the speech through Mistral and plays it in its own process.
+Catwright only sends the two texts and tracks the state; it contains no audio
+code. What is spoken is a **summary**, not the verbatim answer. These requests
+carry no `sessionId` either (same first-session rule as above).
+
+| method | params | result |
+|---|---|---|
+| `_voice/narrate` | `{"userMessage":"…","assistantText":"…"}` | `{"ok":true}` or `{"ok":false,"error":"…"}`. A new narrate cancels a narration still playing. |
+| `_voice/narrateCancel` | `{}` | `{"ok":true}` or `{"ok":false,"error":"…"}`; Vibe then also sends `_voice/narrationDone`. |
+
+Agent to client, notifications (no id):
+
+```json
+{"jsonrpc":"2.0","method":"_voice/narrationPrep","params":{}}
+{"jsonrpc":"2.0","method":"_voice/narrationDone","params":{}}
+{"jsonrpc":"2.0","method":"_voice/narrationError","params":{"error":"…"}}
+```
+
+`narrationPrep` means Vibe is summarising, `narrationDone` that playback
+finished or was cancelled, `narrationError` that it failed. There is no
+"playback started" notification, so the client keeps its own state from sending
+`_voice/narrate` until one of those arrives. The narrated texts are never
+logged; Vibe's error texts are shown as they are.
+
 ## Agent to client: `elicitation/create` (a REQUEST, verified live)
 
 Sent for Vibe's `ask_user_question` tool, which exists only when the client

@@ -1736,3 +1736,27 @@ msgstr "Não foi possível iniciar o ditado."
 
 msgid "Voice dictation could not be stopped."
 msgstr "Não foi possível parar o ditado."
+
+msgid "Read answers aloud"
+msgstr "Ler as respostas em voz alta"
+
+msgid "Shows a speaker button on Vibe's answers. Vibe summarises the answer in a few sentences and Mistral speaks it (an extra request on your plan)."
+msgstr "Mostra um botão de altifalante nas respostas do Vibe. O Vibe resume a resposta em poucas frases e a Mistral lê-a (um pedido extra no teu plano)."
+
+msgid "Read every answer automatically"
+msgstr "Ler todas as respostas automaticamente"
+
+msgid "When a turn of the open session ends, its answer is read aloud."
+msgstr "Quando um turno da sessão aberta termina, a sua resposta é lida em voz alta."
+
+msgid "Read aloud"
+msgstr "Ler em voz alta"
+
+msgid "Stop reading"
+msgstr "Parar a leitura"
+
+msgid "The answer could not be read aloud."
+msgstr "Não foi possível ler a resposta em voz alta."
+
+msgid "Vibe did not start reading aloud."
+msgstr "O Vibe não começou a ler em voz alta."
