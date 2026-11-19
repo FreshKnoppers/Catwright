@@ -75,3 +75,27 @@ before committing (`feature_screenshots` + `CATWRIGHT_SHOT_DIR`, plus
 
 Checks: `cargo fmt --check` clean, `cargo clippy --all-targets -- -D warnings`
 clean, `cargo test` 444 unit + 4 integration green, German catalog complete.
+
+## Review (after the work order)
+
+Fixed on this branch after a code review:
+
+- Worktree with a start ref: `git worktree add <dir> <ref>` failed for a
+  branch that is checked out elsewhere (e.g. `main`) and made no own branch.
+  Now always `-b catwright/<name> <dir> <ref|HEAD>`; option-like refs are
+  rejected. After a delete the sidebar re-reads the list at once and the
+  worktree's own project entry is removed.
+- Per-round durations: a loaded history got arrival timestamps from the
+  replay and showed "0 sec". Replayed calls now stay untimed ("–").
+- Palette: with an empty query a dozen files pushed the sessions down; files
+  are listed only while searching.
+- File chips: the space after a chip went missing, punctuation around a path
+  (`analysis.py.`, `(src/main.rs),`) blocked or entered the chip, and a
+  workspace opened through a symlink never matched.
+- Round header: the detail button covered the tool count; the count is now
+  its own run and the button has its own icon (list) instead of a second
+  chevron.
+- Activity feed (already in v0.2.x): answered approvals stayed under
+  "Waiting for you" forever; the unread marker broke after 100 entries.
+- CHANGELOG and README list B8–B12; README screenshots re-rendered with the
+  same fonts as the earlier ones.

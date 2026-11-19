@@ -66,6 +66,13 @@ The screenshots show demo projects with prepared sessions
   finished and failed turns at a glance, unread badge and archiving
 - File chips in answers: mentioning a workspace file opens the preview on click
 - Drag & drop files onto the composer to attach them
+- Worktrees: create one from any start ref as its own workspace, see and
+  delete a project's worktrees in the sidebar
+- Command palette (Ctrl K) finds sessions, actions and the project's files
+- Per-round detail: every tool call of a round with its status and how long
+  it ran
+- Optional desktop notifications when a turn finishes or needs an approval
+  while the window is in the background (Settings → General, off by default)
 - Subagents with status bars (and a small pixel cat)
 - Context usage as Vibe reports it (the same numbers as the CLI footer), with
   Vibe's own estimate of what fills it

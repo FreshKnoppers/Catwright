@@ -36,6 +36,17 @@ to 3.1.2.
   is clickable and opens the preview pane.
 - Drag & drop files onto the composer to attach them (images as images, the
   rest as links).
+- Worktrees in the sidebar: each project lists its worktrees and can delete
+  them (with a warning on uncommitted changes; the branch only on request).
+  "Create worktree" takes an optional start ref for the new branch.
+- The command palette (Ctrl K) also finds the current project's files; Enter
+  opens the preview.
+- Per-round detail: a folded round lists its tool calls with status and the
+  time they ran (only for turns watched live; a loaded history shows "–").
+- Optional desktop notifications via `notify-send` when a turn finishes or
+  Vibe needs an approval while the window is in the background (Settings →
+  General, off by default; the text names the project only).
+- "Delete all" in the routines card removes every routine of the session.
 - New logo and app icon: a little pixel window with yellow eyes, in the
   app's orange instead of the red-to-yellow gradient. The app icon now sits
   on a dark tile, so it stays visible on light panels too.
@@ -56,6 +67,8 @@ Fixes:
 - A second window no longer overwrites the first window's settings.
 - Creating a worktree no longer freezes the window and cleans up after a
   failure.
+- An answered approval no longer stays under "Waiting for you" in the
+  activity feed, and the unread badge keeps counting after 100 entries.
 
 ## v0.2.0
 
