@@ -692,7 +692,10 @@ fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
                     ToolStatus::Failed => tr("Failed"),
                     ToolStatus::Other => tr("Done"),
                 };
-                let dur = extras::human_duration(call.duration_secs(now));
+                let dur = call
+                    .duration_secs(now)
+                    .map(extras::human_duration)
+                    .unwrap_or_else(|| "–".to_string());
                 let g = line_galley(ui, &call.title, mono(12.0), theme::MUTED, r.width() - 200.0);
                 paint_line(ui, r.left() + 30.0, r.center().y, g);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -750,14 +753,18 @@ fn round_summary(
             _ => None,
         })
         .unwrap_or_default();
-    let mut label = if title.is_empty() {
+    let label = if title.is_empty() {
         tr("Round").to_string()
     } else {
         trf("“{title}”", &[("title", &shorten(&title, 90))])
     };
-    if round.tool_calls > 0 {
-        label.push_str(&tool_calls_suffix(round.tool_calls));
-    }
+    // the tool count is its own run: a long message shortens, the count
+    // always stays readable
+    let suffix = if round.tool_calls > 0 {
+        tool_calls_suffix(round.tool_calls)
+    } else {
+        String::new()
+    };
     // a quiet card (fill + 1 px edge + accent strip), so a folded round
     // reads as something to open at first glance, not as plain text
     ui.add_space(2.0);
@@ -791,8 +798,23 @@ fn round_summary(
     } else {
         theme::MUTED
     };
-    let g = line_galley(ui, &label, widgets::font(13.5), color, rect.width() - 70.0);
+    // room on the right: the fold chevron, plus the detail button when the
+    // round has tool calls
+    let reserve = if round.tool_calls > 0 { 100.0 } else { 70.0 };
+    let tail = line_galley(ui, &suffix, widgets::font(13.5), color, rect.width());
+    let g = line_galley(
+        ui,
+        &label,
+        widgets::font(13.5),
+        color,
+        (rect.width() - reserve - tail.size().x).max(40.0),
+    );
     let r = paint_line(ui, rect.left() + 30.0, rect.center().y, g);
+    let r = if suffix.is_empty() {
+        r
+    } else {
+        paint_line(ui, r.right(), rect.center().y, tail)
+    };
     chevron(ui, pos2(r.right() + 6.0, rect.center().y - 3.5), expanded);
     // right side: the per-round detail toggle (real widget over the row)
     let mut detail_clicked = false;
@@ -803,15 +825,13 @@ fn round_summary(
                 pos2(rect.right() - 30.0, rect.center().y - 10.0),
                 vec2(24.0, 24.0),
             ),
-            IconButton::new(
-                if detail_open {
-                    Icon::ChevronDown
+            IconButton::new(Icon::List, tr("Round details"))
+                .side(20.0)
+                .color(if detail_open {
+                    theme::ORANGE
                 } else {
-                    Icon::ChevronRight
-                },
-                tr("Round details"),
-            )
-            .side(20.0),
+                    theme::DIM
+                }),
         );
         detail_clicked = b.clicked();
     }

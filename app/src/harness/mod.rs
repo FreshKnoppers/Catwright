@@ -129,8 +129,10 @@ pub struct Harness {
     pending_setup: Vec<SetupStep>,
     /// A `git worktree add` running in the background (`create_worktree`).
     worktree_job: Option<mpsc::Receiver<Result<PathBuf, String>>>,
-    /// A `git worktree remove` running in the background (`delete_worktree`).
-    worktree_delete_job: Option<mpsc::Receiver<Result<(), String>>>,
+    /// A `git worktree remove` running in the background (`delete_worktree`),
+    /// with the project whose worktree list is re-read when it is done and
+    /// the worktree's path.
+    worktree_delete_job: Option<WorktreeDeleteJob>,
     client: Option<AcpClient>,
     rx: Option<mpsc::Receiver<AcpEvent>>,
     pub conn: Conn,
@@ -746,6 +748,7 @@ impl Harness {
             }
             AcpEvent::SessionLoaded { session_id, result } => {
                 if let Some(v) = self.sessions.get_mut(&session_id) {
+                    v.replaying = false;
                     v.set_session_info(result.modes, result.config_options.clone());
                     if let Some(modes) = &v.modes {
                         self.known_modes = modes.available_modes.clone();
@@ -1262,7 +1265,9 @@ impl Harness {
         }
         let (tx, rx) = mpsc::channel();
         let project = project.to_path_buf();
+        let job_project = project.clone();
         let path = path.to_path_buf();
+        let job_path = path.clone();
         let branch = branch.to_string();
         std::thread::spawn(move || {
             let res = watch::run_git(
@@ -1283,13 +1288,13 @@ impl Harness {
             };
             let _ = tx.send(res);
         });
-        self.worktree_delete_job = Some(rx);
+        self.worktree_delete_job = Some((job_project, job_path, rx));
         self.status = tr("Deleting worktree …").to_string();
     }
 
     /// Take the result of a finished worktree deletion, if any.
     fn poll_worktree_delete(&mut self) {
-        let Some(rx) = &self.worktree_delete_job else {
+        let Some((project, path, rx)) = &self.worktree_delete_job else {
             return;
         };
         let done = match rx.try_recv() {
@@ -1297,9 +1302,18 @@ impl Harness {
             Err(mpsc::TryRecvError::Empty) => return,
             Err(mpsc::TryRecvError::Disconnected) => Err("git".to_string()),
         };
+        // the sidebar list must not show the removed worktree until the
+        // next periodic re-read
+        let (project, path) = (project.clone(), path.clone());
+        self.watcher.invalidate_git(&project);
         self.worktree_delete_job = None;
         match done {
             Ok(()) => {
+                // a worktree made here was added as its own project: that
+                // entry would now point at a folder that no longer exists
+                if self.projects.contains(&path) {
+                    self.remove_project(&path);
+                }
                 self.status = tr("Worktree deleted.").to_string();
             }
             Err(e) => {
@@ -1782,6 +1796,8 @@ impl Harness {
         }
         let mut view = SessionView::new(session_id.to_string(), cwd.clone());
         view.reset_items();
+        // what arrives until `session/load` answers is the replayed history
+        view.replaying = true;
         self.sessions.insert(session_id.to_string(), view);
         // requests orphaned while this session was unknown migrate into
         // the new view (Handoff 2.2)
@@ -1896,7 +1912,6 @@ impl Harness {
         self.archived.remove(session_id);
     }
 
-    /// Append one entry to the activity feed (bounded to the newest 100).
     /// Queue a desktop notification for a finished turn (`done`) or a
     /// waiting approval, but only when the setting is on and the window has
     /// no focus. The body names the project only — never the session title,
@@ -1931,6 +1946,7 @@ impl Harness {
         std::mem::take(&mut self.pending_notify)
     }
 
+    /// Append one entry to the activity feed (bounded to the newest 100).
     pub fn push_activity(
         &mut self,
         kind: ActivityKind,
@@ -1959,8 +1975,38 @@ impl Harness {
             at: extras::now_epoch(),
         });
         if self.activity.len() > MAX {
-            self.activity.drain(..self.activity.len() - MAX);
+            let dropped = self.activity.len() - MAX;
+            self.activity.drain(..dropped);
+            // the read marker is an index: it moves with the dropped front,
+            // or every later entry would count as already seen
+            self.ui.activity_seen = self.ui.activity_seen.saturating_sub(dropped);
         }
+    }
+
+    /// Whether a feed entry still belongs in the feed: a waiting entry only
+    /// while its approval or question is open — once answered (here, in the
+    /// transcript or by the turn's end) nothing waits for the user anymore.
+    pub fn activity_shown(&self, e: &ActivityEvent) -> bool {
+        if e.kind != ActivityKind::Waiting {
+            return true;
+        }
+        let Some(rid) = &e.request_id else {
+            return true;
+        };
+        self.sessions
+            .get(&e.sid)
+            .is_some_and(|v| v.permissions.iter().any(|p| &p.request_id == rid))
+            || self.questions.iter().any(|q| &q.request_id == rid)
+    }
+
+    /// Feed entries added since the user last looked that are still shown
+    /// (the sidebar badge and "Mark all read").
+    pub fn activity_unseen(&self) -> usize {
+        self.activity
+            .iter()
+            .skip(self.ui.activity_seen)
+            .filter(|e| self.activity_shown(e))
+            .count()
     }
 
     /// Use `dir` (created if missing) as the chat workspace "Allgemein". It
@@ -3173,27 +3219,41 @@ impl Harness {
 /// How long a worktree checkout may take (a big repository on a slow disk).
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// `git worktree add -b catwright/<name> <dir> HEAD` for `project`; on
-/// failure the half-made worktree and its branch are removed again. Runs
-/// on a background thread (see `Harness::create_worktree`).
+/// A background `git worktree remove`: project, worktree path, result.
+type WorktreeDeleteJob = (PathBuf, PathBuf, mpsc::Receiver<Result<(), String>>);
+
+/// `git worktree add -b catwright/<name> <dir> <start>` for `project`, where
+/// `<start>` is the optional start ref (branch, tag or commit) or HEAD. The
+/// worktree always gets its own branch: checking out an existing branch
+/// directly fails for one that is already checked out (e.g. `main` in the
+/// main worktree). On failure the half-made worktree and its branch are
+/// removed again. Runs on a background thread (see
+/// `Harness::create_worktree`).
 fn make_worktree(project: &Path, dir: &Path, start_ref: Option<&str>) -> Result<PathBuf, String> {
     use crate::harness::watch::run_git;
+    let start = start_ref.map(str::trim).filter(|r| !r.is_empty());
+    // a ref never starts with '-'; such input would reach git as an option
+    if start.is_some_and(|r| r.starts_with('-')) {
+        return Err(tr("Not a valid start ref.").to_string());
+    }
     let name = dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let branch = format!("catwright/{name}");
     let dir_str = dir.to_string_lossy().into_owned();
-    // with a start ref (branch, tag or commit) the worktree checks out that
-    // ref; without one it gets its own `catwright/<name>` branch at HEAD
-    let added = match start_ref.filter(|r| !r.trim().is_empty()) {
-        Some(r) => run_git(project, &["worktree", "add", &dir_str, r], WORKTREE_TIMEOUT),
-        None => run_git(
-            project,
-            &["worktree", "add", "-b", &branch, &dir_str, "HEAD"],
-            WORKTREE_TIMEOUT,
-        ),
-    };
+    let added = run_git(
+        project,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &dir_str,
+            start.unwrap_or("HEAD"),
+        ],
+        WORKTREE_TIMEOUT,
+    );
     match added {
         Ok(_) => Ok(dir.to_path_buf()),
         Err(e) => {

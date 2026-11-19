@@ -5653,16 +5653,21 @@ fn palette_lists_project_files_and_enter_opens_the_preview() {
         tries += 1;
     }
     use crate::harness::ui::palette::{apply, entries, Action};
+    let file_hits = |list: &[crate::harness::ui::palette::Entry]| -> Vec<String> {
+        list.iter()
+            .filter_map(|e| match &e.action {
+                Action::File(_, rel) => Some(rel.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // without a query the palette keeps to actions and sessions
     let all = entries(&mut h, "");
-    let files: Vec<&str> = all
-        .iter()
-        .filter_map(|e| match &e.action {
-            Action::File(_, rel) => Some(rel.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(files.contains(&"analysis.py"), "files: {files:?}");
-    assert!(files.contains(&"src/main.rs"), "files: {files:?}");
+    assert!(file_hits(&all).is_empty(), "files: {:?}", file_hits(&all));
+    // a query lists the matching project files
+    let files = file_hits(&entries(&mut h, "a"));
+    assert!(files.iter().any(|f| f == "analysis.py"), "files: {files:?}");
+    assert!(files.iter().any(|f| f == "src/main.rs"), "files: {files:?}");
     // fuzzy query narrows them
     let hits = entries(&mut h, "main");
     assert!(
@@ -5715,7 +5720,7 @@ fn tool_call_arrival_timestamps_drive_the_round_duration() {
     assert!(tc.first_seen > 0, "first arrival stamped");
     assert!(tc.last_update >= tc.first_seen);
     // still running: duration measures up to now
-    assert_eq!(tc.duration_secs(now()), now() - tc.first_seen);
+    assert_eq!(tc.duration_secs(now()), Some(now() - tc.first_seen));
     let upd = serde_json::from_value(json!({
         "sessionUpdate": "tool_call_update",
         "toolCallId": "t1",
@@ -5835,4 +5840,155 @@ fn delete_worktree_removes_it_and_the_branch_only_when_asked() {
     );
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A start ref names where the worktree's own branch begins: `main`, which
+/// is checked out in the main worktree, must work (git refuses to check
+/// out one branch twice), and the new branch is `catwright/<name>`.
+#[test]
+fn worktree_with_a_start_ref_gets_its_own_branch_from_that_ref() {
+    let base = std::env::temp_dir().join(format!(
+        "od-wtr-{}-{:x}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| crate::harness::watch::git_output(&repo, args);
+    assert!(git(&["init", "-q", "-b", "main"]).is_some());
+    let commit = |msg: &str| {
+        git(&[
+            "-c",
+            "user.name=Catwright",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            msg,
+            "--allow-empty",
+        ])
+    };
+    assert!(commit("first").is_some());
+    let first = git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    assert!(commit("second").is_some());
+    // the branch checked out in the main worktree as start ref
+    let target = base.join("wt").join("repo-1");
+    make_worktree(&repo, &target, Some("main")).expect("worktree from main");
+    let wt = |args: &[&str]| crate::harness::watch::git_output(&target, args);
+    assert_eq!(
+        wt(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap().trim(),
+        "catwright/repo-1"
+    );
+    // a commit as start ref: the new branch starts there
+    let target2 = base.join("wt").join("repo-2");
+    make_worktree(&repo, &target2, Some(&first)).expect("worktree from a commit");
+    assert_eq!(
+        crate::harness::watch::git_output(&target2, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim(),
+        first
+    );
+    // option-like input never reaches git
+    let target3 = base.join("wt").join("repo-3");
+    assert!(make_worktree(&repo, &target3, Some("--detach")).is_err());
+    assert!(!target3.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The history a `session/load` replays carries no timing: its tool calls
+/// get no client-side timestamps, so the per-round view shows no made-up
+/// duration. Calls of a live turn afterwards are timed again.
+#[test]
+fn replayed_tool_calls_have_no_duration() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    h.open_session(dir.clone(), "s1");
+    assert_eq!(agent.read_msg()["method"], "session/load");
+    assert!(h.sessions["s1"].replaying, "the load replays the history");
+    let update = |u| AcpEvent::Update {
+        session_id: "s1".to_string(),
+        update: u,
+    };
+    let call = |id: &str, status: &str| {
+        serde_json::from_value(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "Reading analysis.py",
+            "kind": "read",
+            "status": status,
+        }))
+        .unwrap()
+    };
+    h.handle_event(update(call("old", "completed")));
+    h.handle_event(AcpEvent::SessionLoaded {
+        session_id: "s1".to_string(),
+        result: serde_json::from_value(json!({})).unwrap(),
+    });
+    assert!(!h.sessions["s1"].replaying);
+    let old = &h.sessions["s1"].tool_calls["old"];
+    assert_eq!(old.first_seen, 0);
+    assert_eq!(old.duration_secs(u64::MAX), None, "no duration for history");
+    // a later update of the replayed call does not invent a start either
+    let upd = serde_json::from_value(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "old",
+        "status": "completed",
+    }))
+    .unwrap();
+    h.handle_event(update(upd));
+    assert_eq!(h.sessions["s1"].tool_calls["old"].duration_secs(0), None);
+    // a live call is timed
+    h.handle_event(update(call("new", "in_progress")));
+    let new = &h.sessions["s1"].tool_calls["new"];
+    assert!(new.first_seen > 0);
+    assert!(new.duration_secs(new.first_seen + 3) == Some(3));
+}
+
+/// A waiting feed entry leaves the feed (and the badge) once its approval
+/// is answered — it no longer waits for anything.
+#[test]
+fn answered_approval_leaves_the_waiting_feed() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(7),
+        request: permission_request("s1"),
+    });
+    let waiting: Vec<_> = h
+        .activity
+        .iter()
+        .filter(|e| e.kind == ActivityKind::Waiting)
+        .cloned()
+        .collect();
+    assert_eq!(waiting.len(), 1);
+    assert!(h.activity_shown(&waiting[0]));
+    let before = h.activity_unseen();
+    assert!(before >= 1);
+    h.answer_permission("s1", &json!(7), "allow_once");
+    assert!(
+        !h.activity_shown(&waiting[0]),
+        "answered: no longer waiting"
+    );
+    assert_eq!(h.activity_unseen(), before - 1, "the badge drops it too");
+}
+
+/// The feed keeps the newest 100 entries; the read marker moves with the
+/// dropped front, so new entries still count as unseen.
+#[test]
+fn activity_read_marker_survives_the_bound() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    for _ in 0..100 {
+        h.push_activity(ActivityKind::Finished, "s1", "done".to_string(), None);
+    }
+    h.ui.activity_seen = h.activity.len();
+    assert_eq!(h.activity_unseen(), 0);
+    h.push_activity(ActivityKind::Finished, "s1", "new".to_string(), None);
+    assert_eq!(h.activity.len(), 100);
+    assert_eq!(h.activity_unseen(), 1, "the new entry is unseen");
 }

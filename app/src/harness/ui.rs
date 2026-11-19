@@ -447,7 +447,7 @@ fn worktree_dialogs(h: &mut Harness, ctx: &egui::Context) {
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(tr(
-                        "Start ref (branch, tag or commit) — empty: a new branch from HEAD",
+                        "Start ref (branch, tag or commit) for the new branch — empty: HEAD",
                     ))
                     .color(theme::DIM)
                     .size(12.0),

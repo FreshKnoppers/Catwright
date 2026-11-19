@@ -36,7 +36,7 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
                 {
                     close = true;
                 }
-                let unseen = h.activity.len().saturating_sub(h.ui.activity_seen);
+                let unseen = h.activity_unseen();
                 if unseen > 0
                     && widgets::button(ui, tr("Mark all read"), ButtonKind::Secondary).clicked()
                 {
@@ -45,7 +45,13 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
             });
         });
         ui.add_space(6.0);
-        let events: Vec<ActivityEvent> = h.activity.iter().rev().cloned().collect();
+        let events: Vec<ActivityEvent> = h
+            .activity
+            .iter()
+            .rev()
+            .filter(|e| h.activity_shown(e))
+            .cloned()
+            .collect();
         if events.is_empty() {
             ui.label(
                 RichText::new(tr("Nothing yet — finished and waiting turns land here."))

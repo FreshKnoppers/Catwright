@@ -110,7 +110,7 @@ fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
         h.ui.palette = Some(Default::default());
     }
     // the activity feed with its unseen badge
-    let unseen_events = h.activity.len().saturating_sub(h.ui.activity_seen);
+    let unseen_events = h.activity_unseen();
     let resp = widgets::nav_row(ui, Icon::List, tr("Activity"), None, h.ui.activity_open);
     if unseen_events > 0 {
         let label = unseen_events.min(99).to_string();
@@ -221,9 +221,12 @@ fn workspace_tree(h: &mut Harness, ui: &mut egui::Ui, p: &Path, ops: &mut Vec<Op
     // the project's other worktrees (never the main worktree)
     let wts = h.worktrees_of(p);
     if !wts.is_empty() {
-        ui.add_space(2.0);
-        ui.add_space(2.0);
-        ui.label(theme::mono_label(tr("Worktrees")));
+        ui.add_space(4.0);
+        // indented like the session rows: the list belongs to this project
+        ui.horizontal(|ui| {
+            ui.add_space(20.0);
+            ui.label(theme::mono_label(tr("Worktrees")));
+        });
         for w in &wts {
             ui.horizontal(|ui| {
                 ui.add_space(20.0);

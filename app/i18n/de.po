@@ -1671,8 +1671,11 @@ msgstr "Worktree löschen"
 msgid "A new worktree of the current project, as its own workspace with its own sessions."
 msgstr "Ein neuer Worktree des aktuellen Projekts, als eigener Arbeitsbereich mit eigenen Sitzungen."
 
-msgid "Start ref (branch, tag or commit) — empty: a new branch from HEAD"
-msgstr "Start-Ref (Branch, Tag oder Commit) — leer: neuer Branch von HEAD"
+msgid "Start ref (branch, tag or commit) for the new branch — empty: HEAD"
+msgstr "Start-Ref (Branch, Tag oder Commit) für den neuen Branch — leer: HEAD"
+
+msgid "Not a valid start ref."
+msgstr "Keine gültige Start-Ref."
 
 msgid "Delete the worktree “{name}”? The files in the main project stay untouched."
 msgstr "Worktree „{name}“ löschen? Die Dateien im Hauptprojekt bleiben unberührt."

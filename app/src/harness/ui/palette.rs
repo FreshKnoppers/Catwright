@@ -94,14 +94,16 @@ pub(crate) fn entries(h: &mut Harness, query: &str) -> Vec<Entry> {
         );
     }
     // files of the current project (git ls-files, cached by the watcher;
-    // fuzzy match like the @-mention in the composer)
+    // fuzzy match like the @-mention in the composer) — only while
+    // searching: unfiltered, a dozen arbitrary files would push the
+    // sessions down
     let cwd = h
         .active
         .as_deref()
         .and_then(|s| h.sessions.get(s))
         .map(|s| s.cwd.clone())
         .or_else(|| h.current_project.clone());
-    if let Some(cwd) = &cwd {
+    if let Some(cwd) = cwd.as_ref().filter(|_| !query.trim().is_empty()) {
         let name = h.workspace_name(cwd);
         for rel in crate::harness::watch::filter_files(h.watcher.files(cwd), query, 12) {
             out.push(Entry {

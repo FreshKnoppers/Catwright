@@ -1228,12 +1228,7 @@ fn normalize_lexically(p: &Path) -> PathBuf {
 /// (cached) — contents are never read. Function names and symbols never
 /// match: without a slash or a file extension the token is not a candidate.
 pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
-    let t = token.trim_matches(|c: char| {
-        matches!(
-            c,
-            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':'
-        )
-    });
+    let t = chip_core(token);
     if t.is_empty() || t.chars().any(|c| c.is_whitespace()) {
         return None;
     }
@@ -1251,14 +1246,18 @@ pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
     if !looks_like_path {
         return None;
     }
+    // relative tokens resolve against the canonical root; an absolute one
+    // may be spelled through the workspace path as given (a symlinked
+    // folder) or through its canonical form
+    let root = canonical_cwd(cwd);
     let raw = Path::new(t);
     let joined = if raw.is_absolute() {
         raw.to_path_buf()
     } else {
-        cwd.join(raw)
+        root.join(raw)
     };
     let abs = normalize_lexically(&joined);
-    if !abs.starts_with(canonical_cwd(cwd)) {
+    if !abs.starts_with(&root) && !abs.starts_with(normalize_lexically(cwd)) {
         return None;
     }
     if file_exists_cached(&abs) {
@@ -1266,6 +1265,18 @@ pub fn resolve_workspace_file(cwd: &Path, token: &str) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// The path-like core of a token: surrounding quotes and brackets, list
+/// punctuation and sentence-ending marks stripped (`(src/main.rs),` and
+/// `analysis.py.` both give the file name).
+fn chip_core(token: &str) -> &str {
+    const WRAP: [char; 12] = ['`', '"', '\'', '(', ')', '[', ']', '{', '}', ',', ';', ':'];
+    token
+        .trim()
+        .trim_matches(WRAP)
+        .trim_end_matches(['.', '!', '?'])
+        .trim_end_matches(['"', '\'', ')', ']', '}'])
 }
 
 /// True when any inline of the run resolves to a workspace file.
@@ -1364,9 +1375,19 @@ fn render_inline_styled(
                             ui.label(st.apply(RichText::new(piece).color(st.color)));
                             continue;
                         }
-                        let word = piece.trim();
-                        if let Some(path) = resolve_workspace_file(ch.cwd, word) {
-                            file_chip(ui, word, &path, st.size, ch.open);
+                        let core = chip_core(piece);
+                        if let Some(path) = resolve_workspace_file(ch.cwd, core) {
+                            // the punctuation and the space around the path
+                            // stay text, so the sentence keeps its spacing
+                            let at = piece.find(core).unwrap_or(0);
+                            let (before, after) = (&piece[..at], &piece[at + core.len()..]);
+                            if !before.is_empty() {
+                                ui.label(st.apply(RichText::new(before).color(st.color)));
+                            }
+                            file_chip(ui, core, &path, st.size, ch.open);
+                            if !after.is_empty() {
+                                ui.label(st.apply(RichText::new(after).color(st.color)));
+                            }
                         } else {
                             ui.label(st.apply(RichText::new(piece).color(st.color)));
                         }
@@ -1392,7 +1413,7 @@ fn render_inline_styled(
             MdInline::Code(c) => {
                 if let Some(ch) = chips.as_deref_mut() {
                     if let Some(path) = resolve_workspace_file(ch.cwd, c) {
-                        file_chip(ui, c.trim(), &path, st.size, ch.open);
+                        file_chip(ui, chip_core(c), &path, st.size, ch.open);
                         continue;
                     }
                 }
@@ -2933,6 +2954,28 @@ mod tests {
         assert!(super::resolve_workspace_file(&cwd, "load(path)").is_none());
         // path-like but not existing stays plain text
         assert!(super::resolve_workspace_file(&cwd, "missing.py").is_none());
+        // sentence and list punctuation around a path is not part of it
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "analysis.py.").unwrap(),
+            cwd.join("analysis.py")
+        );
+        assert_eq!(
+            super::resolve_workspace_file(&cwd, "(src/main.rs),").unwrap(),
+            cwd.join("src").join("main.rs")
+        );
+        assert_eq!(super::chip_core("(src/main.rs),"), "src/main.rs");
+        assert_eq!(super::chip_core("analysis.py. "), "analysis.py");
+        // a workspace opened through a symlink resolves the same files
+        let link = std::env::temp_dir().join(format!("cw-chips-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&cwd, &link).unwrap();
+        assert_eq!(
+            super::resolve_workspace_file(&link, "analysis.py").unwrap(),
+            cwd.join("analysis.py")
+        );
+        let via_link = link.join("analysis.py");
+        assert!(super::resolve_workspace_file(&link, via_link.to_str().unwrap()).is_some());
+        let _ = std::fs::remove_file(&link);
         assert!(super::resolve_workspace_file(&cwd, "2.5").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

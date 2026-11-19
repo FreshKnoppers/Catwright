@@ -435,13 +435,17 @@ impl ToolCall {
     }
 
     /// Client-side duration in seconds: last update minus first arrival; a
-    /// call that is not finished measures up to `now`.
-    pub fn duration_secs(&self, now: u64) -> u64 {
+    /// call that is not finished measures up to `now`. `None` when the call
+    /// was not watched live (replayed history): no honest duration exists.
+    pub fn duration_secs(&self, now: u64) -> Option<u64> {
+        if self.first_seen == 0 {
+            return None;
+        }
         let end = match self.status {
             ToolStatus::Completed | ToolStatus::Failed => self.last_update,
             _ => now,
         };
-        end.saturating_sub(self.first_seen)
+        Some(end.saturating_sub(self.first_seen))
     }
 }
 
