@@ -74,16 +74,24 @@ pub const CHART_SERIES: [Color32; 9] = [
     PROJECT_PALETTE[2], // orange
 ];
 
-/// Our own pixel mark: a little pixel window with two yellow eyes on a red
-/// sill. `o` = ORANGE, `y` = YELLOW, `r` = RED, `.` = empty. The app icons
-/// (`assets/icon.png`, `dist/icons/`) are rendered from this bitmap by
-/// `tools/icons/render.py`.
-pub const LOGO: [&str; 5] = [
-    "ooooooooo",
-    "o.......o",
-    "o.y...y.o",
-    "o.......o",
-    "rrrrrrrrr",
+/// Our own pixel mark: a cat sitting on a red branch, facing right, its tail
+/// hanging down over the branch. The eye is an empty cell, so the dark tile
+/// shows through. `o` = ORANGE, `y` = YELLOW, `r` = RED, `.` = empty. The
+/// app icons (`assets/icon.png`, `dist/icons/`) are rendered from this
+/// bitmap by `tools/icons/render.py`.
+pub const LOGO: [&str; 12] = [
+    ".....o..o...",
+    ".....oooo...",
+    ".....oo.o...",
+    ".....oooo...",
+    "....oooo....",
+    "...ooooo....",
+    "...ooooo....",
+    "...oooooo...",
+    "rrrrrrrrrrrr",
+    "..o.........",
+    "..o.........",
+    "...o........",
 ];
 
 /// Colour of one `LOGO` cell; `None` for an empty one.
@@ -621,19 +629,24 @@ mod tests {
 
     #[test]
     fn logo_bitmap_shape() {
-        assert_eq!(LOGO.len(), 5);
+        // square, so the mark fills the square icon tile
+        assert_eq!(LOGO.len(), 12);
         for row in LOGO {
-            assert_eq!(row.chars().count(), LOGO[0].chars().count());
+            assert_eq!(row.chars().count(), LOGO.len());
             // every cell is empty or has a colour: no unknown letters
             assert!(row.chars().all(|c| c == '.' || logo_color(c).is_some()));
         }
-        // all three colours appear, and the mark is closed on both sides
-        for c in ['o', 'y', 'r'] {
-            assert!(LOGO.iter().any(|row| row.contains(c)), "{c} is used");
-        }
-        assert!(LOGO
-            .iter()
-            .all(|row| !row.starts_with('.') && !row.ends_with('.')));
+        // the branch is one full red row: the cat sits on it, nothing else
+        // is red, and the tail hangs below it
+        let branch = LOGO.iter().position(|row| row.contains('r')).unwrap();
+        assert!(LOGO[branch].chars().all(|c| c == 'r'));
+        assert!(LOGO.iter().filter(|row| row.contains('r')).count() == 1);
+        assert!(LOGO[..branch].iter().all(|row| row.contains('o')));
+        assert!(LOGO[branch + 1..].iter().all(|row| row.contains('o')));
+        // the eye is a hole inside the head (fur on both sides of it)
+        let eye = LOGO[2].find("o.o").expect("eye row");
+        assert!(LOGO[1][eye..eye + 3].chars().all(|c| c == 'o'));
+        assert!(LOGO[3][eye..eye + 3].chars().all(|c| c == 'o'));
         assert_eq!(logo_color('.'), None);
     }
 

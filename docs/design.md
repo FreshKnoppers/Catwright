@@ -54,8 +54,9 @@ Pixel gradient (for pixel art / meters, left to right):
   = `ORANGE_DIM`, empty = `RAISED`. Use for the context window (Kontext
   panel: 20 blocks = 100 %), thinking level (low/medium/high = 1/2/3 of 3
   blocks) and speed-like indicators.
-- **Pixel logo** (`theme::LOGO`): our OWN 9×5 pixel mark, a little window
-  with an `ORANGE` frame, two `YELLOW` eyes and a `RED` sill. Drawn at 2 pt
+- **Pixel logo** (`theme::LOGO`): our OWN 12×12 pixel mark, an `ORANGE`
+  cat sitting in profile on a `RED` branch, its tail hanging down over the
+  branch; the eye is an empty cell (the tile shows through). Drawn at 2 pt
   cells in the sidebar. The app icons show it on a dark `SIDEBAR` tile with
   a `BORDER_SOFT` edge (rendered by `tools/icons/render.py`, which reads the
   bitmap from theme.rs; a test checks the bundled icon against it). Do NOT
