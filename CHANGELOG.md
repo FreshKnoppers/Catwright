@@ -11,6 +11,39 @@ tag (`## v0.2.0`) as that release's description.
   symlink or a `..`); file chips in answers no longer resolve through
   symlinks that point outside the workspace. The containment check is
   cached per path, so rendering stays cheap.
+- Security hardening against a malicious repository or a hostile agent
+  (seven review rounds, the git findings verified with proofs of concept
+  against git 2.56):
+  - Git (branch chip, status, worktrees, diff preview) runs only in
+    folders Vibe reports as trusted; elsewhere the header says "Git hidden
+    until the folder is trusted". In a trusted folder no code from the
+    repository's own git config runs through the app's git calls: filter
+    drivers from every scope are switched off (git-lfs included), the
+    repository's hooks never run, the diff preview reads the old version
+    without textconv, and git never fetches or starts ssh. A repository
+    whose own config has `include`, `includeIf` or `hook` entries, or whose
+    config files are not plain files, gets no git calls at all.
+  - Deleting a worktree warns when its changes could not be checked,
+    instead of treating it as clean.
+  - Opening a file outside the session's workspace from a tool row, a diff
+    or an artifact asks first and names the absolute path.
+  - Permission cards show every argument of a tool call, not only the
+    command.
+  - Buttons and forms in `ui` blocks show what they send and need a second
+    click within 5 seconds.
+  - Limits against floods: a session keeps at most 64 MiB of transcript in
+    memory (the oldest items leave first; Vibe keeps the full history),
+    single texts and tool calls are capped, tables show at most 32 columns
+    and 200 rows, at most 64 live ui-js tools run at once and never block
+    the window, too many open approvals or questions are cancelled instead
+    of piling up, and preview reads are capped and never hang on a FIFO.
+  - The config folder is refused if it is a symlink, instead of being
+    followed.
+- Known limitations of the hardening: worktrees that Catwright creates in a
+  Git LFS repository contain LFS pointer files instead of the real content
+  (`git lfs pull` inside the worktree fetches it), LFS-tracked files may
+  show as modified in the app's git status, and changes inside submodules
+  are not shown.
 
 ## v0.5.1
 
