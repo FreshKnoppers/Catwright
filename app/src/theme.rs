@@ -76,9 +76,10 @@ pub const CHART_SERIES: [Color32; 9] = [
 
 /// Our own pixel mark: a cat sitting on a red branch, facing right, its tail
 /// hanging down over the branch. The eye is an empty cell, so the dark tile
-/// shows through. `o` = ORANGE, `y` = YELLOW, `r` = RED, `.` = empty. The
-/// app icons (`assets/icon.png`, `dist/icons/`) are rendered from this
-/// bitmap by `tools/icons/render.py`.
+/// shows through. `o` = ORANGE, `r` = RED, `.` = empty (`y` = YELLOW is
+/// available too, the cat does not use it). The app icons
+/// (`assets/icon.png`, `dist/icons/`) are rendered from this bitmap by
+/// `tools/icons/render.py`.
 pub const LOGO: [&str; 12] = [
     ".....o..o...",
     ".....oooo...",
