@@ -13,9 +13,9 @@ The app speaks English and German (Deutsch).
 > with Mistral AI. "Mistral" and "Vibe" are trademarks of their respective
 > owners; they are named here only to describe what the app works with.
 
-> **Vibe-coded.** Nearly all of the code was written by AI coding agents
-> (Claude Code and Mistral Vibe), steered and tested by the maintainer. It
-> has an automated test suite, but no human has reviewed it line by line.
+> **Fully vibe-coded.** All of the code was written by AI coding agents
+> (Claude Code and Mistral Vibe); the maintainer only steered and tested it.
+> It has an automated test suite, but no human has reviewed it line by line.
 > Use it with that in mind, and please report bugs.
 
 ![A session with its first round folded, a Markdown table and the side panel with context and changes](docs/screenshots/session.png)
