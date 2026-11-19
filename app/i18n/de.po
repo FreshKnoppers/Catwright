@@ -1805,3 +1805,6 @@ msgstr "Der Konfigurationsordner ist ein Symlink: {path}"
 
 msgid "Git hidden until the folder is trusted"
 msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "Die Diff-Vorschau braucht einen vertrauten Ordner."

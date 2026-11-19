@@ -1805,3 +1805,6 @@ msgstr "La cartella di configurazione è un collegamento simbolico: {path}"
 
 msgid "Git hidden until the folder is trusted"
 msgstr "Git nascosto finché la cartella non è attendibile"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "L’anteprima della diff richiede una cartella attendibile."

@@ -385,37 +385,46 @@ const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// word. `git config --list` exits 0 in any repository, so `None` here means
 /// the probe itself failed — callers fail closed.
 pub fn probe_filter_drivers(dir: &Path) -> Option<Vec<String>> {
-    // Not a repository? Then there is no repo config to neutralize and
-    // plain calls (`git init` & co.) must still work: no repo, no repo
-    // code. `rev-parse --git-dir` runs no repo code and fails outside one
-    // (`git config --list` alone would exit 0 everywhere — it also reads
-    // global/system — so it cannot be the gate).
-    if git_raw_bounded(
+    // Tri-state gate, fail closed on anything ambiguous. `rev-parse
+    // --git-dir` exits 0 in a repository and 128 outside one — but it READS
+    // the repo config, so a shipped `include.path` pointing at a FIFO blocks
+    // it until the timeout (PoC-verified against git 2.56). A timeout, a
+    // kill, a spawn failure or any other exit code must therefore NOT be
+    // read as "not a repo" (that would run the real command unneutralized
+    // while an attacker feeds the FIFO a filter driver); only a clean
+    // exit 128 means "no repo, no repo config, no repo code", which keeps
+    // plain calls like `git init` working outside repositories.
+    match git_raw(
         dir,
         &["rev-parse".to_string(), "--git-dir".to_string()],
         GIT_TIMEOUT,
         4096,
         &[],
-    )
-    .is_none()
-    {
-        return Some(Vec::new());
+    ) {
+        RawGit::Exit(128) => Some(Vec::new()),
+        RawGit::Ok(_) => {
+            // A repository EXISTS: its config must be readable, else fail
+            // closed (`git config --list` alone would exit 0 everywhere —
+            // it also reads global/system — so rev-parse is the gate).
+            match git_raw(
+                dir,
+                &[
+                    "config".to_string(),
+                    "--includes".to_string(),
+                    "--show-scope".to_string(),
+                    "--list".to_string(),
+                    "-z".to_string(),
+                ],
+                GIT_TIMEOUT,
+                MAX_GIT_OUTPUT_BYTES,
+                &[],
+            ) {
+                RawGit::Ok(out) => Some(parse_scoped_filter_list(&out)),
+                _ => None,
+            }
+        }
+        _ => None,
     }
-    // A repository EXISTS: its config must be readable, else fail closed.
-    let out = git_raw_bounded(
-        dir,
-        &[
-            "config".to_string(),
-            "--includes".to_string(),
-            "--show-scope".to_string(),
-            "--list".to_string(),
-            "-z".to_string(),
-        ],
-        GIT_TIMEOUT,
-        MAX_GIT_OUTPUT_BYTES,
-        &[],
-    )?;
-    Some(parse_scoped_filter_list(&out))
 }
 
 /// Parse `git config --show-scope --list -z` output (verified against
@@ -486,6 +495,35 @@ pub fn git_output_sized(dir: &Path, args: &[&str], max_bytes: usize) -> Option<S
     git_raw_bounded(dir, &all, GIT_TIMEOUT, max_bytes, &neutral)
 }
 
+/// The committed content of `rel` at HEAD via PLUMBING (`cat-file blob`).
+/// Never use `git show HEAD:./rel` for this: when `rel` is a gitlink the
+/// expression resolves to a *commit*, and `git show <commit>` applies the
+/// repo's `diff.<drv>.textconv` from a shipped `.gitattributes` — PoC-
+/// verified against git 2.56 that this executes the configured command
+/// (RCE). `cat-file blob` applies no textconv and no filters and fails on
+/// non-blobs (gitlinks), which callers treat as "no old version".
+pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String> {
+    git_output_sized(
+        dir,
+        &["cat-file", "blob", &format!("HEAD:./{rel}")],
+        max_bytes,
+    )
+}
+
+/// Outcome of one bounded git call, so callers can tell "the command ran
+/// and refused" apart from "we never got a trustworthy answer".
+#[derive(Debug)]
+enum RawGit {
+    /// exited 0 with output within the byte cap
+    Ok(String),
+    /// exited cleanly with this code (128 = "not a git repository" for
+    /// `rev-parse --git-dir`)
+    Exit(i32),
+    /// spawn/io error, over the byte cap, or killed at the deadline — no
+    /// trustworthy answer, callers must fail closed
+    Failed,
+}
+
 fn git_raw_bounded(
     dir: &Path,
     args: &[String],
@@ -493,6 +531,19 @@ fn git_raw_bounded(
     max_bytes: usize,
     neutral: &[(String, String)],
 ) -> Option<String> {
+    match git_raw(dir, args, timeout, max_bytes, neutral) {
+        RawGit::Ok(s) => Some(s),
+        _ => None,
+    }
+}
+
+fn git_raw(
+    dir: &Path,
+    args: &[String],
+    timeout: Duration,
+    max_bytes: usize,
+    neutral: &[(String, String)],
+) -> RawGit {
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.fsmonitor=false")
@@ -514,7 +565,10 @@ fn git_raw_bounded(
             cmd.env(format!("GIT_CONFIG_VALUE_{i}"), v);
         }
     }
-    let mut child = cmd.spawn().ok()?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return RawGit::Failed,
+    };
     // stdout is drained while waiting: a big `git status` must not block
     // on a full pipe until the timeout (same pipe shape as script.rs). The
     // read is capped at `max_bytes + 1` BYTES (not chars: read_to_string
@@ -522,7 +576,10 @@ fn git_raw_bounded(
     // one byte over the cap proves truncation, and then the child (blocked
     // on a full pipe) is killed at once instead of running until the
     // deadline.
-    let stdout = child.stdout.take()?;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return RawGit::Failed,
+    };
     let (reader_tx, reader_rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut out = Vec::new();
@@ -551,10 +608,14 @@ fn git_raw_bounded(
         match child.try_wait() {
             Ok(Some(status)) => {
                 let out = received.take().unwrap_or_default();
-                if !status.success() || out.len() > max_bytes {
-                    return None;
+                if out.len() > max_bytes {
+                    return RawGit::Failed;
                 }
-                return Some(String::from_utf8_lossy(&out).into_owned());
+                return match status.code() {
+                    Some(0) => RawGit::Ok(String::from_utf8_lossy(&out).into_owned()),
+                    Some(code) => RawGit::Exit(code),
+                    None => RawGit::Failed, // killed by a signal
+                };
             }
             Ok(None) => {
                 if received.as_ref().is_some_and(|s| s.len() > max_bytes) {
@@ -570,7 +631,7 @@ fn git_raw_bounded(
     }
     let _ = child.kill();
     let _ = child.wait();
-    None
+    RawGit::Failed
 }
 
 /// Tracked and untracked-but-not-ignored files of a git repository, else a
@@ -1079,6 +1140,193 @@ mod tests {
         // now it is a repo: the probe reads its config (no filters here)
         assert_eq!(probe_filter_drivers(&not_a_repo), Some(vec![]));
         assert!(git_output(&not_a_repo, &["status", "--porcelain"]).is_some());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `head_blob_sized` must read the HEAD blob through plumbing
+    /// (`cat-file blob`), never `git show`: on a gitlink `HEAD:./sub`
+    /// resolves to a commit and `git show` applies the repo's textconv —
+    /// PoC-verified against git 2.56 that this executes the configured
+    /// command. `cat-file blob` applies no textconv and fails on gitlinks.
+    #[test]
+    fn head_blob_uses_plumbing_never_textconv() {
+        let base = tmp_base("textconv-poc");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let marker = base.join("pwned");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("-c")
+                .arg("user.email=t@t")
+                .arg("-c")
+                .arg("user.name=t")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        git(&["init", "-q", "."]);
+        // a textconv driver that would prove execution
+        git(&[
+            "config",
+            "diff.x.textconv",
+            &format!("touch {}", marker.to_string_lossy()),
+        ]);
+        std::fs::write(repo.join(".gitattributes"), "* diff=x\n").unwrap();
+        std::fs::write(repo.join("f.txt"), "hello\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "one"]);
+        // a gitlink whose commit object ships in the same object store
+        let sha = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{sha},sub"),
+        ]);
+        git(&["commit", "-qm", "gitlink"]);
+
+        // PoC premise: `git show HEAD:./sub` DOES run the textconv (RCE)
+        let _ = std::fs::remove_file(&marker);
+        let show = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["--no-pager", "show", "HEAD:./sub"])
+            .output()
+            .unwrap();
+        let _ = show.status;
+        assert!(
+            marker.exists(),
+            "PoC premise: plain git show on the gitlink runs the textconv"
+        );
+
+        // our path must not: blob content for a normal file, None for the
+        // gitlink, and no textconv execution either way
+        let _ = std::fs::remove_file(&marker);
+        let blob = head_blob_sized(&repo, "f.txt", 1024).expect("blob at HEAD");
+        assert_eq!(blob, "hello\n");
+        assert!(!marker.exists(), "cat-file must not run textconv");
+        assert!(
+            head_blob_sized(&repo, "sub", 1024).is_none(),
+            "gitlink is not a blob"
+        );
+        assert!(
+            !marker.exists(),
+            "cat-file must not run textconv on gitlinks"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The probe gate is tri-state: a clean exit 128 means "not a repo"
+    /// (plain calls keep working), a timeout on a blocked `rev-parse`
+    /// (FIFO include, PoC-verified to block git 2.56) must FAIL CLOSED,
+    /// not be misread as "not a repo" — else the real command would run
+    /// unneutralized while an attacker feeds the FIFO a filter driver.
+    #[test]
+    fn git_raw_tri_state_not_repo_vs_blocked_vs_ok() {
+        let base = tmp_base("tri-state");
+        let plain = base.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        // not a repo: rev-parse exits 128
+        match git_raw(
+            &plain,
+            &["rev-parse".to_string(), "--git-dir".to_string()],
+            Duration::from_millis(2000),
+            4096,
+            &[],
+        ) {
+            RawGit::Exit(128) => {}
+            other => panic!("expected Exit(128) outside a repo, got {other:?}"),
+        }
+        // repo with a FIFO include and a writer that never sends: the
+        // probe's rev-parse blocks until the deadline -> Failed
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("-c")
+            .arg("user.email=t@t")
+            .arg("-c")
+            .arg("user.name=t")
+            .args(["init", "-q", "."])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let fifo = repo.join(".git").join("fifo");
+        #[cfg(unix)]
+        {
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap();
+            std::fs::write(
+                repo.join(".git").join("config"),
+                format!(
+                    "[include]\n\tpath = ./fifo\n{}",
+                    std::fs::read_to_string(repo.join(".git").join("config")).unwrap_or_default()
+                ),
+            )
+            .unwrap();
+            // hold the write end open without sending anything
+            let fifo2 = fifo.clone();
+            let holder = std::thread::spawn(move || {
+                let _f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&fifo2)
+                    .map(|mut f| {
+                        use std::io::Write;
+                        let _ = f.write_all(b"");
+                        std::thread::sleep(Duration::from_secs(10));
+                    });
+            });
+            let r = git_raw(
+                &repo,
+                &["rev-parse".to_string(), "--git-dir".to_string()],
+                Duration::from_millis(300),
+                4096,
+                &[],
+            );
+            assert!(
+                matches!(r, RawGit::Failed),
+                "blocked rev-parse must be Failed (fail closed), got {r:?}"
+            );
+            // and so the probe fails closed instead of "no repo"
+            let probe = probe_filter_drivers(&repo);
+            assert_eq!(probe, None, "probe must fail closed on a blocked config");
+            drop(holder);
+        }
+        // a healthy repo: Ok
+        let ok = base.join("ok");
+        std::fs::create_dir_all(&ok).unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ok)
+            .args(["init", "-q", "."])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        match git_raw(
+            &ok,
+            &["rev-parse".to_string(), "--git-dir".to_string()],
+            Duration::from_millis(2000),
+            4096,
+            &[],
+        ) {
+            RawGit::Ok(_) => {}
+            other => panic!("expected Ok in a repo, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -1805,3 +1805,6 @@ msgstr "La carpeta de configuración es un enlace simbólico: {path}"
 
 msgid "Git hidden until the folder is trusted"
 msgstr "Git oculto hasta que se confíe en la carpeta"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "La vista de diff necesita una carpeta de confianza."

@@ -268,10 +268,16 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                         let key = format!("preview::{}", p.path);
                         let mut comments =
                             Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
+                        // git scans (and so the diff's HEAD read) only run
+                        // for folders the agent reported as trusted
+                        let trusted = base
+                            .as_deref()
+                            .is_some_and(|b| h.trust.get(b).is_some_and(|t| t.trusted));
                         diff_content(
                             ui,
                             &p.path,
                             base.as_deref(),
+                            trusted,
                             (&key, &mut comments, &mut ops),
                         );
                         comment_section(ui, &key, &shown, &mut comments, &mut ops);
@@ -309,6 +315,7 @@ fn diff_content(
     ui: &mut egui::Ui,
     path: &str,
     base: Option<&std::path::Path>,
+    trusted: bool,
     comment: (&str, &mut Comments, &mut Vec<MessageOp>),
 ) {
     type DiffCache = std::sync::Mutex<
@@ -360,16 +367,23 @@ fn diff_content(
                 .strip_prefix(&dir)
                 .map(|r| r.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| path.to_string());
-            // one bounded call: `HEAD:./path` is relative to the folder git
-            // runs in; no commit yet or untracked file -> non-zero exit ->
-            // None. The output is capped at the preview size: a huge blob
-            // counts as "no old version" instead of a huge String on the
-            // UI thread.
-            let old = crate::harness::watch::git_output_sized(
-                &dir,
-                &["show", &format!("HEAD:./{rel}")],
-                artifacts::MAX_PREVIEW_BYTES as usize,
-            );
+            // one bounded PLUMBING call: `HEAD:./path` is relative to the
+            // folder git runs in; no commit yet, untracked file or a gitlink
+            // -> non-zero exit -> None. Never `git show` here: on a gitlink
+            // it resolves to a commit and applies the repo's textconv (RCE,
+            // PoC-verified). The output is capped at the preview size: a
+            // huge blob counts as "no old version" instead of a huge String
+            // on the UI thread. And only in a folder the agent reported as
+            // trusted — a shipped .git/config is executable by git.
+            let old = if trusted {
+                crate::harness::watch::head_blob_sized(
+                    &dir,
+                    &rel,
+                    artifacts::MAX_PREVIEW_BYTES as usize,
+                )
+            } else {
+                None
+            };
             // capped, handle-based read — never a whole-file read_to_string
             // on an agent-named path, never a blocking FIFO open (see
             // artifacts::load_preview_capped / open_nonblock)
@@ -388,12 +402,15 @@ fn diff_content(
             entry
         }
     };
-    match old {
-        Some(old) if old != current => diff_body(ui, Some(&old), &current, 400, Some(comment)),
-        Some(_) => notice(ui, tr("No changes against the last commit.")),
+    match (trusted, old) {
+        // git runs only in trusted folders; without that there is no old
+        // version and the diff would be misleading
+        (false, _) => notice(ui, tr("Diff preview needs a trusted folder.")),
+        (_, Some(old)) if old != current => diff_body(ui, Some(&old), &current, 400, Some(comment)),
+        (_, Some(_)) => notice(ui, tr("No changes against the last commit.")),
         // no commit yet, or the file is untracked: every line is new
-        None if !current.is_empty() => diff_body(ui, None, &current, 400, Some(comment)),
-        None => notice(ui, tr("No changes against the last commit.")),
+        (_, None) if !current.is_empty() => diff_body(ui, None, &current, 400, Some(comment)),
+        (_, None) => notice(ui, tr("No changes against the last commit.")),
     }
 }
 

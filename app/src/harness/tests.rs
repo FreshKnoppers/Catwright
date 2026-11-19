@@ -5734,6 +5734,18 @@ fn safety_ui_screenshots() {
     }
     assert!(h.watcher.git(&dir, false).is_none());
     shot(&mut h, "24-git-hidden-untrusted");
+
+    // 6) diff preview in an untrusted folder: no git call, just the notice
+    let f = dir.join("analysis.py");
+    std::fs::write(&f, "a = 1\n").unwrap();
+    h.ui.preview = Some(crate::harness::state::PreviewState {
+        path: f.to_string_lossy().into_owned(),
+        width: 380.0,
+        mode: crate::harness::state::PreviewMode::Diff,
+        outside_workspace: false,
+    });
+    shot(&mut h, "25-diff-needs-trust");
+    h.ui.preview = None;
     if let Some(t) = h.trust.get_mut(&dir) {
         t.trusted = true;
     }

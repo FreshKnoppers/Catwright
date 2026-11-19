@@ -1805,3 +1805,6 @@ msgstr "Le dossier de configuration est un lien symbolique : {path}"
 
 msgid "Git hidden until the folder is trusted"
 msgstr "Git masqué tant que le dossier n'est pas approuvé"
+
+msgid "Diff preview needs a trusted folder."
+msgstr "L’aperçu de diff nécessite un dossier approuvé."
