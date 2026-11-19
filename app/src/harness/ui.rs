@@ -452,11 +452,16 @@ fn worktree_dialogs(h: &mut Harness, ctx: &egui::Context) {
                     .color(theme::DIM)
                     .size(12.0),
                 );
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::singleline(&mut d.start_ref)
                         .desired_width(f32::INFINITY)
                         .hint_text("main"),
                 );
+                resp.request_focus();
+                // Enter in the field creates, like the button
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    create = true;
+                }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
