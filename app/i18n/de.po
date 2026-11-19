@@ -1694,3 +1694,6 @@ msgstr "Worktree gelöscht."
 
 msgid "The worktree could not be deleted: {error}"
 msgstr "Der Worktree konnte nicht gelöscht werden: {error}"
+
+msgid "Enter a task and an interval first."
+msgstr "Erst einen Auftrag und ein Intervall eingeben."

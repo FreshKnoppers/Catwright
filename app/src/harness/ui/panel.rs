@@ -670,7 +670,18 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     );
                 });
                 ui.horizontal(|ui| {
-                    if widgets::button(ui, tr("Create"), ButtonKind::Primary).clicked() {
+                    // Vibe needs both: without them the button stays off and
+                    // says why, instead of a click that does nothing
+                    let ready = !form.prompt.trim().is_empty() && !form.interval.trim().is_empty();
+                    let resp = ui
+                        .add_enabled_ui(ready, |ui| {
+                            widgets::button(ui, tr("Create"), ButtonKind::Primary)
+                        })
+                        .inner;
+                    if resp
+                        .on_disabled_hover_text(tr("Enter a task and an interval first."))
+                        .clicked()
+                    {
                         create = true;
                     }
                     if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
