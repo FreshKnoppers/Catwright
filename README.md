@@ -111,8 +111,10 @@ The screenshots show demo projects with prepared sessions
   only when you open it.
 - Catwright runs its own `git` lookups (branch/dirty count, file list, diff
   previews) only in folders Vibe reported as trusted, and neutralizes any
-  `filter.*` drivers a shipped `.git/config` (zip/tarball) might define —
-  `git status` would otherwise execute them. Fetching is disabled outright
+  `filter.*` drivers a shipped `.git/config` (zip/tarball) or a user-global
+  one (git-lfs) might define — `git status` would otherwise execute them,
+  and a repo can weaponize a global driver via `.gitattributes` plus
+  repo-local `lfs.*` keys. Fetching is disabled outright
   (`protocol.allow=never` plus `GIT_ALLOW_PROTOCOL=none`, no lazy fetch, so
   a partial-clone config cannot trigger `core.sshCommand`), repo-scope
   `include.*`/`includeIf.*` and `hook.*` keys (config-defined hooks run even

@@ -1494,8 +1494,12 @@ impl Harness {
             let res = match res {
                 Ok(_) => {
                     if delete_branch && !branch.is_empty() {
-                        let _ =
-                            watch::run_git(&project, &["branch", "-D", &branch], WORKTREE_TIMEOUT);
+                        // `--` so a shipped ref name can never become an option
+                        let _ = watch::run_git(
+                            &project,
+                            &["branch", "-D", "--", &branch],
+                            WORKTREE_TIMEOUT,
+                        );
                     }
                     let _ = watch::run_git(&project, &["worktree", "prune"], WORKTREE_TIMEOUT);
                     Ok(())

@@ -300,6 +300,10 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<St
         // beats per-protocol `protocol.<name>.allow` in the repo's config
         // (verified against git 2.56: env wins even over `-c`)
         .env("GIT_ALLOW_PROTOCOL", "none")
+        // belt and braces for smudge on `worktree add` checkout (the lfs
+        // process filter itself is neutralized via env config, but a
+        // non-process smudge could still start it)
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -444,17 +448,24 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
                     dir.join(p)
                 }
             };
-            let commondir = match std::fs::read_to_string(gitdir.join("commondir")) {
-                Ok(c) => {
-                    let c = c.trim();
-                    let p = Path::new(c);
-                    if p.is_absolute() {
-                        p.to_path_buf()
-                    } else {
-                        gitdir.join(p)
+            // `commondir` must be a regular file before we read it — a FIFO
+            // would block this read forever (no deadline on the UI thread)
+            let commondir_file = gitdir.join("commondir");
+            let commondir = match std::fs::symlink_metadata(&commondir_file) {
+                Ok(m) if m.is_file() => match std::fs::read_to_string(&commondir_file) {
+                    Ok(c) => {
+                        let c = c.trim();
+                        let p = Path::new(c);
+                        if p.is_absolute() {
+                            p.to_path_buf()
+                        } else {
+                            gitdir.join(p)
+                        }
                     }
-                }
-                Err(_) => gitdir.clone(),
+                    Err(_) => gitdir.clone(),
+                },
+                Ok(_) => return None,     // FIFO/symlink/... — fail closed
+                Err(_) => gitdir.clone(), // no commondir: plain repo
             };
             if !config_files_are_regular(&gitdir, &commondir) {
                 return None;
@@ -539,20 +550,25 @@ fn repo_scoped_dangerous_key(out: &str) -> bool {
 
 /// Parse `git config --show-scope --list -z` output (verified against
 /// git 2.56): the byte stream is alternating `scope\0` and `key\nvalue\0`
-/// fields. Returns the distinct `filter.<name>.*` driver names from
-/// non-system/non-global scopes (the subsection may contain dots, so the
-/// subkey is the part after the *last* dot of the key).
+/// fields. Returns the distinct `filter.<name>.*` driver names from ALL
+/// scopes (the subsection may contain dots, so the subkey is the part after
+/// the *last* dot of the key).
 pub fn parse_scoped_filter_list(out: &str) -> Vec<String> {
+    // Drivers are collected from ALL scopes, including system/global: a
+    // user-global driver (typically git-lfs in ~/.gitconfig) becomes
+    // repo-controlled the moment a shipped `.gitattributes` says
+    // `* filter=lfs` and the shipped `.git/config` defines
+    // `lfs.extension.*`/`lfs.customtransfer.*` — git-lfs reads the repo's
+    // local config and does its own HTTP/ssh, so the network guards do
+    // not apply. Neutralizing the driver (clean=cat, smudge=cat, empty
+    // process) means git never starts the process at all. The cost is
+    // cosmetic: lfs-tracked files may show as modified in our scans.
     let mut names: Vec<String> = Vec::new();
     let parts: Vec<&str> = out.split('\0').collect();
     let mut i = 0;
     while i + 1 < parts.len() {
-        let scope = parts[i];
         let key_value = parts[i + 1];
         i += 2;
-        if scope == "system" || scope == "global" {
-            continue;
-        }
         let Some((key, _value)) = key_value.split_once('\n') else {
             continue;
         };
@@ -672,6 +688,9 @@ fn git_raw(
         // beats per-protocol `protocol.<name>.allow` in the repo's config
         // (verified against git 2.56: env wins even over `-c`)
         .env("GIT_ALLOW_PROTOCOL", "none")
+        // belt and braces for smudge filters (the drivers themselves are
+        // neutralized via env config, so e.g. git-lfs never starts)
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
         .arg("-C")
         .arg(dir)
         // never touch the repository's index: the agent's own git commands
@@ -1067,20 +1086,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_scoped_filter_list_reads_names_with_dots_and_skips_system_global() {
+    fn parse_scoped_filter_list_reads_names_with_dots_from_all_scopes() {
         // `git config --show-scope --list -z` (git 2.56) emits alternating
-        // `scope\0` and `key\nvalue\0` fields
+        // `scope\0` and `key\nvalue\0` fields. ALL scopes count — a
+        // user-global driver (git-lfs) is repo-controlled via a shipped
+        // `.gitattributes` + repo-local `lfs.*` keys.
         let out = "global\0pull.rebase\nfalse\0\
                    local\0filter.pwn.clean\nsh -c evil.sh --flag\0\
                    local\0filter.pwn.smudge\ncat\0\
                    local\0filter.a.b.clean\ncat\0\
                    local\0core.fsmonitor\ntrue\0\
                    system\0filter.sys.clean\nevil\0\
-                   worktree\0filter.wt.process\nevil\0";
+                   worktree\0filter.wt.process\nevil\0\
+                   global\0filter.lfs.process\ngit-lfs filter-process\0";
         assert_eq!(
             parse_scoped_filter_list(out),
-            vec!["pwn", "a.b", "wt"],
-            "local and worktree scopes count; system/global do not"
+            vec!["pwn", "a.b", "sys", "wt", "lfs"],
+            "drivers from every scope are neutralized"
         );
         assert!(parse_scoped_filter_list("").is_empty());
     }
@@ -1523,6 +1545,37 @@ mod tests {
             probe_filter_drivers(&repo),
             None,
             "a symlinked .git/config must fail closed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A `commondir` file that is not a regular file (FIFO) must fail the
+    /// probe closed immediately — reading it would block forever (the read
+    /// has no deadline and can happen on the UI thread).
+    #[test]
+    fn fifo_commondir_fails_the_probe_closed_without_blocking() {
+        let base = tmp_base("fifo-commondir");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "-q", "."])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::process::Command::new("mkfifo")
+            .arg(repo.join(".git").join("commondir"))
+            .status()
+            .unwrap();
+        // git's own rev-parse reads the FIFO commondir and blocks until
+        // the probe deadline (5 s) — bounded, then fail closed; our own
+        // read never happens (regular-file check first)
+        let start = std::time::Instant::now();
+        assert_eq!(probe_filter_drivers(&repo), None);
+        assert!(
+            start.elapsed() < GIT_TIMEOUT + Duration::from_secs(3),
+            "the probe must return (fail closed) instead of hanging forever"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
