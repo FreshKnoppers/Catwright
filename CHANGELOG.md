@@ -5,6 +5,12 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+Known limit:
+
+- Drag & drop (new in v0.3.0) works on X11/XWayland only: the window
+  library reports no dropped files in a native Wayland session. The "+"
+  button attaches files everywhere.
+
 Fixes:
 
 - A finished subagent's status bar no longer shows a block next to the

@@ -65,7 +65,8 @@ The screenshots show demo projects with prepared sessions
 - Activity feed across all sessions: answer a waiting approval right there,
   finished and failed turns at a glance, unread badge and archiving
 - File chips in answers: mentioning a workspace file opens the preview on click
-- Drag & drop files onto the composer to attach them
+- Drag & drop files onto the composer to attach them (X11/XWayland only, see
+  Known limits; the "+" button works everywhere)
 - Worktrees: create one from any start ref as its own workspace, see and
   delete a project's worktrees in the sidebar
 - Command palette (Ctrl K) finds sessions, actions and the project's files
@@ -111,6 +112,10 @@ The screenshots show demo projects with prepared sessions
   function. When Vibe starts further `vibe -p` processes instead (for
   example to give an agent a different model), those are separate sessions
   with no link to the original one.
+- Drag & drop does not work in a native Wayland session: the window library
+  (winit 0.30) reports dropped files only on X11. Use the "+" button, or
+  start Catwright under XWayland (`WAYLAND_DISPLAY= catwright`) if you need
+  it. Pasting a file copied in the file manager does not work either.
 - Routines run only while their session is open in Catwright and idle;
   Vibe's ACP interface takes intervals only, no cron expressions.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
