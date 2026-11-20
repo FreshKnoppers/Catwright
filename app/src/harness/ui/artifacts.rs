@@ -468,9 +468,36 @@ fn diff_content(
         }
     };
     use crate::harness::watch::HeadBlob;
-    let Some((old, current)) = entry_ready else {
-        notice(ui, tr("Diff is being prepared …"));
-        return;
+    // Stale-while-revalidate: the file changed while its preview is open,
+    // so this frame waits for a NEW diff — but an old FINISHED one for the
+    // same path may still sit in the cache (its key carries the previous
+    // mtime/size). Painting that instead of the placeholder keeps the
+    // preview from flashing "being prepared" on every agent write: the
+    // stale diff is briefly outdated, never misleading — the fresh one
+    // replaces it a frame later. The linear scan only runs on a miss and
+    // stays within the cache cap.
+    let (old, current) = if let Some(v) = entry_ready {
+        v
+    } else {
+        let stale = {
+            let c = cache.lock().unwrap();
+            c.iter()
+                .find(|((p, ..), v)| p == path && matches!(v, DiffEntry::Ready(_)))
+                .and_then(|(_, v)| {
+                    if let DiffEntry::Ready(v) = v {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+        };
+        match stale {
+            Some(v) => v,
+            None => {
+                notice(ui, tr("Diff is being prepared …"));
+                return;
+            }
+        }
     };
     match (trusted, old) {
         // git runs only in trusted folders; without that there is no old
