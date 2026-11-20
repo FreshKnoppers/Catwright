@@ -459,10 +459,16 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
                 }
             };
             // `commondir` must be a regular file before we read it — a FIFO
-            // would block this read forever (no deadline on the UI thread)
+            // swapped in after the check would block a plain open forever
+            // (no deadline on the UI thread). The symlink/type check stays
+            // as the fast gate; the actual read then goes through the SAME
+            // protection as the artifact previews: a non-blocking open plus
+            // an `fstat` of the very handle we read, so a FIFO raced in
+            // between the two checks can neither hang the open nor slip
+            // through (same shape as `artifacts::load_preview_capped`).
             let commondir_file = gitdir.join("commondir");
             let commondir = match std::fs::symlink_metadata(&commondir_file) {
-                Ok(m) if m.is_file() => match std::fs::read_to_string(&commondir_file) {
+                Ok(m) if m.is_file() => match read_commondir(&commondir_file) {
                     Ok(c) => {
                         let c = c.trim();
                         let p = Path::new(c);
@@ -472,7 +478,12 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
                             gitdir.join(p)
                         }
                     }
-                    Err(_) => gitdir.clone(),
+                    // the file existed but could not be read as written:
+                    // a FIFO raced in, oversize noise, or a halfway swap —
+                    // falling back to "plain repo" would silently drop the
+                    // regular-file check on the COMMON config for this
+                    // pass, so refuse the repository instead
+                    Err(_) => return None,
                 },
                 Ok(_) => return None,     // FIFO/symlink/... — fail closed
                 Err(_) => gitdir.clone(), // no commondir: plain repo
@@ -515,6 +526,35 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
         }
         _ => None,
     }
+}
+
+/// Read `commondir` through a non-blocking open and a capped read, checking
+/// the type of the OPEN HANDLE (not the path): a file swapped for a FIFO
+/// after the path's type check would block a plain open forever on the UI
+/// thread — `O_NONBLOCK` opens instantly and the handle's `fstat` rejects
+/// the FIFO right after. A `commondir` over `MAX_COMMONDIR_BYTES` is not a
+/// path but hostile noise, so it fails closed like a special file.
+fn read_commondir(path: &Path) -> std::io::Result<String> {
+    const MAX_COMMONDIR_BYTES: u64 = 4096;
+    use std::io::Read;
+    let file = crate::artifacts::open_nonblock(&path.to_string_lossy())?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "commondir is not a regular file",
+        ));
+    }
+    let mut out = String::new();
+    let read = (&file)
+        .take(MAX_COMMONDIR_BYTES + 1)
+        .read_to_string(&mut out)?;
+    if read as u64 > MAX_COMMONDIR_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "commondir is larger than a path",
+        ));
+    }
+    Ok(out)
 }
 
 /// The repo's config files must be plain regular files (missing is fine —

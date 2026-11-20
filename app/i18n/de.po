@@ -1812,6 +1812,9 @@ msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"
 msgid "Diff preview needs a trusted folder."
 msgstr "Die Diff-Vorschau braucht einen vertrauten Ordner."
 
+msgid "Diff is being prepared …"
+msgstr "Die Diff-Vorschau wird vorbereitet …"
+
 msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
 msgstr "Catwright wurde mit Vibe {min} bis {max} getestet. Vibe {version} ist neuer: Wenn etwas nicht funktioniert, melde es bitte."
 

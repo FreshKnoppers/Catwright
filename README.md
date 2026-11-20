@@ -118,7 +118,8 @@ The screenshots show demo projects with prepared sessions
   (`protocol.allow=never` plus `GIT_ALLOW_PROTOCOL=none`, no lazy fetch, so
   a partial-clone config cannot trigger `core.sshCommand`), repo-scope
   `include.*`/`includeIf.*` and `hook.*` keys (config-defined hooks run even
-  with `hooksPath=/dev/null` on git >= 2.46) fail the config probe closed,
+  with `hooksPath=/dev/null` on newer git; verified with 2.56) fail the config
+  probe closed,
   a non-regular `.git/config` (symlink/FIFO) fails closed, and committed
   blobs are read through plumbing (`git cat-file blob`), never `git show`,
   so a shipped `diff.*.textconv` can never run. Until a folder is trusted,
@@ -200,6 +201,13 @@ Catwright never logs or stores the dictated, summarised or spoken text.
   language: Vibe's ACP interface takes none.
 - Routines run only while their session is open in Catwright and idle;
   Vibe's ACP interface takes intervals only, no cron expressions.
+- The config probe runs *before* each git call, but the call itself reads
+  `.git/config` again: a process that is already running as your user can
+  swap the config in that millisecond window and slip a filter driver past
+  the probe. That window only exists for someone who can already execute
+  code, and a filter written once (not flipped back and forth inside the
+  window) is caught by the next probe — the probe cannot close a race
+  against a live writer, it only refuses what it can see.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
 ## Download
