@@ -1696,7 +1696,7 @@ msgid "The worktree has uncommitted changes — they are lost."
 msgstr "Der Worktree hat ungespeicherte Änderungen — sie gehen verloren."
 
 msgid "The worktree could not be checked for changes — files may be lost."
-msgstr "Der Worktree konnte nicht auf Änderungen geprüft werden — Dateien können verloren gehen.
+msgstr "Der Worktree konnte nicht auf Änderungen geprüft werden — Dateien können verloren gehen."
 
 msgid "Also delete the branch “{branch}”"
 msgstr "Auch den Branch „{branch}“ löschen"
@@ -1811,3 +1811,21 @@ msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "Die Diff-Vorschau braucht einen vertrauten Ordner."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
+msgstr "Catwright wurde mit Vibe {min} bis {max} getestet. Vibe {version} ist neuer: Wenn etwas nicht funktioniert, melde es bitte."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is older: some features may be missing, please update Vibe."
+msgstr "Catwright wurde mit Vibe {min} bis {max} getestet. Vibe {version} ist älter: Manche Funktionen fehlen vielleicht, bitte aktualisiere Vibe."
+
+msgid "L{line}: {text}"
+msgstr "L{line}: {text}"
+
+msgid "Git off for this repository"
+msgstr "Git für dieses Repository aus"
+
+msgid "Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden."
+msgstr "Catwright führt hier kein git aus: Die git-Config des Repositorys enthält include-, includeIf- oder hook-Einträge oder ließ sich nicht sicher prüfen. Branch, Änderungen und Diff-Vorschau bleiben ausgeblendet."
+
+msgid "Diff preview is off: Catwright runs no git in this repository."
+msgstr "Diff-Vorschau aus: Catwright führt in diesem Repository kein git aus."

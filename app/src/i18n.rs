@@ -287,7 +287,8 @@ msgstr ""
     }
 
     /// The English texts the code passes to `tr`/`trf`, read from the
-    /// sources: `tr("…")` / `trf("…"` with a plain string literal.
+    /// sources: `tr("…")` / `trf("…"` with a plain string literal, also
+    /// when rustfmt puts the literal on the next line (`tr(\n    "…"`).
     fn texts_in_sources() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
@@ -307,7 +308,7 @@ msgstr ""
         let mut found = Vec::new();
         for f in files {
             let text = std::fs::read_to_string(&f).unwrap();
-            for marker in ["tr(\"", "trf(\"", "tr_in(Lang::De, \""] {
+            for marker in ["tr(", "trf(", "tr_in(Lang::De,"] {
                 let mut rest = text.as_str();
                 while let Some(at) = rest.find(marker) {
                     // `tr(` must not be the end of a longer name (`attr(`)
@@ -316,6 +317,12 @@ msgstr ""
                     if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
                         continue;
                     }
+                    // the literal may follow on the next line; anything but
+                    // a string literal (`tr(&name)`) is not a UI text
+                    let Some(lit_start) = rest.trim_start().strip_prefix('"') else {
+                        continue;
+                    };
+                    rest = lit_start;
                     let mut lit = String::new();
                     let mut chars = rest.chars();
                     while let Some(c) = chars.next() {
@@ -357,6 +364,31 @@ msgstr ""
                 "missing in {file}:\n{}",
                 missing.join("\n")
             );
+        }
+    }
+
+    /// Every quoted string in every catalog ends with its closing quote:
+    /// `parse_po` drops an entry whose `msgstr` is not closed, and the app
+    /// then shows the English text without any other test noticing.
+    #[test]
+    fn every_catalog_string_is_closed() {
+        for (file, po) in all_pos() {
+            for (n, line) in po.lines().enumerate() {
+                let l = line.trim();
+                let quoted = l
+                    .strip_prefix("msgid ")
+                    .or_else(|| l.strip_prefix("msgstr "))
+                    .unwrap_or(l);
+                if !quoted.starts_with('"') {
+                    continue;
+                }
+                // closed: ends with a quote that no backslash escapes
+                let body = &quoted[1..];
+                let closed = body.strip_suffix('"').is_some_and(|inner| {
+                    inner.chars().rev().take_while(|&c| c == '\\').count() % 2 == 0
+                });
+                assert!(closed, "{file}:{}: string not closed: {line}", n + 1);
+            }
         }
     }
 

@@ -729,7 +729,11 @@ fn footer(h: &mut Harness, ui: &mut egui::Ui, action: &mut HarnessAction) {
 }
 
 fn connection_line(h: &mut Harness, ui: &mut egui::Ui) {
+    // a Vibe outside the tested range: the version turns yellow and its
+    // tooltip says why (the same text as the one-time toast)
+    let compat_notice = h.vibe_compat.notice();
     let (text, color) = match &h.conn {
+        Conn::Ready { agent } if compat_notice.is_some() => (agent.to_uppercase(), theme::YELLOW),
         Conn::Ready { agent } => (agent.to_uppercase(), theme::DIM),
         Conn::Starting => (tr("CONNECTING …").to_string(), theme::DIM),
         Conn::Off => ("OFFLINE".to_string(), theme::DIM),
@@ -756,8 +760,15 @@ fn connection_line(h: &mut Harness, ui: &mut egui::Ui) {
         let label = ui.add(
             egui::Label::new(RichText::new(text).monospace().size(10.5).color(color)).truncate(),
         );
-        if let Conn::Failed(msg) = &h.conn {
-            label.on_hover_text(msg.clone());
+        let hover = match &h.conn {
+            Conn::Ready { .. } => compat_notice,
+            Conn::Failed(msg) => Some(msg.clone()),
+            _ => None,
+        };
+        if let Some(hover) = hover {
+            label.on_hover_text(hover);
+        }
+        if let Conn::Failed(_) = &h.conn {
             if ui
                 .add(IconButton::new(Icon::Refresh, tr("Reconnect")).side(20.0))
                 .clicked()

@@ -5,6 +5,20 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- Catwright now checks the Vibe version it connects to. With a Vibe older
+  or newer than the tested range (3.1.0 to 3.1.3) it says so once, shows
+  the version in yellow in the sidebar (the tooltip explains it) and on the
+  Vibe settings page, instead of letting a feature fail silently.
+- A repository git is kept out of (its own config has `include`,
+  `includeIf` or `hook` entries, or could not be checked safely) is named
+  in the header ("Git off for this repository") and in the environment
+  card, instead of the git info just disappearing. Its diff preview says
+  so instead of showing the whole file as new.
+- Fixed: the worktree delete dialog's warning that changes could not be
+  checked showed in English in every language.
+- Fixed: the "L12:" line label of review comments had no translation
+  entry.
+
 ## v0.6.0
 
 **Security release.** All earlier releases (v0.2.0 to v0.5.1) run git in

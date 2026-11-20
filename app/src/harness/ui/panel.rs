@@ -894,6 +894,12 @@ fn environment_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     &trf("Branch {branch}", &[("branch", branch)]),
                     theme::DIM,
                 ));
+            } else if git.as_ref().is_some_and(|g| g.refused) {
+                ui.label(theme::mono_tag(
+                    tr("Git off for this repository"),
+                    theme::YELLOW,
+                ))
+                .on_hover_text(super::header::git_refused_why());
             }
             if let Some(t) = &trust {
                 let (text, color) = if t.trusted {

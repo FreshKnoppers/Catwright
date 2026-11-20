@@ -4,6 +4,7 @@
 //! here — the egui code lives in `harness::ui`. UI strings are German;
 //! nothing is logged.
 
+pub mod compat;
 pub mod context;
 pub mod extras;
 pub mod state;
@@ -258,6 +259,12 @@ pub struct Harness {
     /// The agent accepts `image` blocks (agentCapabilities.promptCapabilities
     /// from `initialize`); PNG attachments need it, else they go as links.
     agent_images: bool,
+    /// How the connected Vibe's version (`agentInfo.version` from
+    /// `initialize`) relates to the versions this build was tested with.
+    pub vibe_compat: compat::VibeCompat,
+    /// The untested-version toast was shown in this run (reconnects do not
+    /// repeat it; the sidebar footer keeps the hint).
+    vibe_compat_warned: bool,
     // render state (consumed by harness::ui; RenderCtx needs these two).
     // Every per-interaction key starts with the owning session id
     // (Handoff 2.5), so one session's state never surfaces in another and
@@ -411,6 +418,8 @@ impl Harness {
             hint_pending: HashSet::new(),
             pinned: HashSet::new(),
             agent_images: true,
+            vibe_compat: compat::VibeCompat::Unknown,
+            vibe_compat_warned: false,
             ui_events: Vec::new(),
             form_values: HashMap::new(),
             scripts: HashMap::new(),
@@ -562,6 +571,21 @@ impl Harness {
                     None => "Vibe".to_string(),
                 };
                 self.conn = Conn::Ready { agent };
+                // a Vibe outside the tested range may have changed its ACP
+                // interface or extensions: say so once, instead of letting a
+                // feature fail silently
+                self.vibe_compat = r
+                    .agent_info
+                    .as_ref()
+                    .map_or(compat::VibeCompat::Unknown, |i| {
+                        compat::VibeCompat::of(&i.version)
+                    });
+                if !self.vibe_compat_warned {
+                    if let Some(notice) = self.vibe_compat.notice() {
+                        self.status = notice;
+                        self.vibe_compat_warned = true;
+                    }
+                }
                 self.ready_since = Some(Instant::now());
                 self.starting_since = None;
                 if let Some((cwd, sid)) = self.open_on_ready.take() {

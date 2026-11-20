@@ -7143,3 +7143,51 @@ fn dictate_on_ready_starts_once_the_session_is_loaded() {
     assert!(!h.dictate_on_ready, "only once");
     assert_eq!(h.dictation, Dictation::Starting);
 }
+
+/// A Vibe outside the tested range (`agentInfo.version` from `initialize`)
+/// is said once per run as a toast and stays visible as the yellow version
+/// in the sidebar footer; a tested version says nothing, and a reconnect
+/// does not repeat the toast.
+#[test]
+fn untested_vibe_version_is_said_once() {
+    use crate::harness::compat::VibeCompat;
+    let init = |version: &str| -> proto::InitializeResult {
+        serde_json::from_value(json!({
+            "protocolVersion": 1,
+            "agentCapabilities": {"loadSession": true},
+            "agentInfo": {"name": "@mistralai/mistral-vibe", "title": "Mistral Vibe", "version": version}
+        }))
+        .unwrap()
+    };
+
+    let mut h = Harness::new(vec![], "ask".to_string());
+    h.handle_event(AcpEvent::Initialized(init("3.1.2")));
+    assert_eq!(h.vibe_compat, VibeCompat::Tested);
+    assert!(h.status.is_empty(), "a tested Vibe says nothing");
+
+    // no agentInfo at all: nothing to judge, nothing said
+    let mut h = Harness::new(vec![], "ask".to_string());
+    let bare: proto::InitializeResult = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "agentCapabilities": {"loadSession": true}
+    }))
+    .unwrap();
+    h.handle_event(AcpEvent::Initialized(bare));
+    assert_eq!(h.vibe_compat, VibeCompat::Unknown);
+    assert!(h.status.is_empty());
+
+    let mut h = Harness::new(vec![], "ask".to_string());
+    h.handle_event(AcpEvent::Initialized(init("3.2.0")));
+    assert!(matches!(h.vibe_compat, VibeCompat::Newer(_)));
+    assert!(
+        h.status.contains("3.2.0") && h.status.contains("3.1.0") && h.status.contains("3.1.3"),
+        "the toast names the version and the tested range: {}",
+        h.status
+    );
+    // the restarted agent becomes ready again: no second toast, the hint
+    // (footer, settings) stays
+    h.status.clear();
+    h.handle_event(AcpEvent::Initialized(init("3.2.0")));
+    assert!(h.status.is_empty(), "the toast comes once per run");
+    assert!(h.vibe_compat.notice().is_some());
+}

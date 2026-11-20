@@ -1696,7 +1696,7 @@ msgid "The worktree has uncommitted changes — they are lost."
 msgstr "Il worktree ha modifiche non committate — andranno perse."
 
 msgid "The worktree could not be checked for changes — files may be lost."
-msgstr "Impossibile verificare le modifiche del worktree — dei file potrebbero andare persi.
+msgstr "Impossibile verificare le modifiche del worktree — dei file potrebbero andare persi."
 
 msgid "Also delete the branch “{branch}”"
 msgstr "Elimina anche il branch «{branch}»"
@@ -1811,3 +1811,21 @@ msgstr "Git nascosto finché la cartella non è attendibile"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "L’anteprima della diff richiede una cartella attendibile."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
+msgstr "Catwright è stato testato con Vibe da {min} a {max}. Vibe {version} è più recente: se qualcosa non funziona, segnalalo per favore."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is older: some features may be missing, please update Vibe."
+msgstr "Catwright è stato testato con Vibe da {min} a {max}. Vibe {version} è più vecchio: alcune funzioni potrebbero mancare, aggiorna Vibe per favore."
+
+msgid "L{line}: {text}"
+msgstr "L{line}: {text}"
+
+msgid "Git off for this repository"
+msgstr "Git disattivato per questo repository"
+
+msgid "Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden."
+msgstr "Catwright non esegue git qui: la configurazione git del repository contiene voci include, includeIf o hook, oppure non è stato possibile verificarla in modo sicuro. Branch, modifiche e anteprima della diff restano nascosti."
+
+msgid "Diff preview is off: Catwright runs no git in this repository."
+msgstr "Anteprima della diff disattivata: Catwright non esegue git in questo repository."
