@@ -22,6 +22,18 @@ tag (`## v0.2.0`) as that release's description.
   where a command ends). While an approval or a
   question waits, "Send to Vibe" steps back to a secondary button, so the
   approval is the one orange button on screen.
+- The header calls git's count "N uncommitted" and the side panel's card
+  "Session changes" (Vibe's edits in this session), so "4 changed" next to
+  "Changes · 2 files" no longer looks like a contradiction.
+- Subagent cards show the subagent's name instead of Vibe's "Starting
+  <name>" title, which stayed after the subagent was done, and how long a
+  running subagent has been at it.
+- In a session with subagents, Vibe's wait call shows as "Waiting for
+  subagents" instead of "Waiting for input", which read as if Catwright
+  waited for you.
+- The activity feed shows what a waiting approval would allow (command,
+  all arguments, the diff of an edit) above its buttons, like the pinned
+  card; the buttons look like the card's.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

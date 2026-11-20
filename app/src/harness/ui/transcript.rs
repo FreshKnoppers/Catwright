@@ -6,7 +6,8 @@ use crate::acp::protocol::{
     PlanEntry, PlanStatus, ToolCall, ToolCallContent, ToolKind, ToolStatus,
 };
 use crate::acp::session::{
-    diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
+    diff_stat_cached, round_key, tool_group_summary, tool_groups, tool_title, Item, Round,
+    SessionView,
 };
 use crate::diff::{self, LineKind, Segment};
 use crate::harness::state::{CommentEdit, DiffComment, Narration, TurnDiffView, TurnDiffs};
@@ -316,7 +317,7 @@ fn render_items(
                     _ => None,
                 })
                 .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending))
-                .map(|c| c.title.clone())
+                .map(|c| tool_title(c, s.has_subagents()).into_owned())
                 .unwrap_or_default();
             let mut label = tr("Working").to_string();
             if round.tool_calls > 0 {
@@ -518,6 +519,7 @@ fn render_range(
                 ctx.diff_open,
                 ctx.comments,
                 ctx.ops,
+                s.has_subagents(),
             );
             i = g.end;
             continue;
@@ -698,6 +700,7 @@ pub(crate) fn thought_key(sid: &str, message_id: Option<&str>, index: usize) -> 
 /// last_update).
 fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
     let now = extras::now_epoch().max(0) as u64;
+    let has_subagents = s.has_subagents();
     indented(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         for it in &s.items[round.range.clone()] {
@@ -735,7 +738,8 @@ fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
                     .duration_secs(now)
                     .map(extras::human_duration)
                     .unwrap_or_else(|| "–".to_string());
-                let g = line_galley(ui, &call.title, mono(12.0), theme::MUTED, r.width() - 200.0);
+                let title = tool_title(call, has_subagents);
+                let g = line_galley(ui, &title, mono(12.0), theme::MUTED, r.width() - 200.0);
                 paint_line(ui, r.left() + 30.0, r.center().y, g);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(dur).monospace().size(10.5).color(theme::DIM));
@@ -1354,6 +1358,7 @@ fn tool_group(
     diff_open: &mut HashSet<String>,
     comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
+    has_subagents: bool,
 ) {
     let active = calls
         .iter()
@@ -1376,7 +1381,7 @@ fn tool_group(
             .rect_filled(Rect::from_min_size(marker, vec2(8.0, 8.0)), 0.0, color);
     }
     let summary = match active.filter(|_| busy) {
-        Some(c) => c.title.clone(),
+        Some(c) => tool_title(c, has_subagents).into_owned(),
         None => tool_group_summary(calls),
     };
     let color = if resp.hovered() {
@@ -1418,6 +1423,7 @@ fn tool_group(
                     closed_groups,
                     auto_output,
                     ops,
+                    has_subagents,
                 );
             }
         });
@@ -1437,6 +1443,7 @@ fn tool_row(
     closed_groups: &mut HashSet<String>,
     auto_output: bool,
     ops: &mut Vec<MessageOp>,
+    has_subagents: bool,
 ) {
     let output: Vec<&str> = call
         .content
@@ -1483,9 +1490,10 @@ fn tool_row(
         .first()
         .map(|l| l.path.clone())
         .filter(|_| call.kind != ToolKind::Fetch);
+    let title = tool_title(call, has_subagents);
     let g = line_galley(
         ui,
-        &call.title,
+        &title,
         mono(12.5),
         theme::MUTED,
         rect.width() - if file.is_some() { 78.0 } else { 54.0 },

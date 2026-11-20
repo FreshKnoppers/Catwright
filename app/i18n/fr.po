@@ -231,8 +231,8 @@ msgstr "Aucun fichier concerné."
 msgid "Rewind"
 msgstr "Revenir en arrière"
 
-msgid "{n} changed"
-msgstr "{n} modifié(s)"
+msgid "{n} uncommitted"
+msgstr "{n} non validé(s)"
 
 msgid "Work panel (Ctrl J)"
 msgstr "Panneau de travail (Ctrl J)"
@@ -243,8 +243,8 @@ msgstr "Ouvrir le dossier du projet"
 msgid "Fork session"
 msgstr "Forker la session"
 
-msgid "Changed files in the working directory (git status) — click for the list"
-msgstr "Fichiers modifiés dans le répertoire de travail (git status) — clique pour voir la liste"
+msgid "Uncommitted files in the working directory (git status) — click for the list"
+msgstr "Fichiers non validés dans le répertoire de travail (git status) — clique pour voir la liste"
 
 msgid "… {n} more"
 msgstr "… {n} de plus"
@@ -606,8 +606,8 @@ msgstr "Libre"
 msgid "Split estimated (from Vibe’s measurement)"
 msgstr "Répartition estimée (d'après la mesure de Vibe)"
 
-msgid "Changes"
-msgstr "Modifications"
+msgid "Session changes"
+msgstr "Modifications de la session"
 
 msgid "Revert change"
 msgstr "Annuler la modification"
@@ -1829,3 +1829,9 @@ msgstr "Catwright n’exécute pas git ici : la configuration git du dépôt con
 
 msgid "Diff preview is off: Catwright runs no git in this repository."
 msgstr "Aperçu de diff désactivé : Catwright n’exécute pas git dans ce dépôt."
+
+msgid "Running time so far"
+msgstr "Durée d’exécution jusqu’ici"
+
+msgid "Waiting for subagents"
+msgstr "En attente des sous-agents"

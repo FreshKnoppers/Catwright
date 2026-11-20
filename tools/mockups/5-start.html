@@ -1,0 +1,98 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><script src="common.js"></script>
+<style>
+.nav.sel { background: var(--raised); box-shadow: inset 2px 0 var(--orange); margin: 0 10px; padding-left: 6px; border-radius: 2px; }
+.st { font: 11px var(--mono); flex: none; }
+.dot { width: 7px; height: 7px; display: block; flex: none; }
+.start { flex: 1; overflow: hidden; display: flex; justify-content: center; padding-top: 128px; position: relative; }
+.scol { width: 720px; }
+.cat { margin-bottom: 14px; }
+.hero { display: flex; align-items: baseline; gap: 8px; font-size: 24px; letter-spacing: -.01em; margin-bottom: 18px; }
+.picker { display: inline-flex; align-items: baseline; gap: 8px; background: var(--raised); border-radius: 3px; padding: 2px 10px 4px 9px; }
+.picker svg { align-self: center; }
+.picker .chev { margin-left: 2px; align-self: center; }
+.composer { max-width: none; }
+.composer .ph { height: 46px; }
+.sec { display: flex; align-items: center; gap: 8px; margin: 26px 0 8px; }
+.sec .sq { width: 6px; height: 6px; display: block; }
+.card { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; align-items: center; background: var(--card); border: 1px solid var(--border-soft); border-radius: 4px; padding: 9px 12px; margin-bottom: 6px; }
+.card.wait { border-top: 2px solid var(--yellow); }
+.card .tt { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; white-space: nowrap; }
+.card .tt .crumb { font: 11px var(--mono); color: var(--dim); text-transform: uppercase; }
+.card .sub { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .sub code { font-size: 12.5px; }
+.card .r { display: flex; align-items: center; gap: 10px; grid-row: 1 / 3; grid-column: 2; }
+.card .age { font: 11.5px var(--mono); color: var(--dim); }
+.stat { font: 12px var(--mono); }
+.git { display: flex; align-items: center; gap: 14px; font: 12px var(--mono); color: var(--muted); padding: 2px 2px; }
+.git .sep { color: var(--border); }
+.btn.sm { padding: 3px 10px; font-size: 12.5px; }
+.chipf { display: inline-flex; align-items: center; gap: 4px; background: var(--card); border: 1px solid var(--border-soft); border-radius: 2px; padding: 0 5px; font: 12px/18px var(--mono); color: var(--chip); }
+</style></head><body><div class="app">
+
+<div class="sidebar" style="position:relative">
+  <div class="brand"><span data-logo></span>Catwright<span class="sp"></span><span data-i="panel" data-c="#b4b4ba"></span></div>
+  <div class="nav sel"><span data-i="plus" data-c="#ececec"></span>New session<span class="k">Ctrl N</span></div>
+  <div class="nav"><span data-i="search" data-c="#ececec"></span>Search<span class="k">Ctrl K</span></div>
+  <div class="nav"><span data-i="bell" data-c="#ececec"></span>Activity<span class="badge">1</span></div>
+  <div class="nav"><span data-i="artifacts" data-c="#ececec"></span>Artifacts</div>
+  <div class="sechead"><span class="label">Projects</span><span data-i="plus" data-c="#b4b4ba"></span></div>
+  <div class="row"><span data-i="down" data-c="#9a9aa0" data-s="1"></span><span data-i="comment" data-c="#fa500f"></span><span class="t">General</span></div>
+  <div class="row"><span data-i="down" data-c="#9a9aa0" data-s="1"></span><span data-proj="P_WS"></span><span class="t">weather-station</span><span class="dot" style="background:var(--yellow);margin-right:2px"></span><span class="age">5</span></div>
+  <div class="row sess"><span class="t">Fix CSV parser for CRLF</span><span class="st" style="color:var(--yellow)">WAITING</span></div>
+  <div class="row sess"><span class="t" style="color:var(--text)">README draft</span><span class="dot" style="background:var(--orange)"></span><span class="age">4 min</span></div>
+  <div class="row sess"><span class="t">Sensor glitch review</span><span class="age">7 min</span></div>
+  <div class="row sess"><span class="t">Daily temperature stats</span><span class="age">36 min</span></div>
+  <div class="row sess"><span class="t">In two sentences: what does…</span><span class="age">57 min</span></div>
+  <div class="footer">
+    <div class="label" style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><i style="width:6px;height:6px;background:var(--green);display:block"></i>Mistral Vibe 3.1.3</div>
+    <div style="display:flex;align-items:center;gap:8px"><span data-i="user" data-c="#ececec"></span><div style="flex:1"><div>alex</div><div style="display:flex;gap:8px;align-items:center"><span data-meter="16,2,4"></span><span class="label">Plan 12 %</span></div></div><span data-i="gear" data-c="#b4b4ba"></span></div>
+  </div>
+  <div class="mocktag" style="bottom:96px">MOCKUP · not implemented</div>
+</div>
+
+<div class="main">
+  <div class="start">
+    <div class="scol">
+      <div class="cat"><svg width="34" height="24" fill="#fa500f"><rect x="26" y="0" width="2" height="4"/><rect x="32" y="0" width="2" height="4"/><rect x="24" y="4" width="10" height="10"/><rect x="18" y="8" width="8" height="8"/><rect x="12" y="12" width="12" height="6"/><rect x="2" y="16" width="22" height="6"/><rect x="0" y="16" width="4" height="2"/></svg></div>
+      <div class="hero">What are you building today in
+        <span class="picker"><span data-proj="P_WS"></span>weather-station<span class="chev" data-i="down" data-c="#b4b4ba" data-s="1.5"></span></span>
+      </div>
+      <div class="composer">
+        <div class="ph">Describe a task. <span class="mono">@</span> adds files, <span class="mono">/</span> runs commands</div>
+        <div class="bar"><span data-i="plus" data-c="#b4b4ba"></span><span style="display:flex;gap:6px;align-items:center"><span data-i="shield" data-c="#5b9cf8"></span>Plan</span><span class="sp"></span><span style="display:flex;gap:6px;align-items:center"><span data-i="star" data-c="#fa500f"></span>Mistral Large 4</span><span style="display:flex;gap:7px;align-items:center"><span data-meter="5,4,6"></span>High</span><span data-i="up" data-c="#9a9aa0"></span></div>
+      </div>
+
+      <div class="sec"><i class="sq" style="background:var(--yellow)"></i><span class="label">Needs you</span></div>
+      <div class="card wait">
+        <div class="tt"><span class="crumb">weather-station</span>Fix CSV parser for CRLF</div>
+        <div class="sub">Approval: <code>$ python -m unittest -v</code></div>
+        <div class="r"><span class="age">2 min</span><span class="btn sm">Open</span></div>
+      </div>
+
+      <div class="sec"><i class="sq" style="background:var(--orange)"></i><span class="label">New results</span></div>
+      <div class="card">
+        <div class="tt">README draft</div>
+        <div class="sub">Drafted a README with setup, data format and the test command. <span class="chipf"><span data-i="file" data-c="#ffd9a0" data-s="1"></span>README.md</span> <span class="stat" style="color:var(--green)">+48</span></div>
+        <div class="r"><span class="age">4 min</span><span class="btn sm">Open</span></div>
+      </div>
+
+      <div class="sec"><span class="label">Continue</span></div>
+      <div class="card">
+        <div class="tt">Daily temperature stats</div>
+        <div class="sub">“The existing 5 tests still pass. The 48.3 max on 2026-10-04 is still the sensor outlier…”</div>
+        <div class="r"><span class="stat"><span style="color:var(--green)">+53</span> <span style="color:var(--red-text)">−2</span></span><span class="age">36 min</span><span class="btn sm">Open</span></div>
+      </div>
+
+      <div class="sec"><span class="label">In this project</span></div>
+      <div class="git"><span data-i="branch" data-c="#b4b4ba" data-s="1"></span>master<span class="sep">│</span><span style="color:var(--amber)">4 uncommitted</span><span class="sep">│</span>last commit 2 h ago · “Add daily stats”</div>
+    </div>
+
+    <div class="note r" style="left:10px;top:178px;max-width:166px">1 Projekt-Chip in Größe und Grundlinie der Überschrift, Pfeil mit Abstand.</div>
+    <div class="note l" style="left:914px;top:262px;max-width:166px">2 Platzhalter erklärt @ und / selbst, die Hinweiszeile entfällt. Rand neutral.</div>
+    <div class="note r" style="left:10px;top:388px;max-width:166px">3 Statt Sidebar-Duplikat: was dich braucht. Wartendes zuerst, mit Befehl.</div>
+    <div class="note l" style="left:914px;top:505px;max-width:166px">4 Neue Ergebnisse mit erster Zeile und geänderten Dateien.</div>
+    <div class="note r" style="left:10px;top:625px;max-width:166px">5 Weitermachen: letzte Sitzung mit ihrer letzten Antwort.</div>
+    <div class="note l" style="left:914px;top:700px;max-width:166px">6 Git-Stand in einer Zeile. Ohne Wartendes und Neues: nur „Continue“ und die Liste.</div>
+  </div>
+</div>
+</div></body></html>

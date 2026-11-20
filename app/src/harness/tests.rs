@@ -6379,7 +6379,7 @@ fn changed_files_open_as_a_commentable_preview_diff() {
         }
     }
     let all = texts.join("\n");
-    assert!(all.contains("2 changed"), "the header count:\n{all}");
+    assert!(all.contains("2 uncommitted"), "the header count:\n{all}");
     assert!(all.contains("analysis.py"), "the project file:\n{all}");
     assert!(
         all.contains("top.txt"),

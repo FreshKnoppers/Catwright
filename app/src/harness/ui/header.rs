@@ -109,7 +109,7 @@ fn git_chip(
         let resp = ui
             .add(
                 egui::Label::new(
-                    RichText::new(trf("{n} changed", &[("n", &git.changed)]))
+                    RichText::new(trf("{n} uncommitted", &[("n", &git.changed)]))
                         .color(theme::AMBER)
                         .size(12.0),
                 )
@@ -117,7 +117,7 @@ fn git_chip(
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(tr(
-                "Changed files in the working directory (git status) — click for the list",
+                "Uncommitted files in the working directory (git status) — click for the list",
             ));
         changed_files_menu(h, ui, &resp, git, cwd);
     }
@@ -209,7 +209,7 @@ pub(crate) fn changed_files_popup(cwd: &std::path::Path) -> egui::Id {
     egui::Id::new(("changed_files", cwd))
 }
 
-/// The popup of the header's "N changed": every changed path from
+/// The popup of the header's "N uncommitted": every changed path from
 /// `git status`, relative to the workspace when it lies inside. A click on
 /// a file shows its diff in the preview pane (where it can be commented);
 /// an untracked folder opens in the file manager.

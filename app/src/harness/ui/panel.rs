@@ -368,7 +368,8 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         &mut h.ui.panel_sections,
         ui,
         "changes",
-        tr("Changes"),
+        // "session": Vibe's edits here, not the header's git count
+        tr("Session changes"),
         &summary,
         true,
         |ui| {
@@ -611,7 +612,23 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
         SubagentState::Failed => (tr("Failed").to_string(), theme::RED_TEXT),
         SubagentState::Cancelled => (tr("Cancelled").to_string(), theme::DIM),
     };
-    ui.label(theme::mono_tag(&text, color));
+    ui.horizontal(|ui| {
+        ui.label(theme::mono_tag(&text, color));
+        // the cat's run is a loop, not progress: the real measure of a
+        // running subagent is how long it has been at it
+        if a.state == SubagentState::Running && a.started > 0 {
+            let secs = (extras::now_epoch() as u64).saturating_sub(a.started);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(extras::elapsed_label(secs))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme::DIM),
+                )
+                .on_hover_text(tr("Running time so far"));
+            });
+        }
+    });
     ui.add_space(4.0);
 }
 

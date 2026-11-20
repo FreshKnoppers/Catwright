@@ -113,7 +113,9 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   while folded), account footer with connection state and budget meter. There is
   no Code/Chat switch: chats are sessions of "Allgemein".
 - **Session header**: workspace crumb ("Allgemein" or the project), session title as menu (rename, fork, copy
-  transcript as Markdown, delete), git branch and dirty count, fork, folder,
+  transcript as Markdown, delete), git branch and dirty count ("4 uncommitted":
+  git's view of the working directory, deliberately not called "changes", which
+  is the right panel's word for Vibe's edits in this session), fork, folder,
   right-panel toggle.
 - **Conversation** (column max. 820 pt): user bubble right, agent text left in
   a quiet flow, tool groups as one line, edited files always visible as cards
@@ -134,7 +136,7 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   colour can stay calm and never outshouts the sentence; file chips keep the
   warmer `#ffd9a0` and a border because they are clickable.
 - **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
-  Kontext, Plan, Änderungen (accept / revert), Subagents, Routinen, Konnektoren,
+  Kontext, Plan, Session changes (Vibe's edits in this session; accept / revert), Subagents, Routinen, Konnektoren,
   Umgebung. While it shows the plan, the conversation shows one plan line.
 - **Start screen**: cat, "Was baust du heute in [project ▾]" (in "Allgemein":
   "Worüber möchtest du chatten? [Allgemein ▾]"), composer, recent sessions. The

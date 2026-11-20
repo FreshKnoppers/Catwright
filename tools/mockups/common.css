@@ -4,7 +4,7 @@
   --text: #ececec; --muted: #b4b4ba; --dim: #9a9aa0; --orange: #fa500f;
   --orange-dim: #e06a16; --yellow: #ffd800; --amber: #ffaf00; --red: #e10500;
   --red-text: #ff6e62; --green: #3fb950; --add-bg: #12281a; --del-bg: #301514;
-  --blue: #5b9cf8; --purple: #b07cf8; --code: #f2c46d;
+  --blue: #5b9cf8; --purple: #b07cf8; --code: #e3d4c2; --code-bg: #26262b; --chip: #ffd9a0;
   --mono: "DejaVu Sans Mono", monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,7 +14,7 @@ body { background: var(--bg); color: var(--text); font: 14px/1.45 Inter, sans-se
 .mono { font-family: var(--mono); }
 .label { font: 11.5px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .02em; }
 .dim { color: var(--dim); } .muted { color: var(--muted); }
-code, .code { font-family: var(--mono); color: var(--code); font-size: 13px; }
+code, .code { font-family: var(--mono); color: var(--code); background: var(--code-bg); font-size: 13px; }
 
 /* sidebar */
 .sidebar { width: 272px; background: var(--sidebar); border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; flex: none; }
@@ -48,7 +48,7 @@ code, .code { font-family: var(--mono); color: var(--code); font-size: 13px; }
 .transcript p { font-size: 14.5px; margin: 0 0 12px; }
 .toolgrp { background: var(--card); border: 1px solid var(--border-soft); border-left: 2px solid var(--orange); border-radius: 3px; padding: 7px 10px; font-size: 13.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; margin: 0 0 12px; white-space: nowrap; overflow: hidden; }
 .composer-wrap { padding: 10px 16px 6px; flex: none; }
-.composer { max-width: 760px; margin: 0 auto; background: var(--input); border: 1px solid var(--orange); border-radius: 6px; padding: 10px 14px 8px; }
+.composer { max-width: 760px; margin: 0 auto; background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px 8px; }
 .composer .ph { color: var(--dim); font-size: 14.5px; height: 40px; }
 .composer .bar { display: flex; align-items: center; gap: 14px; font-size: 14px; }
 .composer .bar .sp { flex: 1; }
@@ -64,7 +64,7 @@ code, .code { font-family: var(--mono); color: var(--code); font-size: 13px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; background: var(--raised); border: 1px solid var(--border-soft); border-radius: 2px; padding: 0 6px 0 5px; font: 12.5px/20px var(--mono); color: var(--text); vertical-align: 1px; }
 .chip.active { border-color: var(--orange); box-shadow: 0 0 0 1px rgba(250,80,15,.25); }
 .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 3px; padding: 4px 11px; font-size: 13.5px; background: var(--raised); color: var(--text); border: 1px solid transparent; white-space: nowrap; }
-.btn.primary { background: var(--orange); color: #fff; font-weight: 600; }
+.btn.primary { background: var(--orange); color: #101010; font-weight: 600; }
 .btn.ghost { background: transparent; border-color: var(--border); }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
 .seg span { padding: 3px 10px; font: 12px var(--mono); color: var(--dim); }
