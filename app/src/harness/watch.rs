@@ -478,7 +478,12 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
                             gitdir.join(p)
                         }
                     }
-                    Err(_) => gitdir.clone(),
+                    // the file existed but could not be read as written:
+                    // a FIFO raced in, oversize noise, or a halfway swap —
+                    // falling back to "plain repo" would silently drop the
+                    // regular-file check on the COMMON config for this
+                    // pass, so refuse the repository instead
+                    Err(_) => return None,
                 },
                 Ok(_) => return None,     // FIFO/symlink/... — fail closed
                 Err(_) => gitdir.clone(), // no commondir: plain repo
