@@ -19,8 +19,11 @@ pub const CODE_BG: Color32 = crate::theme::CARD;
 pub const TEXT: Color32 = crate::theme::TEXT;
 pub const DIM: Color32 = crate::theme::DIM;
 pub const LINK: Color32 = crate::theme::AMBER;
-/// Inline code spans.
-const CODE_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
+/// Inline code spans: a calm warm tint, so the monospace sets them apart
+/// without a function name becoming the loudest word of a sentence.
+const CODE_TEXT: Color32 = Color32::from_rgb(0xe3, 0xd4, 0xc2);
+/// File chips keep the warmer tint: they are the clickable ones.
+const CHIP_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
 
 /// True only for link schemes we are willing to open from a model answer:
 /// http://, https:// and mailto: (case-insensitive, after trim). Everything
@@ -1422,7 +1425,7 @@ fn file_chip(ui: &mut egui::Ui, token: &str, path: &Path, size: f32, open: &mut 
         ui,
         token,
         egui::FontId::monospace(size - 2.0),
-        CODE_TEXT,
+        CHIP_TEXT,
         220.0,
     );
     let h = size + 6.0;
@@ -1660,7 +1663,7 @@ pub fn render_ui_node(
             let fill = if armed { crate::theme::AMBER } else { ACCENT };
             if ui
                 .add(
-                    egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
                         .fill(fill)
                         .rounding(egui::Rounding::same(3.0)),
                 )
@@ -1746,7 +1749,7 @@ pub fn render_ui_node(
                     let fill = if armed { crate::theme::AMBER } else { ACCENT };
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                            egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
                                 .fill(fill)
                                 .rounding(egui::Rounding::same(3.0)),
                         )

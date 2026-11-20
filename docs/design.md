@@ -20,9 +20,11 @@ agent desktop (sidebar, transcript, right panel).
 | `HOVER` | `#232328` | row under the pointer |
 | `TEXT` | `#ececec` | body text |
 | `MUTED` | `#b4b4ba` | secondary text that must stay comfortably readable |
-| `DIM` | `#8a8a8f` | tertiary text, mono labels |
+| `DIM` | `#9a9aa0` | tertiary text, mono labels (≥ 4.5:1 up to `RAISED`) |
 | `ORANGE` | `#fa500f` | primary accent: CTA buttons, active marks, logo |
-| `ORANGE_DIM` | `#ce6114` | pixel meters, numbers (context "1M", prices) |
+| `ON_ACCENT` | `#101010` | text and icons on `ORANGE`/`AMBER`/`YELLOW` fills (white on `ORANGE` is only 3.4:1) |
+| `SELECTION` | `ORANGE` at 35 % | selected text, selectable labels |
+| `ORANGE_DIM` | `#e06a16` | pixel meters, numbers (context "1M", prices), 5.2:1 on `BG` |
 | `YELLOW` | `#ffd800` | highlight tag (like "TRY IN PLAYGROUND"), focus |
 | `AMBER` | `#ffaf00` | gradient step |
 | `RED` | `#e10500` | error edges, deny outlines |
@@ -88,8 +90,15 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
 - **Actions appear on hover** in rows and at messages and cost no layout space
   (`widgets::place`; `Ui::put` would move everything after the row).
   A menu that is open keeps its row in the hover state.
-- **Buttons**: `Primary` (ORANGE) once per card, `Secondary` (RAISED), `Danger`
-  (RED outline, `RED_TEXT`).
+- **Accent budget**: ORANGE marks the one thing to do or the place you are,
+  not every state. One filled Primary per screen while a decision waits:
+  while an approval or a question card is open, other Primary buttons (e.g.
+  "Send to Vibe") drop to Secondary.
+- **Buttons**: `Primary` (ORANGE with `ON_ACCENT` text) once per card,
+  `Secondary` (RAISED), `Danger` (RED outline, `RED_TEXT`).
+- **Segmented switch** (`widgets::segmented`, e.g. Code | Diff): a state, not
+  an action, so no Primary fill: soft frame, the chosen segment RAISED with
+  TEXT and a 2 pt ORANGE underline, the others DIM.
 - **Attention cards**: a card with a 2 pt coloured top edge asks for a decision.
 - **Toasts**: the status line as a toast below the header. Info fades after six
   seconds, errors stay until dismissed.
@@ -117,7 +126,12 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   digits for its first painted frames), message queue.
 - **Composer**: grows up to 220 pt, mode and "+" left, model and thinking right;
   `/` and `@` open keyboard-driven lists. Typing anywhere goes into it. Each
-  session keeps its own draft.
+  session keeps its own draft. Because it is nearly always focused, focus is
+  a quiet `BORDER` step, not an accent ring; the ORANGE belongs to the send
+  button once there is text.
+- **Inline code** in answers: monospace in a calm warm tint (`#e3d4c2`), so it
+  never outshouts the sentence; file chips keep the warmer `#ffd9a0` because
+  they are clickable.
 - **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
   Kontext, Plan, Änderungen (accept / revert), Subagents, Routinen, Konnektoren,
   Umgebung. While it shows the plan, the conversation shows one plan line.

@@ -266,6 +266,7 @@ fn render_items(
     let comments = &mut Comments {
         map: &mut h_ui.diff_comments,
         edit: &mut h_ui.comment_edit,
+        decision_open: has_question || !s.permissions.is_empty(),
     };
     let mut turn_ops: Vec<MessageOp> = Vec::new();
     let mut turn_changes = TurnChanges {
@@ -647,14 +648,22 @@ pub(crate) fn send_comments(h: &mut Harness, key: &str, path: &str) {
 pub(crate) struct Comments<'a> {
     map: &'a mut HashMap<String, Vec<DiffComment>>,
     edit: &'a mut Option<CommentEdit>,
+    /// The session waits for an approval or an answer: that card holds the
+    /// one Primary action on screen, so "Send to Vibe" steps back.
+    decision_open: bool,
 }
 
 impl<'a> Comments<'a> {
     pub(crate) fn new(
         map: &'a mut HashMap<String, Vec<DiffComment>>,
         edit: &'a mut Option<CommentEdit>,
+        decision_open: bool,
     ) -> Self {
-        Self { map, edit }
+        Self {
+            map,
+            edit,
+            decision_open,
+        }
     }
 }
 
@@ -1696,8 +1705,9 @@ pub(crate) fn comment_section(
         };
         ui.label(RichText::new(label).color(theme::DIM).size(12.0));
         // while the editor is open the primary action is the editor's own
-        // send; this one stays Secondary so a card never shows two primaries
-        let kind = if comments.edit.is_some() {
+        // send, and while an approval or a question waits that card's; this
+        // one stays Secondary then, so the screen never shows two primaries
+        let kind = if comments.edit.is_some() || comments.decision_open {
             ButtonKind::Secondary
         } else {
             ButtonKind::Primary

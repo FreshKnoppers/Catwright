@@ -14,6 +14,16 @@ tag (`## v0.2.0`) as that release's description.
   in the header ("Git off for this repository") and in the environment
   card, instead of the git info just disappearing. Its diff preview says
   so instead of showing the whole file as new.
+- Calmer accent: the composer no longer wears a permanent orange ring
+  (the send button carries the orange once there is text), the Code/Diff
+  switch of the preview is a segmented control instead of an orange
+  button, selected text gets a translucent orange, and inline code in
+  answers uses a calm tint instead of peach. While an approval or a
+  question waits, "Send to Vibe" steps back to a secondary button, so the
+  approval is the one orange button on screen.
+- Better contrast: Primary buttons and the send button use dark text on
+  orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
+  a little lighter (now at least 4.5:1).
 - Fixed: the worktree delete dialog's warning that changes could not be
   checked showed in English in every language.
 - Fixed: the "L12:" line label of review comments had no translation

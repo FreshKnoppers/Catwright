@@ -181,10 +181,13 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
             ui.input_mut(|i| !i.modifiers.shift && i.consume_key(Modifiers::NONE, Key::Enter));
     }
 
+    // typing anywhere lands here, so the composer is nearly always focused:
+    // a quiet step in the border instead of an accent ring; the accent
+    // belongs to the send button once there is something to send
     let stroke = Stroke::new(
         1.0_f32,
         if focused {
-            theme::ORANGE_DIM
+            theme::BORDER
         } else {
             theme::BORDER_SOFT
         },
@@ -406,7 +409,7 @@ fn toolbar(
                         .add(
                             IconButton::new(Icon::Send, tr("Queue (↵)"))
                                 .side(28.0)
-                                .color(egui::Color32::WHITE)
+                                .color(theme::ON_ACCENT)
                                 .fill(theme::ORANGE_DIM),
                         )
                         .clicked()
@@ -420,7 +423,7 @@ fn toolbar(
                     theme::RAISED
                 };
                 let color = if has_text {
-                    egui::Color32::WHITE
+                    theme::ON_ACCENT
                 } else {
                     theme::DIM
                 };

@@ -1,8 +1,8 @@
 :root {
   --bg: #1a1a1e; --sidebar: #17171b; --card: #101010; --raised: #29292d;
   --input: #2a2a2e; --border: #404040; --border-soft: #2e2e34; --hover: #232328;
-  --text: #ececec; --muted: #b4b4ba; --dim: #8a8a8f; --orange: #fa500f;
-  --orange-dim: #ce6114; --yellow: #ffd800; --amber: #ffaf00; --red: #e10500;
+  --text: #ececec; --muted: #b4b4ba; --dim: #9a9aa0; --orange: #fa500f;
+  --orange-dim: #e06a16; --yellow: #ffd800; --amber: #ffaf00; --red: #e10500;
   --red-text: #ff6e62; --green: #3fb950; --add-bg: #12281a; --del-bg: #301514;
   --blue: #5b9cf8; --purple: #b07cf8; --code: #f2c46d;
   --mono: "DejaVu Sans Mono", monospace;

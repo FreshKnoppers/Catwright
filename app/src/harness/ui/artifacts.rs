@@ -193,6 +193,10 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     // else in the file's own parent — and only when THAT folder is trusted
     let git_dir = git_dir_for(&p.path, base.as_deref());
     let git_trusted = h.trust.get(&git_dir).is_some_and(|t| t.trusted);
+    let decision_open = h
+        .active
+        .as_deref()
+        .is_some_and(|sid| h.session_state(sid) == SessionState::Waiting);
     let out = egui::SidePanel::right("harness_preview")
         .resizable(true)
         .default_width(p.width)
@@ -220,17 +224,11 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                         close = true;
                     }
                     ui.add_space(4.0);
-                    if ui
-                        .selectable_label(mode == PreviewMode::Diff, tr("Diff"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Diff;
-                    }
-                    if ui
-                        .selectable_label(mode == PreviewMode::Code, tr("Code"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Code;
+                    let current = usize::from(mode == PreviewMode::Diff);
+                    match widgets::segmented(ui, &[tr("Code"), tr("Diff")], current) {
+                        Some(0) => mode = PreviewMode::Code,
+                        Some(_) => mode = PreviewMode::Diff,
+                        None => {}
                     }
                 });
             });
@@ -270,8 +268,11 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                         // review comments work here like in the transcript;
                         // the draft names the path as shown above
                         let key = format!("preview::{}", p.path);
-                        let mut comments =
-                            Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
+                        let mut comments = Comments::new(
+                            &mut h.ui.diff_comments,
+                            &mut h.ui.comment_edit,
+                            decision_open,
+                        );
                         // git scans (and so the diff's HEAD read) only run
                         // for folders the agent reported as trusted
                         diff_content(

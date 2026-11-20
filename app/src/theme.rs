@@ -17,9 +17,18 @@ pub const HOVER: Color32 = Color32::from_rgb(0x23, 0x23, 0x28);
 pub const TEXT: Color32 = Color32::from_rgb(0xec, 0xec, 0xec);
 /// Secondary text that must stay comfortably readable.
 pub const MUTED: Color32 = Color32::from_rgb(0xb4, 0xb4, 0xba);
-pub const DIM: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8f);
+/// Tertiary text and mono labels: at least 4.5:1 on every surface up to
+/// RAISED (5.2:1 there).
+pub const DIM: Color32 = Color32::from_rgb(0x9a, 0x9a, 0xa0);
 pub const ORANGE: Color32 = Color32::from_rgb(0xfa, 0x50, 0x0f);
-pub const ORANGE_DIM: Color32 = Color32::from_rgb(0xce, 0x61, 0x14);
+/// Pixel meters and numbers shown as text (5.2:1 on BG).
+pub const ORANGE_DIM: Color32 = Color32::from_rgb(0xe0, 0x6a, 0x16);
+/// Text and icons on ORANGE, ORANGE_DIM, AMBER or YELLOW fills: white on
+/// ORANGE reaches only 3.4:1, this dark ink 5.6:1.
+pub const ON_ACCENT: Color32 = Color32::from_rgb(0x10, 0x10, 0x10);
+/// Background of selected text and selectable labels: ORANGE at 35 %, so
+/// TEXT on it stays readable and a selection does not shout like a button.
+pub const SELECTION: Color32 = Color32::from_rgba_premultiplied(0x58, 0x1c, 0x05, 0x59);
 pub const YELLOW: Color32 = Color32::from_rgb(0xff, 0xd8, 0x00);
 pub const AMBER: Color32 = Color32::from_rgb(0xff, 0xaf, 0x00);
 pub const RED: Color32 = Color32::from_rgb(0xe1, 0x05, 0x00);
@@ -127,7 +136,7 @@ pub fn apply(ctx: &egui::Context) {
         color: Color32::from_black_alpha(140),
     };
     visuals.popup_shadow = visuals.window_shadow;
-    visuals.selection.bg_fill = ORANGE;
+    visuals.selection.bg_fill = SELECTION;
     visuals.selection.stroke = Stroke::new(1.0_f32, TEXT);
     visuals.hyperlink_color = AMBER;
     visuals.text_cursor.stroke = Stroke::new(2.0_f32, ORANGE);
@@ -798,7 +807,7 @@ mod tests {
     fn apply_sets_tokens() {
         let ctx = egui::Context::default();
         apply(&ctx);
-        assert_eq!(ctx.style().visuals.selection.bg_fill, ORANGE);
+        assert_eq!(ctx.style().visuals.selection.bg_fill, SELECTION);
         assert_eq!(ctx.style().visuals.panel_fill, BG);
     }
 
