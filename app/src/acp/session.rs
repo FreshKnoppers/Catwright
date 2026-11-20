@@ -100,7 +100,9 @@ pub struct SubagentInfo {
     pub tool_call_id: String,
     /// The subagent's own name (`subagent_name`), not Vibe's tool title.
     pub name: String,
-    pub agent: String,
+    /// The agent type Vibe started it as (`agent` in `_meta` or `rawInput`,
+    /// e.g. "generic"); `None` when Vibe sent none.
+    pub agent: Option<String>,
     pub task: String,
     pub state: SubagentState,
     pub child_session_id: Option<String>,
@@ -917,7 +919,7 @@ impl SessionView {
             out.push(SubagentInfo {
                 tool_call_id: tc.tool_call_id.clone(),
                 name: subagent_name(tc),
-                agent: meta_or_input_str(tc, "agent").unwrap_or_else(|| "generic".to_string()),
+                agent: meta_or_input_str(tc, "agent"),
                 task: meta_or_input_str(tc, "task").unwrap_or_default(),
                 state,
                 child_session_id: meta_or_input_str(tc, "child_session_id"),
@@ -2407,7 +2409,7 @@ mod tests {
         let s = &subs[0];
         // Vibe's title is "Starting reader"; the card names the subagent
         assert_eq!(s.name, "reader");
-        assert_eq!(s.agent, "generic");
+        assert_eq!(s.agent.as_deref(), Some("generic"));
         assert!(s.task.starts_with("Lies README.md"), "task = {}", s.task);
         assert!(s
             .child_session_id
@@ -2655,6 +2657,27 @@ mod tests {
         assert_eq!(subagent_name(&tc("Starting reader")), "reader");
         assert_eq!(subagent_name(&tc("Starting ")), "Starting ");
         assert_eq!(subagent_name(&tc("Lies die README")), "Lies die README");
+    }
+
+    /// Without an agent type from Vibe the subagent has none: the card
+    /// must not claim "generic" on its own.
+    #[test]
+    fn subagent_without_agent_type_has_none() {
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(
+            &serde_json::from_value(json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "sp-x",
+                "title": "Starting reader",
+                "kind": "think",
+                "status": "in_progress",
+                "rawInput": {"task": "read"},
+                "_meta": {"tool_name": "agents.spawn", "effect_kind": "subagent"},
+            }))
+            .unwrap(),
+        );
+        assert_eq!(view.subagents()[0].agent, None);
     }
 
     /// Vibe's "Waiting for input" reads as a call to the user; with

@@ -27,7 +27,8 @@ tag (`## v0.2.0`) as that release's description.
   "Changes · 2 files" no longer looks like a contradiction.
 - Subagent cards show the subagent's name instead of Vibe's "Starting
   <name>" title, which stayed after the subagent was done, and how long a
-  running subagent has been at it.
+  running subagent has been at it. The agent type is shown only when it is
+  not Vibe's usual "generic", and no longer made up when Vibe sends none.
 - In a session with subagents, Vibe's wait call shows as "Waiting for
   subagents" instead of "Waiting for input", which read as if Catwright
   waited for you.

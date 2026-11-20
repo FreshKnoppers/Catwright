@@ -577,9 +577,17 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
     ui.horizontal(|ui| {
         ui.add(egui::Label::new(RichText::new(&a.name).color(theme::TEXT).size(13.5)).truncate())
             .on_hover_text(&a.name);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(theme::mono_tag(&a.agent, theme::DIM));
-        });
+        // the type only when it tells subagents apart: Vibe starts nearly
+        // all of them as "generic", and a tag on every card says nothing
+        if let Some(agent) = a
+            .agent
+            .as_deref()
+            .filter(|t| !t.trim().is_empty() && !t.eq_ignore_ascii_case("generic"))
+        {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(theme::mono_tag(agent, theme::DIM));
+            });
+        }
     });
     if !a.task.is_empty() {
         let mut job = egui::text::LayoutJob::default();
