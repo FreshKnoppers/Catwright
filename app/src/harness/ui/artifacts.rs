@@ -333,12 +333,14 @@ fn diff_content(
     trusted: bool,
     comment: (&str, &mut Comments, &mut Vec<MessageOp>),
 ) {
-    type DiffCache = std::sync::Mutex<
-        std::collections::HashMap<
-            (String, String, Option<u64>, u64, bool),
-            (crate::harness::watch::HeadBlob, String),
-        >,
-    >;
+    type DiffKey = (String, String, Option<u64>, u64, bool);
+    enum DiffEntry {
+        // read still running in its background thread; the entry is
+        // replaced by `Ready` when the thread stores its result
+        Pending,
+        Ready((crate::harness::watch::HeadBlob, String)),
+    }
+    type DiffCache = std::sync::Mutex<std::collections::HashMap<DiffKey, DiffEntry>>;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let meta = std::fs::metadata(path);
@@ -369,58 +371,82 @@ fn diff_content(
     // the git folder and the trust state are part of the key: a diff cached
     // for another folder (session switch) or while the folder was untrusted
     // must not be served
-    let key = (
+    let key: DiffKey = (
         path.to_string(),
         dir.to_string_lossy().into_owned(),
         mtime,
         len,
         trusted,
     );
-    let (old, current) = {
+    // The git side runs OFF the UI thread: probe plus `cat-file` can take
+    // up to their two deadlines EACH (~4 s in a slow or hostile repo), and
+    // worse, the parked `rev-parse`/config probe of a FIFO-trapped repo
+    // blocks the open forever — none of that may stall a frame anymore.
+    // A miss marks the entry `Pending` and starts ONE background thread;
+    // it stores `Ready`, requests a repaint, and the next frame paints the
+    // diff. Meanwhile the frame below shows that the diff is coming.
+    let entry_ready = {
         let mut c = cache.lock().unwrap();
-        if let Some(t) = c.get(&key) {
-            t.clone()
-        } else {
-            let rel = std::path::Path::new(path)
-                .strip_prefix(&dir)
-                .map(|r| r.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| path.to_string());
-            // one bounded PLUMBING call: `HEAD:./path` is relative to the
-            // folder git runs in; no commit yet, untracked file or a gitlink
-            // -> non-zero exit -> None. Never `git show` here: on a gitlink
-            // it resolves to a commit and applies the repo's textconv (RCE,
-            // PoC-verified). The output is capped at the preview size: a
-            // huge blob counts as "no old version" instead of a huge String
-            // on the UI thread. And only in a folder the agent reported as
-            // trusted — a shipped .git/config is executable by git.
-            let old = if trusted {
-                crate::harness::watch::head_blob_sized(
-                    &dir,
-                    &rel,
-                    artifacts::MAX_PREVIEW_BYTES as usize,
-                )
-            } else {
-                crate::harness::watch::HeadBlob::Missing
-            };
-            // capped, handle-based read — never a whole-file read_to_string
-            // on an agent-named path, never a blocking FIFO open (see
-            // artifacts::load_preview_capped / open_nonblock)
-            let current = match artifacts::load_text_capped(path) {
-                artifacts::Preview::Text(t) => t,
-                _ => String::new(),
-            };
-            let entry = (old, current);
-            c.insert(key.clone(), entry.clone());
-            if c.len() > 64 {
-                let k = c.keys().next().cloned();
-                if let Some(k) = k {
-                    c.remove(&k);
-                }
+        match c.get(&key) {
+            Some(DiffEntry::Ready(v)) => Some(v.clone()),
+            Some(DiffEntry::Pending) => None,
+            None => {
+                c.insert(key.clone(), DiffEntry::Pending);
+                let rel = std::path::Path::new(path)
+                    .strip_prefix(&dir)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| path.to_string());
+                let ctx = ui.ctx().clone();
+                let dir = dir.clone();
+                let path = path.to_string();
+                std::thread::spawn(move || {
+                    // one bounded PLUMBING call: `HEAD:./path` is relative to
+                    // the folder git runs in; no commit yet, untracked file
+                    // or a gitlink -> non-zero exit -> Missing. Never
+                    // `git show` here: on a gitlink it resolves to a commit
+                    // and applies the repo's textconv (RCE, PoC-verified).
+                    // The output is capped at the preview size: a huge blob
+                    // counts as "no old version". And only in a folder the
+                    // agent reported as trusted — a shipped .git/config is
+                    // executable by git.
+                    let old = if trusted {
+                        crate::harness::watch::head_blob_sized(
+                            &dir,
+                            &rel,
+                            artifacts::MAX_PREVIEW_BYTES as usize,
+                        )
+                    } else {
+                        crate::harness::watch::HeadBlob::Missing
+                    };
+                    // capped, handle-based read — never a whole-file
+                    // read_to_string on an agent-named path, never a
+                    // blocking FIFO open (see
+                    // artifacts::load_preview_capped / open_nonblock)
+                    let current = match artifacts::load_text_capped(&path) {
+                        artifacts::Preview::Text(t) => t,
+                        _ => String::new(),
+                    };
+                    let mut c = cache.lock().unwrap();
+                    c.insert(key.clone(), DiffEntry::Ready((old, current)));
+                    if c.len() > 64 {
+                        let k = c.keys().next().cloned();
+                        if let Some(k) = k {
+                            c.remove(&k);
+                        }
+                    }
+                    drop(c);
+                    // the result is here: paint it as soon as possible
+                    ctx.request_repaint();
+                });
+                None
             }
-            entry
         }
     };
     use crate::harness::watch::HeadBlob;
+    let Some((old, current)) = entry_ready else {
+        notice(ui, tr("Diff is being prepared …"));
+        return;
+    };
     match (trusted, old) {
         // git runs only in trusted folders; without that there is no old
         // version and the diff would be misleading
