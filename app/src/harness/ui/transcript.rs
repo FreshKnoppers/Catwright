@@ -1707,30 +1707,38 @@ pub(crate) fn comment_section(
     if n == 0 {
         return;
     }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(26.0);
-        let label = if n == 1 {
-            tr("1 comment on this file").to_string()
-        } else {
-            trf("{n} comments on this file", &[("n", &n.to_string())])
-        };
-        ui.label(RichText::new(label).color(theme::DIM).size(12.0));
-        // while the editor is open the primary action is the editor's own
-        // send, and while an approval or a question waits that card's; this
-        // one stays Secondary then, so the screen never shows two primaries
-        let kind = if comments.edit.is_some() || comments.decision_open {
-            ButtonKind::Secondary
-        } else {
-            ButtonKind::Primary
-        };
-        if widgets::button(ui, tr("Send to Vibe"), kind).clicked() {
-            ops.push(MessageOp::SendComments {
-                key: key.to_string(),
-                path: path.to_string(),
-            });
-        }
-    });
+    ui.add_space(6.0);
+    let indent = ui
+        .data(|d| d.get_temp::<f32>(egui::Id::new(("diff_text_x", key))))
+        .unwrap_or(26.0);
+    // as tall as the button, so the label sits on its middle
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), 28.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add_space(indent);
+            let label = if n == 1 {
+                tr("1 comment on this file").to_string()
+            } else {
+                trf("{n} comments on this file", &[("n", &n.to_string())])
+            };
+            ui.label(RichText::new(label).color(theme::DIM).size(12.0));
+            // while the editor is open the primary action is the editor's own
+            // send, and while an approval or a question waits that card's; this
+            // one stays Secondary then, so the screen never shows two primaries
+            let kind = if comments.edit.is_some() || comments.decision_open {
+                ButtonKind::Secondary
+            } else {
+                ButtonKind::Primary
+            };
+            if widgets::button(ui, tr("Send to Vibe"), kind).clicked() {
+                ops.push(MessageOp::SendComments {
+                    key: key.to_string(),
+                    path: path.to_string(),
+                });
+            }
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2095,6 +2103,12 @@ pub(crate) fn diff_rows(
             text_x,
             row_w,
         };
+        // the comment footer under the diff (comment_section) starts where
+        // the code does
+        if let Some((key, _, _)) = comment.as_ref() {
+            let id = egui::Id::new(("diff_text_x", *key));
+            ui.data_mut(|d| d.insert_temp(id, text_x));
+        }
         let row_width = |ui: &egui::Ui| geo.row_w.unwrap_or_else(|| ui.available_width());
         for ((seg, line_no), shown) in segments
             .iter()
@@ -2136,7 +2150,7 @@ pub(crate) fn diff_rows(
                     diff_line(ui, line.kind, &line.text, gutter, commented, number, geo);
                     // comments and the editor hang directly under their line
                     if let Some((key, state, _ops)) = comment.as_mut() {
-                        line_comments(ui, key, line_no, state);
+                        line_comments(ui, key, line_no, state, geo);
                     }
                 }
             }
@@ -2234,58 +2248,90 @@ fn diff_line(
 }
 
 /// The comments of one diff line, hanging directly under it, plus the editor
-/// when this line is being commented.
-fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Comments) {
+/// when this line is being commented. Both line up with the diff: the yellow
+/// edge continues the commented line's edge, text and editor start where
+/// the code does.
+fn line_comments(
+    ui: &mut egui::Ui,
+    key: &str,
+    line_no: usize,
+    comments: &mut Comments,
+    geo: DiffGeometry,
+) {
     let decision_open = comments.decision_open;
+    // what is visible of the row: a non-wrapping diff can be wider than
+    // the pane, and the editor and the delete button belong in view
+    let visible_w = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left());
+    let row_w = geo.row_w.unwrap_or(visible_w);
     // the editor for this line
     let mut save = false;
     let mut cancel = false;
     if let Some(e) = comments.edit.as_ref() {
         if e.key == key && e.line == line_no {
             let text = comments.edit.as_mut().unwrap();
-            ui.add_space(2.0);
+            ui.add_space(4.0);
+            // the frame's inner margin brings its content to the code; an
+            // outer margin instead of a horizontal row keeps it top-down
+            let indent = (geo.text_x - 8.0).max(0.0);
+            let inner_w = (visible_w - indent - 8.0 - 16.0).max(120.0);
             egui::Frame::none()
+                .outer_margin(egui::Margin {
+                    left: indent,
+                    right: 8.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                })
                 .fill(theme::RAISED)
                 .rounding(egui::Rounding::same(4.0))
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(trf("Comment on line {n}", &[("n", &line_no.to_string())]))
+                    ui.set_width(inner_w);
+                    {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.label(
+                            RichText::new(trf(
+                                "Comment on line {n}",
+                                &[("n", &line_no.to_string())],
+                            ))
                             .color(theme::DIM)
                             .size(12.0),
-                    );
-                    // the input field gets its own visible frame
-                    egui::Frame::none()
-                        .fill(theme::BG)
-                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                        .rounding(egui::Rounding::same(2.0))
-                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut text.text)
-                                    .frame(false)
-                                    .desired_rows(2)
-                                    .desired_width(f32::INFINITY)
-                                    .hint_text(tr("Your comment …")),
-                            );
+                        );
+                        // the input field gets its own visible frame
+                        egui::Frame::none()
+                            .fill(theme::BG)
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                            .rounding(egui::Rounding::same(2.0))
+                            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut text.text)
+                                        .frame(false)
+                                        .desired_rows(2)
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text(tr("Your comment …")),
+                                );
+                            });
+                        // an open approval or question keeps the one Primary
+                        let kind = if decision_open {
+                            ButtonKind::Secondary
+                        } else {
+                            ButtonKind::Primary
+                        };
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if widgets::button(ui, tr("Comment"), kind).clicked() {
+                                save = true;
+                            }
+                            if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                                cancel = true;
+                            }
                         });
-                    // an open approval or question keeps the one Primary
-                    let kind = if decision_open {
-                        ButtonKind::Secondary
-                    } else {
-                        ButtonKind::Primary
-                    };
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Comment"), kind).clicked() {
-                            save = true;
-                        }
-                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
-                            cancel = true;
-                        }
-                    });
+                    }
                 });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
         }
     }
     if save {
@@ -2311,31 +2357,46 @@ fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Co
         .map(|l| l.iter().filter(|c| c.line == line_no).cloned().collect())
         .unwrap_or_default();
     for c in &list {
-        ui.horizontal(|ui| {
-            ui.add_space(26.0);
-            // yellow edge like the commented line above
-            let (rect, _) = ui.allocate_exact_size(vec2(3.0, 18.0), Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, theme::YELLOW);
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(trf(
+        // one row per comment: a quiet inset under its line, the text
+        // wrapped to what is visible, the delete button at its right end
+        let text_w = (visible_w - geo.text_x - 34.0).max(60.0);
+        let galley = ui.fonts(|f| {
+            f.layout(
+                trf(
                     "L{line}: {text}",
                     &[("line", &c.line.to_string()), ("text", &c.text)],
-                ))
-                .color(theme::TEXT)
-                .size(12.5),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
-                    .clicked()
-                {
-                    if let Some(v) = comments.map.get_mut(key) {
-                        v.retain(|x| x != c);
-                    }
-                }
-            });
+                ),
+                widgets::font(12.5),
+                theme::TEXT,
+                text_w,
+            )
         });
+        let height = (galley.size().y + 10.0).max(24.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(row_w, height), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, theme::HOVER);
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+            0.0,
+            theme::YELLOW,
+        );
+        let text_pos = pos2(
+            rect.left() + geo.text_x,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(text_pos, galley, theme::TEXT);
+        let right = rect.left() + visible_w;
+        let btn = Rect::from_min_size(pos2(right - 26.0, rect.center().y - 10.0), vec2(20.0, 20.0));
+        if widgets::place(
+            ui,
+            btn,
+            IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0),
+        )
+        .clicked()
+        {
+            if let Some(v) = comments.map.get_mut(key) {
+                v.retain(|x| x != c);
+            }
+        }
     }
 }
 
