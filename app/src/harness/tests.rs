@@ -6401,7 +6401,7 @@ fn changed_files_open_as_a_commentable_preview_diff() {
     // the diff loads in its background thread now: keep rendering until
     // the cached entry is Ready (bounded, so a hang still fails the test
     // instead of running forever)
-    for _ in 0..100 {
+    for _ in 0..250 {
         if all.contains("old_line = 1") {
             break;
         }

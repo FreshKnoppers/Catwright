@@ -335,11 +335,17 @@ fn diff_content(
 ) {
     type DiffKey = (String, String, Option<u64>, u64, bool);
     enum DiffEntry {
-        // read still running in its background thread; the entry is
-        // replaced by `Ready` when the thread stores its result
-        Pending,
+        // Read still running in its background thread. `since` is the fall
+        // back: a worker that died (its panic is caught, it stores nothing)
+        // or never finished leaves the entry parked, so after the grace —
+        // larger than the worst legitimate run (probe + cat-file, 2 s each)
+        // — the next frame starts a fresh worker: no diff is stuck on
+        // "being prepared" forever, and a panicking worker cannot respawn
+        // per frame.
+        Pending { since: std::time::Instant },
         Ready((crate::harness::watch::HeadBlob, String)),
     }
+    const DIFF_RETRY_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
     type DiffCache = std::sync::Mutex<std::collections::HashMap<DiffKey, DiffEntry>>;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -389,9 +395,16 @@ fn diff_content(
         let mut c = cache.lock().unwrap();
         match c.get(&key) {
             Some(DiffEntry::Ready(v)) => Some(v.clone()),
-            Some(DiffEntry::Pending) => None,
-            None => {
-                c.insert(key.clone(), DiffEntry::Pending);
+            // a worker within its grace: the notice below says the diff is
+            // coming; outside the grace the miss branch restarts it
+            Some(DiffEntry::Pending { since }) if since.elapsed() < DIFF_RETRY_GRACE => None,
+            _ => {
+                c.insert(
+                    key.clone(),
+                    DiffEntry::Pending {
+                        since: std::time::Instant::now(),
+                    },
+                );
                 let rel = std::path::Path::new(path)
                     .strip_prefix(&dir)
                     .map(|r| r.to_string_lossy().into_owned())
@@ -400,41 +413,53 @@ fn diff_content(
                 let dir = dir.clone();
                 let path = path.to_string();
                 std::thread::spawn(move || {
-                    // one bounded PLUMBING call: `HEAD:./path` is relative to
-                    // the folder git runs in; no commit yet, untracked file
-                    // or a gitlink -> non-zero exit -> Missing. Never
-                    // `git show` here: on a gitlink it resolves to a commit
-                    // and applies the repo's textconv (RCE, PoC-verified).
-                    // The output is capped at the preview size: a huge blob
-                    // counts as "no old version". And only in a folder the
-                    // agent reported as trusted — a shipped .git/config is
-                    // executable by git.
-                    let old = if trusted {
-                        crate::harness::watch::head_blob_sized(
-                            &dir,
-                            &rel,
-                            artifacts::MAX_PREVIEW_BYTES as usize,
-                        )
-                    } else {
-                        crate::harness::watch::HeadBlob::Missing
-                    };
-                    // capped, handle-based read — never a whole-file
-                    // read_to_string on an agent-named path, never a
-                    // blocking FIFO open (see
-                    // artifacts::load_preview_capped / open_nonblock)
-                    let current = match artifacts::load_text_capped(&path) {
-                        artifacts::Preview::Text(t) => t,
-                        _ => String::new(),
-                    };
-                    let mut c = cache.lock().unwrap();
-                    c.insert(key.clone(), DiffEntry::Ready((old, current)));
-                    if c.len() > 64 {
-                        let k = c.keys().next().cloned();
-                        if let Some(k) = k {
-                            c.remove(&k);
+                    // The compute is panic-caught: nothing in it may poison
+                    // the cache mutex (it is only locked AFTER the compute),
+                    // and a panic must not leave a WRONG answer either — the
+                    // entry simply stays `Pending` with its original
+                    // `since`, so the grace in `DiffEntry::Pending` retries
+                    // later instead of showing a misleading "no changes".
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // one bounded PLUMBING call: `HEAD:./path` is
+                        // relative to the folder git runs in; no commit yet,
+                        // untracked file or a gitlink -> non-zero exit ->
+                        // Missing. Never `git show` here: on a gitlink it
+                        // resolves to a commit and applies the repo's
+                        // textconv (RCE, PoC-verified). The output is capped
+                        // at the preview size: a huge blob counts as "no old
+                        // version". And only in a folder the agent reported
+                        // as trusted — a shipped .git/config is executable
+                        // by git.
+                        let old = if trusted {
+                            crate::harness::watch::head_blob_sized(
+                                &dir,
+                                &rel,
+                                artifacts::MAX_PREVIEW_BYTES as usize,
+                            )
+                        } else {
+                            crate::harness::watch::HeadBlob::Missing
+                        };
+                        // capped, handle-based read — never a whole-file
+                        // read_to_string on an agent-named path, never a
+                        // blocking FIFO open (see
+                        // artifacts::load_preview_capped / open_nonblock)
+                        let current = match artifacts::load_text_capped(&path) {
+                            artifacts::Preview::Text(t) => t,
+                            _ => String::new(),
+                        };
+                        (old, current)
+                    }));
+                    if let Ok((old, current)) = result {
+                        let mut c = cache.lock().unwrap();
+                        c.insert(key.clone(), DiffEntry::Ready((old, current)));
+                        if c.len() > 64 {
+                            let k = c.keys().next().cloned();
+                            if let Some(k) = k {
+                                c.remove(&k);
+                            }
                         }
+                        drop(c);
                     }
-                    drop(c);
                     // the result is here: paint it as soon as possible
                     ctx.request_repaint();
                 });
