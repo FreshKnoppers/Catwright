@@ -230,7 +230,7 @@ pub fn load_text_capped(path: &str) -> Preview {
 /// path's type check opens instantly instead of hanging the UI thread; the
 /// caller rejects it right after via the handle's `fstat`. Regular files
 /// ignore the flag, so their reads are unchanged.
-fn open_nonblock(path: &str) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_nonblock(path: &str) -> std::io::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
     #[cfg(unix)]
