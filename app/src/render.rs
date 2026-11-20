@@ -19,9 +19,12 @@ pub const CODE_BG: Color32 = crate::theme::CARD;
 pub const TEXT: Color32 = crate::theme::TEXT;
 pub const DIM: Color32 = crate::theme::DIM;
 pub const LINK: Color32 = crate::theme::AMBER;
-/// Inline code spans: a calm warm tint, so the monospace sets them apart
-/// without a function name becoming the loudest word of a sentence.
+/// Inline code spans: a calm warm tint on a quiet box. The box shows where
+/// the code starts and ends (a trailing dot is not part of a command), so
+/// the colour can stay calm and a function name is never the loudest word
+/// of a sentence.
 const CODE_TEXT: Color32 = Color32::from_rgb(0xe3, 0xd4, 0xc2);
+const CODE_SPAN_BG: Color32 = Color32::from_rgb(0x26, 0x26, 0x2b);
 /// File chips keep the warmer tint: they are the clickable ones.
 const CHIP_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
 
@@ -1228,6 +1231,7 @@ fn append_inline(job: &mut egui::text::LayoutJob, inl: &[MdInline], st: InlineSt
                 egui::TextFormat {
                     font_id: egui::FontId::monospace(st.size - 1.5),
                     color: CODE_TEXT,
+                    background: CODE_SPAN_BG,
                     line_height: Some(st.size * 1.42),
                     ..Default::default()
                 },
@@ -1547,7 +1551,8 @@ fn render_inline_styled(
                     RichText::new(c)
                         .monospace()
                         .size(st.size - 2.0)
-                        .color(CODE_TEXT),
+                        .color(CODE_TEXT)
+                        .background_color(CODE_SPAN_BG),
                 );
             }
             MdInline::Link { text, url } => {

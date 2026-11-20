@@ -18,7 +18,8 @@ tag (`## v0.2.0`) as that release's description.
   (the send button carries the orange once there is text), the Code/Diff
   switch of the preview is a segmented control instead of an orange
   button, selected text gets a translucent orange, and inline code in
-  answers uses a calm tint instead of peach. While an approval or a
+  answers uses a calm tint on a quiet box instead of peach (the box shows
+  where a command ends). While an approval or a
   question waits, "Send to Vibe" steps back to a secondary button, so the
   approval is the one orange button on screen.
 - Better contrast: Primary buttons and the send button use dark text on

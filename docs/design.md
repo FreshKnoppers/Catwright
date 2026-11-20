@@ -129,9 +129,10 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   session keeps its own draft. Because it is nearly always focused, focus is
   a quiet `BORDER` step, not an accent ring; the ORANGE belongs to the send
   button once there is text.
-- **Inline code** in answers: monospace in a calm warm tint (`#e3d4c2`), so it
-  never outshouts the sentence; file chips keep the warmer `#ffd9a0` because
-  they are clickable.
+- **Inline code** in answers: monospace in a calm warm tint (`#e3d4c2`) on a
+  quiet box (`#26262b`). The box marks where the code starts and ends, so the
+  colour can stay calm and never outshouts the sentence; file chips keep the
+  warmer `#ffd9a0` and a border because they are clickable.
 - **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
   Kontext, Plan, Änderungen (accept / revert), Subagents, Routinen, Konnektoren,
   Umgebung. While it shows the plan, the conversation shows one plan line.
