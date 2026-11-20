@@ -12,8 +12,9 @@ API keys.
 - `app/src/`: `main.rs` (CLI + window), `app.rs` + `app/settings.rs` (egui UI),
   `acp/` (JSON-RPC framing, protocol, client, session views),
   `harness/` (Vibe harness state, Vibe extension payloads, local git/file
-  lookups, the tested Vibe version range in `compat.rs`), `harness/ui/` (sidebar, header, transcript, composer, cards, right
-  panel, palette, artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
+  lookups, the tested Vibe version range in `compat.rs`), `harness/ui/`
+  (sidebar, header, transcript, composer, cards, right panel, palette,
+  artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
   `script.rs`, `formula.rs`, `markdown.rs`, `diff.rs`, `syntax.rs`, `memo.rs`,
   `artifacts.rs` (Artefakte view + previews), `theme.rs`, `icons.rs`,
   `i18n.rs` (UI language, gettext catalogs in `app/i18n/`),
