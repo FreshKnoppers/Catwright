@@ -114,7 +114,7 @@ fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
     let resp = widgets::nav_row(ui, Icon::List, tr("Activity"), None, h.ui.activity_open);
     if unseen_events > 0 {
         let label = unseen_events.min(99).to_string();
-        let g = line_galley(ui, &label, mono(10.0), theme::SIDEBAR, 30.0);
+        let g = line_galley(ui, &label, mono(10.5), theme::SIDEBAR, 30.0);
         let w = (g.size().x + 10.0).max(18.0);
         let badge = Rect::from_min_size(
             pos2(resp.rect.right() - w - 6.0, resp.rect.center().y - 8.0),

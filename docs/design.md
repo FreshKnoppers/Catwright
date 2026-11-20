@@ -55,7 +55,9 @@ Pixel gradient (for pixel art / meters, left to right):
 - **Pixel meter**: row of square blocks (e.g. 10 × 10 px, 3 px gap). Filled
   = `ORANGE_DIM`, empty = `RAISED`. Use for the context window (Kontext
   panel: 20 blocks = 100 %), thinking level (low/medium/high = 1/2/3 of 3
-  blocks) and speed-like indicators.
+  blocks) and speed-like indicators. A meter never shows more than is
+  there: the context split goes into colours only while every part fills a
+  whole block, otherwise the meter shows the total and the legend the split.
 - **Pixel logo** (`theme::LOGO`): our OWN 12×12 pixel mark, an `ORANGE`
   cat sitting in profile on a `RED` branch, its tail hanging down over the
   branch; the eye is an empty cell (the tile shows through). Drawn at 2 pt
@@ -141,12 +143,25 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   quiet box (`#26262b`). The box marks where the code starts and ends, so the
   colour can stay calm and never outshouts the sentence; file chips keep the
   warmer `#ffd9a0` and a border because they are clickable.
-- **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
-  Kontext, Plan, Session changes (Vibe's edits in this session; accept / revert), Subagents, Routinen, Konnektoren,
-  Umgebung. While it shows the plan, the conversation shows one plan line.
+- **Right panel** (resizable, Strg J, hidden below 1120 pt): flat collapsible
+  sections on the panel background, separated by hairlines (no boxes inside
+  the box): Kontext, Plan, Session changes (Vibe's edits in this session;
+  accept / revert on hover), Subagents, Routinen, Konnektoren, Umgebung. A
+  folded section still shows its summary ("none", "2 connected",
+  "master · Trusted"). "Compact context" appears from 50 % on. While the
+  panel shows the plan, the conversation shows one plan line.
 - **Start screen**: cat, "Was baust du heute in [project ▾]" (in "Allgemein":
-  "Worüber möchtest du chatten? [Allgemein ▾]"), composer, recent sessions. The
-  picker chooses the workspace of the new session.
+  "Worüber möchtest du chatten? [Allgemein ▾]"; picker and heading share one
+  size and middle), composer (its placeholder names `@` and `/`, no hint
+  row). Below it what the sidebar does not tell: **Needs you** (waiting
+  sessions with the command of their approval), **New results** of this
+  run (first line of the answer), **Continue** (the latest other session),
+  **In this project** (branch, uncommitted files, trust). Only while nothing
+  waits and nothing is new, the recent sessions follow. The picker chooses
+  the workspace of the new session.
+- **Charts** (generative UI): round axis ticks (1, 2 or 5 × 10ⁿ), point marks
+  only while points stand at least 8 pt apart, one title style for cards and
+  charts (TEXT, bold); computed numbers use `ORANGE_DIM`.
 - **Command palette** (Strg K): sessions, projects, actions, slash commands.
 
 Playful is welcome (pixel mascot, gradient blocks), but readability first:

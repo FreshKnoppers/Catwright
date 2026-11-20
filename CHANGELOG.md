@@ -49,6 +49,23 @@ tag (`## v0.2.0`) as that release's description.
   field of a started session says "Reply to Vibe …", an unfolded round's
   row says "Fold round" instead of repeating the message right below it,
   and the activity feed has a proper title.
+- The start screen shows what the sidebar does not: sessions that wait
+  for you (with the command of their approval), new results of this run
+  with their first line, the session to continue and the project's git
+  state. The recent list follows only while nothing waits and nothing is
+  new. Heading and project picker share one size and line; the input
+  field's placeholder names `@` and `/`.
+- The side panel has flat sections with hairlines instead of boxes in a
+  box; folded sections show a summary. The context meter no longer
+  overstates a small fill (4 % lit three blocks), and "Compact context"
+  appears from 50 % on.
+- Charts get round axis values (0 / 50 / 100 instead of 0 / 167), lines
+  with many points no longer look beaded, and cards and charts share one
+  title style; computed values are no longer orange.
+- Diff comments line up with the code, with even gaps in the comment
+  editor.
+- The fork button has its own icon instead of one that looked like the git
+  branch mark.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

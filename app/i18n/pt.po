@@ -300,8 +300,8 @@ msgstr "Colocar a próxima mensagem na fila …"
 msgid "Message to Vibe …"
 msgstr "Mensagem para o Vibe …"
 
-msgid "What do you want to build?"
-msgstr "O que queres construir?"
+msgid "Describe a task. @ adds files, / runs commands"
+msgstr "Descreve uma tarefa. @ adiciona ficheiros, / executa comandos"
 
 msgid "Remove attachment"
 msgstr "Remover anexo"
@@ -1874,3 +1874,24 @@ msgstr "às sextas"
 
 msgid "Saturdays"
 msgstr "aos sábados"
+
+msgid "none"
+msgstr "nenhuma"
+
+msgid "Needs you"
+msgstr "Precisa de ti"
+
+msgid "New results"
+msgstr "Novos resultados"
+
+msgid "In this project"
+msgstr "Neste projeto"
+
+msgid "Approval:"
+msgstr "Aprovação:"
+
+msgid "Last active {time} ago"
+msgstr "Ativa pela última vez há {time}"
+
+msgid "Waiting for your approval"
+msgstr "À espera da tua aprovação"

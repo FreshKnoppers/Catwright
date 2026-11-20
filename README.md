@@ -43,7 +43,7 @@ send the message (see [Voice input and output](#voice-input-and-output)):
 
 A project's start screen:
 
-![Start screen with the input field, model and thinking pickers and the recent sessions](docs/screenshots/start.png)
+![Start screen with the input field, model and thinking pickers, the session to continue and the recent sessions](docs/screenshots/start.png)
 
 The preview pane in Diff mode next to the transcript
 (`--project ~/my/project --session <id> --open analysis.py --preview-diff`):

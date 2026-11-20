@@ -7191,3 +7191,63 @@ fn untested_vibe_version_is_said_once() {
     assert!(h.status.is_empty(), "the toast comes once per run");
     assert!(h.vibe_compat.notice().is_some());
 }
+
+/// The start screen shows what needs the user instead of repeating the
+/// sidebar: the waiting approval, the new result of this run (with its
+/// first line) and the session to continue.
+#[test]
+fn start_screen_shows_what_needs_the_user() {
+    let dir = std::env::temp_dir().join(format!("od-start-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    for sid in ["s1", "s2", "s3"] {
+        create_session(&mut h, &mut agent, &dir, sid);
+    }
+    let cwd = dir.to_string_lossy().into_owned();
+    h.handle_event(AcpEvent::SessionsListed {
+        cursor: None,
+        cwd: Some(dir.clone()),
+        result: sessions_listed(json!([
+            {"sessionId": "s1", "cwd": cwd, "title": "Fix CSV parser", "updatedAt": "2026-11-20T10:00:00Z"},
+            {"sessionId": "s2", "cwd": cwd, "title": "README draft", "updatedAt": "2026-11-20T09:00:00Z"},
+            {"sessionId": "s3", "cwd": cwd, "title": "Daily stats", "updatedAt": "2026-11-20T08:00:00Z"},
+        ])),
+    });
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(0),
+        request: permission_request("s1"),
+    });
+    h.handle_event(AcpEvent::Update {
+        session_id: "s2".to_string(),
+        update: agent_chunk("a1", "## Drafted a README with setup.\n\nAnd more."),
+    });
+    h.unseen.insert("s2".to_string());
+    h.active = None;
+    h.current_project = Some(dir.clone());
+
+    let img = crate::softrender::render_ui([1440, 900], 4, |ctx| {
+        let _ = crate::harness::ui::show(&mut h, ctx);
+    });
+    if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+        img.save(std::path::Path::new(&out).join("17-start-overview.png"))
+            .unwrap();
+    }
+
+    let all = render_texts(&mut h, 3).join("\n");
+    for text in [
+        "NEEDS YOU",
+        "Fix CSV parser",
+        "NEW RESULTS",
+        "Drafted a README with setup.",
+        "CONTINUE",
+        "Daily stats",
+    ] {
+        assert!(all.contains(text), "{text} on the start screen:\n{all}");
+    }
+    assert!(!all.contains("## Drafted"), "Markdown marks are left out");
+    assert!(
+        !all.contains("RECENT"),
+        "no list while something waits:\n{all}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
