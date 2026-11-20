@@ -768,8 +768,8 @@ msgstr "No se pudo leer el archivo."
 msgid "Vibe asked a question that cannot be shown."
 msgstr "Vibe hizo una pregunta que no se puede mostrar."
 
-msgid "Error ({code}): {message}"
-msgstr "Error ({code}): {message}"
+msgid "Vibe error: {message} ({code})."
+msgstr "Error de Vibe: {message} ({code})."
 
 msgid "Fork failed: {detail}"
 msgstr "El fork ha fallado: {detail}"
@@ -1835,3 +1835,42 @@ msgstr "Tiempo de ejecución hasta ahora"
 
 msgid "Waiting for subagents"
 msgstr "Esperando a los subagentes"
+
+msgid "Quota {pct} %"
+msgstr "Cuota {pct} %"
+
+msgid "Reply to Vibe …"
+msgstr "Responder a Vibe …"
+
+msgid "every hour at :{minute}"
+msgstr "cada hora a los :{minute}"
+
+msgid "daily at {time}"
+msgstr "a diario a las {time}"
+
+msgid "weekdays at {time}"
+msgstr "días laborables a las {time}"
+
+msgid "{day} at {time}"
+msgstr "{day} a las {time}"
+
+msgid "Sundays"
+msgstr "los domingos"
+
+msgid "Mondays"
+msgstr "los lunes"
+
+msgid "Tuesdays"
+msgstr "los martes"
+
+msgid "Wednesdays"
+msgstr "los miércoles"
+
+msgid "Thursdays"
+msgstr "los jueves"
+
+msgid "Fridays"
+msgstr "los viernes"
+
+msgid "Saturdays"
+msgstr "los sábados"

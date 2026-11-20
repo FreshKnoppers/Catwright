@@ -131,6 +131,12 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   session keeps its own draft. Because it is nearly always focused, focus is
   a quiet `BORDER` step, not an accent ring; the ORANGE belongs to the send
   button once there is text.
+- **Tables**: columns of numbers align right (header included), so digits of
+  the same place line up; everything else aligns left.
+- **Diffs**: the transcript wraps long lines in its column. The preview pane
+  shows line numbers (the old side's on removed lines), never wraps and
+  scrolls sideways, so code keeps its shape. Added and removed lines form
+  continuous bands.
 - **Inline code** in answers: monospace in a calm warm tint (`#e3d4c2`) on a
   quiet box (`#26262b`). The box marks where the code starts and ends, so the
   colour can stay calm and never outshouts the sentence; file chips keep the

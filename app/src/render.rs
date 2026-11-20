@@ -1083,6 +1083,10 @@ pub(crate) fn render_table_grid(
     }
     let widths = table_widths(&natural, ui.available_width() - 2.0, PADDING, MINIMUM);
     let total: f32 = widths.iter().map(|w| w + PADDING).sum();
+    // columns of numbers align right, so digits of the same place line up
+    let numeric: Vec<bool> = (0..cols)
+        .map(|c| numeric_column(rows.iter().take(shown_rows).map(|r| r.get(c))))
+        .collect();
 
     egui::Frame::none()
         .rounding(egui::Rounding::same(4.0))
@@ -1104,7 +1108,17 @@ pub(crate) fn render_table_grid(
                                     ui.set_min_width(width + PADDING);
                                     frame.show(ui, |ui| {
                                         ui.set_width(*width);
-                                        if let Some(cell) = cells.get(col) {
+                                        let Some(cell) = cells.get(col) else {
+                                            return;
+                                        };
+                                        if numeric.get(col).copied().unwrap_or(false) {
+                                            let mut job = egui::text::LayoutJob::default();
+                                            append_inline(&mut job, cell, st);
+                                            ui.with_layout(
+                                                egui::Layout::top_down(egui::Align::RIGHT),
+                                                |ui| ui.add(egui::Label::new(job)),
+                                            );
+                                        } else {
                                             render_table_cell(ui, cell, st, chips.as_deref_mut());
                                         }
                                     });
@@ -1148,6 +1162,49 @@ pub(crate) fn render_table_grid(
 
 /// One grid cell: a horizontal run of inline markdown, with zero item
 /// spacing so several snippets look like one line of text.
+/// A table cell that holds a number: "12", "-1.5", "1,234.5", "48.3 °C",
+/// "57.4 %", "€3465.80". Dates ("2026-10-01") and versions ("1.2.3-rc")
+/// are not numbers here.
+fn is_numeric_cell(cell: &[MdInline]) -> bool {
+    let [MdInline::Text(text)] = cell else {
+        return false;
+    };
+    let mut t = text.trim();
+    for prefix in ["+", "-", "−", "$", "€", "£"] {
+        t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
+    }
+    for suffix in ["%", "°C", "°F", "°", "€", "$", "£"] {
+        t = t.strip_suffix(suffix).unwrap_or(t).trim_end();
+    }
+    let starts = t.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let ends = t.chars().next_back().is_some_and(|c| c.is_ascii_digit());
+    starts
+        && ends
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '\'' | '\u{2009}'))
+}
+
+/// True when a column holds numbers: at least one, and every other body
+/// cell empty or a dash.
+fn numeric_column<'a>(cells: impl Iterator<Item = Option<&'a Vec<MdInline>>>) -> bool {
+    let mut any = false;
+    for cell in cells.flatten() {
+        let blank = match cell.as_slice() {
+            [] => true,
+            [MdInline::Text(t)] => matches!(t.trim(), "" | "-" | "–" | "—"),
+            _ => false,
+        };
+        if blank {
+            continue;
+        }
+        if !is_numeric_cell(cell) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn render_table_cell(
     ui: &mut egui::Ui,
     cell: &[MdInline],
@@ -2428,6 +2485,41 @@ mod tests {
         assert_eq!(columns_per_row(300, 800.0), 6);
         assert_eq!(columns_per_row(4, 100.0), 1);
         assert_eq!(columns_per_row(0, 800.0), 1);
+    }
+
+    #[test]
+    fn numeric_cells_and_columns() {
+        use super::{is_numeric_cell, numeric_column};
+        use crate::markdown::MdInline;
+        let cell = |t: &str| vec![MdInline::Text(t.to_string())];
+        for n in [
+            "12",
+            "-1.5",
+            "1,234.5",
+            "48.3 °C",
+            "57.4 %",
+            "€3465.80",
+            "−2",
+            "0.000",
+        ] {
+            assert!(is_numeric_cell(&cell(n)), "{n} is a number");
+        }
+        for t in [
+            "2026-10-01",
+            "1.2.3-rc",
+            "Setup",
+            "12 items",
+            "",
+            "v2",
+            "1/2",
+        ] {
+            assert!(!is_numeric_cell(&cell(t)), "{t} is not a number");
+        }
+        assert!(!is_numeric_cell(&[MdInline::Code("12".to_string())]));
+        let col = |cells: Vec<Vec<MdInline>>| numeric_column(cells.iter().map(Some));
+        assert!(col(vec![cell("2.5"), cell("–"), cell("16.9")]));
+        assert!(!col(vec![cell("2.5"), cell("n/a")]));
+        assert!(!col(vec![cell("–"), cell("")]), "no number at all");
     }
 
     #[test]

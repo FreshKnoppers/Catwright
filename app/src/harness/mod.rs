@@ -1223,9 +1223,17 @@ impl Harness {
                 if error.code == rpc::AUTH_REQUIRED {
                     self.status = tr("Vibe is not signed in. Please start `vibe` once in a terminal and sign in.").to_string();
                 } else {
+                    // Vibe's messages come without a closing dot ("rate
+                    // limited"); the code goes last, so a note appended
+                    // after it starts a sentence of its own
+                    let message = error
+                        .message
+                        .trim()
+                        .trim_end_matches(&['.', '!'][..])
+                        .trim_end();
                     self.status = trf(
-                        "Error ({code}): {message}",
-                        &[("code", &error.code), ("message", &error.message)],
+                        "Vibe error: {message} ({code}).",
+                        &[("message", &message), ("code", &error.code)],
                     );
                 }
                 match &request {

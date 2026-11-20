@@ -796,7 +796,11 @@ fn round_summary(
             _ => None,
         })
         .unwrap_or_default();
-    let label = if title.is_empty() {
+    // unfolded, the user message itself follows right below this row:
+    // the row then names its action instead of repeating the message
+    let label = if expanded {
+        tr("Fold round").to_string()
+    } else if title.is_empty() {
         tr("Round").to_string()
     } else {
         trf("“{title}”", &[("title", &shorten(&title, 90))])
@@ -1967,66 +1971,188 @@ pub(crate) fn line_numbers(segments: &[Segment]) -> Vec<Option<usize>> {
         .collect()
 }
 
+/// How `diff_rows` lays out its lines: the transcript wraps long lines in
+/// its narrow column; the preview pane shows line numbers and scrolls
+/// sideways instead, so code keeps its shape.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct DiffLayout {
+    /// Old-side numbers on removed lines, new-side numbers on all others.
+    pub numbers: bool,
+    /// Wrap long lines; without, a row is as wide as the widest line.
+    pub wrap: bool,
+}
+
+impl DiffLayout {
+    pub(crate) const TRANSCRIPT: DiffLayout = DiffLayout {
+        numbers: false,
+        wrap: true,
+    };
+    pub(crate) const PREVIEW: DiffLayout = DiffLayout {
+        numbers: true,
+        wrap: false,
+    };
+}
+
+/// The number shown in front of each segment: the old-side number for a
+/// removed line, the new-side one for every other line, `None` for a folded
+/// block (which advances both sides).
+pub(crate) fn display_numbers(segments: &[Segment]) -> Vec<Option<usize>> {
+    let (mut old, mut new) = (0usize, 0usize);
+    segments
+        .iter()
+        .map(|seg| match seg {
+            Segment::Skipped(n) => {
+                old += n;
+                new += n;
+                None
+            }
+            Segment::Line(l) => match l.kind {
+                LineKind::Removed => {
+                    old += 1;
+                    Some(old)
+                }
+                LineKind::Added => {
+                    new += 1;
+                    Some(new)
+                }
+                LineKind::Same => {
+                    old += 1;
+                    new += 1;
+                    Some(new)
+                }
+            },
+        })
+        .collect()
+}
+
+/// The diff in the transcript's layout (wrapped, no line numbers).
 pub(crate) fn diff_body(
     ui: &mut egui::Ui,
     old: Option<&str>,
     new: &str,
     max_rows: usize,
+    comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+) {
+    diff_rows(ui, old, new, max_rows, comment, DiffLayout::TRANSCRIPT);
+}
+
+/// Where the parts of a diff row start, shared by all rows of one diff.
+#[derive(Clone, Copy)]
+struct DiffGeometry {
+    /// Width of the line-number column (0 without numbers).
+    numbers_w: f32,
+    sign_x: f32,
+    text_x: f32,
+    /// The rows' width when lines do not wrap (the widest line), else
+    /// `None`: as wide as the column.
+    row_w: Option<f32>,
+}
+
+pub(crate) fn diff_rows(
+    ui: &mut egui::Ui,
+    old: Option<&str>,
+    new: &str,
+    max_rows: usize,
     mut comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+    layout: DiffLayout,
 ) {
     let segments = diff::folded_cached(old, new);
     let total = segments.len();
     let numbers = line_numbers(&segments);
-    for (seg, line_no) in segments.iter().zip(numbers.iter()).take(max_rows) {
-        match seg {
-            Segment::Skipped(n) => {
-                let n = *n;
-                let (rect, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-                let text = if n == 1 {
-                    tr("··· 1 unchanged line").to_string()
-                } else {
-                    trf("··· {n} unchanged lines", &[("n", &n)])
-                };
-                let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
-                paint_line(ui, rect.left() + 26.0, rect.center().y, g);
-            }
-            Segment::Line(line) => {
-                let line_no = line_no.expect("line_numbers pairs with every segment");
-                // the "+" gutter only on lines that exist on the new side
-                // (never on removed ones)
-                let commented = comment.as_ref().is_some_and(|(key, state, _)| {
-                    state
-                        .map
-                        .get(*key)
-                        .is_some_and(|l| l.iter().any(|c| c.line == line_no))
-                });
-                let gutter = if line.kind == LineKind::Removed {
-                    None
-                } else {
-                    comment
-                        .as_mut()
-                        .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
-                };
-                diff_line(ui, line.kind, &line.text, gutter, commented);
-                // comments and the editor hang directly under their line
-                if let Some((key, state, _ops)) = comment.as_mut() {
-                    line_comments(ui, key, line_no, state);
+    let shown_numbers = display_numbers(&segments);
+    ui.scope(|ui| {
+        // rows touch: an added block is one band, not stripes
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let gutter = if comment.is_some() { 22.0 } else { 0.0 };
+        let numbers_w = if layout.numbers {
+            let widest = shown_numbers.iter().flatten().max().copied().unwrap_or(1);
+            let digits = widest.to_string().len().max(2);
+            let g = line_galley(ui, &"0".repeat(digits), mono(11.0), theme::DIM, 200.0);
+            g.size().x + 10.0
+        } else {
+            0.0
+        };
+        let sign_x = gutter + numbers_w + if layout.numbers { 4.0 } else { 12.0 };
+        let text_x = sign_x + 14.0;
+        let row_w = (!layout.wrap).then(|| {
+            let widest = segments
+                .iter()
+                .take(max_rows)
+                .filter_map(|seg| match seg {
+                    Segment::Line(l) => Some(
+                        ui.fonts(|f| f.layout_no_wrap(l.text.clone(), mono(12.0), theme::TEXT))
+                            .size()
+                            .x,
+                    ),
+                    Segment::Skipped(_) => None,
+                })
+                .fold(0.0_f32, f32::max);
+            (text_x + widest + 12.0).max(ui.available_width())
+        });
+        let geo = DiffGeometry {
+            numbers_w,
+            sign_x,
+            text_x,
+            row_w,
+        };
+        let row_width = |ui: &egui::Ui| geo.row_w.unwrap_or_else(|| ui.available_width());
+        for ((seg, line_no), shown) in segments
+            .iter()
+            .zip(numbers.iter())
+            .zip(shown_numbers.iter())
+            .take(max_rows)
+        {
+            match seg {
+                Segment::Skipped(n) => {
+                    let n = *n;
+                    let (rect, _) =
+                        ui.allocate_exact_size(vec2(row_width(ui), 18.0), Sense::hover());
+                    let text = if n == 1 {
+                        tr("··· 1 unchanged line").to_string()
+                    } else {
+                        trf("··· {n} unchanged lines", &[("n", &n)])
+                    };
+                    let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
+                    paint_line(ui, rect.left() + geo.sign_x + 14.0, rect.center().y, g);
+                }
+                Segment::Line(line) => {
+                    let line_no = line_no.expect("line_numbers pairs with every segment");
+                    // the "+" gutter only on lines that exist on the new side
+                    // (never on removed ones)
+                    let commented = comment.as_ref().is_some_and(|(key, state, _)| {
+                        state
+                            .map
+                            .get(*key)
+                            .is_some_and(|l| l.iter().any(|c| c.line == line_no))
+                    });
+                    let gutter = if line.kind == LineKind::Removed {
+                        None
+                    } else {
+                        comment
+                            .as_mut()
+                            .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
+                    };
+                    let number = (*shown).filter(|_| layout.numbers);
+                    diff_line(ui, line.kind, &line.text, gutter, commented, number, geo);
+                    // comments and the editor hang directly under their line
+                    if let Some((key, state, _ops)) = comment.as_mut() {
+                        line_comments(ui, key, line_no, state);
+                    }
                 }
             }
         }
-    }
-    if total > max_rows {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-        let g = line_galley(
-            ui,
-            &trf("… {n} more lines", &[("n", &(total - max_rows))]),
-            mono(11.0),
-            theme::DIM,
-            rect.width(),
-        );
-        paint_line(ui, rect.left() + 26.0, rect.center().y, g);
-    }
+        if total > max_rows {
+            let (rect, _) = ui.allocate_exact_size(vec2(row_width(ui), 18.0), Sense::hover());
+            let g = line_galley(
+                ui,
+                &trf("… {n} more lines", &[("n", &(total - max_rows))]),
+                mono(11.0),
+                theme::DIM,
+                rect.width(),
+            );
+            paint_line(ui, rect.left() + geo.sign_x + 14.0, rect.center().y, g);
+        }
+    });
 }
 
 fn diff_line(
@@ -2035,27 +2161,23 @@ fn diff_line(
     text: &str,
     gutter: Option<(&str, usize, &mut Vec<MessageOp>)>,
     commented: bool,
+    number: Option<usize>,
+    geo: DiffGeometry,
 ) {
     let (bg, sign, color) = match kind {
         LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
         LineKind::Removed => (Some(theme::DIFF_DEL_BG), "−", theme::TEXT),
         LineKind::Same => (None, " ", theme::DIM),
     };
-    let commentable = gutter.is_some();
-    // with a comment gutter the sign and text shift right
-    let (sign_x, text_x, text_w) = if commentable {
-        (24.0, 38.0, 48.0)
-    } else {
-        (12.0, 26.0, 34.0)
-    };
-    let width = ui.available_width();
-    let galley = ui.fonts(|f| {
-        f.layout(
+    let width = geo.row_w.unwrap_or_else(|| ui.available_width());
+    let galley = ui.fonts(|f| match geo.row_w {
+        Some(_) => f.layout_no_wrap(text.to_string(), mono(12.0), color),
+        None => f.layout(
             text.to_string(),
             mono(12.0),
             color,
-            (width - text_w).max(40.0),
-        )
+            (width - geo.text_x - 8.0).max(40.0),
+        ),
     });
     let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y.max(17.0)), Sense::hover());
     if let Some(bg) = bg {
@@ -2069,6 +2191,12 @@ fn diff_line(
             theme::YELLOW,
         );
     }
+    if let Some(n) = number {
+        let g = line_galley(ui, &n.to_string(), mono(11.0), theme::DIM, geo.numbers_w);
+        let x = rect.left() + geo.sign_x - 6.0 - g.size().x;
+        ui.painter()
+            .galley(pos2(x, rect.top() + 1.0), g, theme::DIM);
+    }
     let sign_color = match kind {
         LineKind::Added => theme::GREEN,
         LineKind::Removed => theme::RED_TEXT,
@@ -2076,9 +2204,9 @@ fn diff_line(
     };
     let g = line_galley(ui, sign, mono(12.0), sign_color, 12.0);
     ui.painter()
-        .galley(rect.left_top() + vec2(sign_x, 0.0), g, sign_color);
+        .galley(rect.left_top() + vec2(geo.sign_x, 0.0), g, sign_color);
     ui.painter()
-        .galley(rect.left_top() + vec2(text_x, 0.0), galley, color);
+        .galley(rect.left_top() + vec2(geo.text_x, 0.0), galley, color);
     if let Some((key, line, ops)) = gutter {
         let btn = Rect::from_min_size(
             rect.left_top() + vec2(2.0, 1.0),
@@ -2108,6 +2236,7 @@ fn diff_line(
 /// The comments of one diff line, hanging directly under it, plus the editor
 /// when this line is being commented.
 fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Comments) {
+    let decision_open = comments.decision_open;
     // the editor for this line
     let mut save = false;
     let mut cancel = false;
@@ -2141,8 +2270,14 @@ fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Co
                                     .hint_text(tr("Your comment …")),
                             );
                         });
+                    // an open approval or question keeps the one Primary
+                    let kind = if decision_open {
+                        ButtonKind::Secondary
+                    } else {
+                        ButtonKind::Primary
+                    };
                     ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
+                        if widgets::button(ui, tr("Comment"), kind).clicked() {
                             save = true;
                         }
                         if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
@@ -2345,6 +2480,38 @@ mod tests {
             .map(|(_, n)| *n)
             .expect("there is an added line");
         assert_eq!(added, Some(40), "the line after the fold keeps its number");
+    }
+
+    #[test]
+    fn display_numbers_use_the_old_side_for_removed_lines() {
+        let old = "a\nb\nc\n";
+        let new = "a\nB\nc\nd\n";
+        let segments = super::diff::folded_cached(Some(old), new);
+        let shown: Vec<(super::LineKind, usize)> = segments
+            .iter()
+            .zip(super::display_numbers(&segments))
+            .filter_map(|(seg, n)| match seg {
+                super::Segment::Line(l) => Some((l.kind, n.unwrap())),
+                super::Segment::Skipped(_) => None,
+            })
+            .collect();
+        use super::LineKind::*;
+        assert_eq!(
+            shown,
+            [(Same, 1), (Removed, 2), (Added, 2), (Same, 3), (Added, 4)],
+            "{shown:?}"
+        );
+        // after a folded block both sides go on with their real numbers
+        let old: String = (0..40).map(|i| format!("l{i}\n")).collect();
+        let new = old.replace("l39\n", "changed\n");
+        let segments = super::diff::folded_cached(Some(&old), &new);
+        let numbers = super::display_numbers(&segments);
+        let last_two: Vec<Option<usize>> = numbers.iter().rev().take(2).rev().copied().collect();
+        assert_eq!(
+            last_two,
+            [Some(40), Some(40)],
+            "removed old 40, added new 40"
+        );
     }
 
     #[test]

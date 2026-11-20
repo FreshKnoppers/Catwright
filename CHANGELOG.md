@@ -35,6 +35,20 @@ tag (`## v0.2.0`) as that release's description.
 - The activity feed shows what a waiting approval would allow (command,
   all arguments, the diff of an edit) above its buttons, like the pinned
   card; the buttons look like the card's.
+- The diff preview shows line numbers, keeps long lines whole (scroll
+  sideways) and draws added and removed lines as continuous bands; the file
+  name is no longer repeated as its path when the file sits in the
+  workspace root.
+- Columns of numbers in tables align right.
+- Routines read "Mondays at 09:00" or "daily at 08:30" instead of a cron
+  expression (unusual expressions stay as they are); "Delete all" is a red
+  button now.
+- Error notes read "Vibe error: rate limited (-31001). Open approvals were
+  discarded …" instead of running Vibe's message into the next sentence.
+- The quota meter in the sidebar is labelled ("Quota 12.0 %"), the input
+  field of a started session says "Reply to Vibe …", an unfolded round's
+  row says "Fold round" instead of repeating the message right below it,
+  and the activity feed has a proper title.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

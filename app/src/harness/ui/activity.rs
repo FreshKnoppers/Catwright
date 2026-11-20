@@ -25,10 +25,17 @@ enum FeedOp {
 pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
     let mut close = false;
     let mut ops: Vec<FeedOp> = Vec::new();
-    ui.add_space(6.0);
+    // a destination of its own (like the start screen), so a real title
+    // with air above it instead of a small label at the window's edge
+    ui.add_space(24.0);
     column(ui, |ui| {
         ui.horizontal(|ui| {
-            theme::section_header(ui, tr("Activity"), true);
+            ui.label(
+                RichText::new(tr("Activity"))
+                    .size(20.0)
+                    .strong()
+                    .color(theme::TEXT),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(IconButton::new(Icon::Close, tr("Back to the session")).side(22.0))
@@ -41,7 +48,7 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
         // the user is looking at the feed: what arrives meanwhile is seen,
         // too (opening it already marked the rest)
         h.ui.activity_seen = h.activity.len();
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         let events: Vec<ActivityEvent> = h
             .activity
             .iter()

@@ -743,7 +743,7 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         form.open = true;
                     }
                     if !loops.is_empty()
-                        && widgets::button(ui, tr("Delete all"), ButtonKind::Secondary).clicked()
+                        && widgets::button(ui, tr("Delete all"), ButtonKind::Danger).clicked()
                     {
                         clear_all = true;
                     }

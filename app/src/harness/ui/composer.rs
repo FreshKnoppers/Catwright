@@ -211,10 +211,18 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
                 .map(|s| s.cwd.clone())
                 .or_else(|| h.current_project.clone())
                 .is_some_and(|dir| h.is_chat_dir(&dir));
+            // "What do you want to build?" opens a session; once the
+            // conversation has started, the next message is a reply
+            let started = sid
+                .as_deref()
+                .and_then(|s| h.sessions.get(s))
+                .is_some_and(|v| !v.items.is_empty());
             let hint = if running {
                 tr("Queue the next message …")
             } else if in_chat_dir {
                 tr("Message to Vibe …")
+            } else if started {
+                tr("Reply to Vibe …")
             } else {
                 tr("What do you want to build?")
             };

@@ -854,8 +854,12 @@ fn account_row(h: &mut Harness, ui: &mut egui::Ui, action: &mut HarnessAction) {
 
 /// A short meter of the monthly budget with the exact percentage.
 fn paint_budget(ui: &egui::Ui, origin: egui::Pos2, percent: f64, width: f32) {
-    let label = i18n::decimal(format!("{:.1} %", percent));
-    let g = line_galley(ui, &label, mono(10.5), theme::DIM, 70.0);
+    // named, so the bare number does not leave "12 % of what?" open
+    let label = trf(
+        "Quota {pct} %",
+        &[("pct", &i18n::decimal(format!("{:.1}", percent)))],
+    );
+    let g = line_galley(ui, &label, mono(10.5), theme::DIM, 100.0);
     let meter_w = (width - g.size().x - 6.0).max(20.0);
     let blocks = 16;
     let block = ((meter_w + 2.0) / blocks as f32 - 2.0).clamp(2.0, 5.0);
