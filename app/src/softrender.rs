@@ -293,13 +293,20 @@ pub fn render_ui_with(
     crate::theme::apply(&ctx);
     let mut textures = Textures::default();
     let mut last = None;
+    // Each frame advances one full animation period (`animation_time`,
+    // 1/12 s by default). egui fades a window in over that period; at 1/60 s
+    // per frame a 3–4 frame render caught dialogs at about 90 % opacity, so
+    // the transcript behind them showed through. In the real window (and in
+    // `--headless`, which runs on real time) the fade is over after a few
+    // frames; here it is over by the second frame.
+    let step = f64::from(ctx.style().animation_time);
     for i in 0..frames.max(1) {
         let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 Pos2::ZERO,
                 egui::vec2(w as f32, h as f32),
             )),
-            time: Some(i as f64 / 60.0),
+            time: Some(i as f64 * step),
             ..Default::default()
         };
         input(&mut raw);

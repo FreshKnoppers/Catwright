@@ -336,7 +336,7 @@ fn diff_content(
     type DiffCache = std::sync::Mutex<
         std::collections::HashMap<
             (String, String, Option<u64>, u64, bool),
-            (Option<String>, String),
+            (crate::harness::watch::HeadBlob, String),
         >,
     >;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
@@ -400,7 +400,7 @@ fn diff_content(
                     artifacts::MAX_PREVIEW_BYTES as usize,
                 )
             } else {
-                None
+                crate::harness::watch::HeadBlob::Missing
             };
             // capped, handle-based read — never a whole-file read_to_string
             // on an agent-named path, never a blocking FIFO open (see
@@ -420,15 +420,25 @@ fn diff_content(
             entry
         }
     };
+    use crate::harness::watch::HeadBlob;
     match (trusted, old) {
         // git runs only in trusted folders; without that there is no old
         // version and the diff would be misleading
         (false, _) => notice(ui, tr("Diff preview needs a trusted folder.")),
-        (_, Some(old)) if old != current => diff_body(ui, Some(&old), &current, 400, Some(comment)),
-        (_, Some(_)) => notice(ui, tr("No changes against the last commit.")),
+        // a repository git refuses: no answer is not "every line is new"
+        (_, HeadBlob::Refused) => notice(
+            ui,
+            tr("Diff preview is off: Catwright runs no git in this repository."),
+        ),
+        (_, HeadBlob::Blob(old)) if old != current => {
+            diff_body(ui, Some(&old), &current, 400, Some(comment))
+        }
+        (_, HeadBlob::Blob(_)) => notice(ui, tr("No changes against the last commit.")),
         // no commit yet, or the file is untracked: every line is new
-        (_, None) if !current.is_empty() => diff_body(ui, None, &current, 400, Some(comment)),
-        (_, None) => notice(ui, tr("No changes against the last commit.")),
+        (_, HeadBlob::Missing) if !current.is_empty() => {
+            diff_body(ui, None, &current, 400, Some(comment))
+        }
+        (_, HeadBlob::Missing) => notice(ui, tr("No changes against the last commit.")),
     }
 }
 

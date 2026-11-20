@@ -425,6 +425,12 @@ impl App {
             Conn::Failed(msg) => (msg.clone(), theme::RED_TEXT),
         };
         ui.label(RichText::new(text).monospace().size(12.5).color(color));
+        if let (Conn::Ready { .. }, Some(notice)) =
+            (&self.harness.conn, self.harness.vibe_compat.notice())
+        {
+            ui.add_space(4.0);
+            ui.label(RichText::new(notice).color(theme::YELLOW).size(13.0));
+        }
         ui.add_space(4.0);
         ui.label(
             RichText::new(

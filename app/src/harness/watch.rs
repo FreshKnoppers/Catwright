@@ -32,6 +32,10 @@ pub struct GitInfo {
     pub files: Vec<ChangedFile>,
     /// The repository root: `files` are relative to it, not to the folder.
     pub root: Option<PathBuf>,
+    /// A repository exists, but Catwright runs no git in it: the config
+    /// probe failed closed (repo-scope `include.*`/`includeIf.*`/`hook.*`,
+    /// a config file that is not a regular file, or no answer in time).
+    pub refused: bool,
 }
 
 /// One `git status` entry: its two-letter status code (e.g. ` M`, `??`)
@@ -72,6 +76,7 @@ pub fn parse_git(branch: &str, status: &str) -> GitInfo {
         changed,
         files,
         root: None,
+        refused: false,
     }
 }
 
@@ -93,7 +98,12 @@ fn read_git(dir: &Path) -> GitInfo {
                 .filter(|r| !r.as_os_str().is_empty());
             info
         }
-        _ => GitInfo::default(),
+        // no answer: a plain folder (the probe says "no repository") or a
+        // repository git refuses, which the UI names instead of hiding
+        _ => GitInfo {
+            refused: probe_filter_drivers(dir).is_none(),
+            ..GitInfo::default()
+        },
     }
 }
 
@@ -630,9 +640,12 @@ const PREVIEW_GIT_TIMEOUT: Duration = Duration::from_secs(2);
 /// verified against git 2.56 that this executes the configured command
 /// (RCE). `cat-file blob` applies no textconv and no filters and fails on
 /// non-blobs (gitlinks), which callers treat as "no old version".
-pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String> {
-    let neutral = filter_neutralizers(&probe_filter_drivers_timeout(dir, PREVIEW_GIT_TIMEOUT)?);
-    git_raw_bounded(
+pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> HeadBlob {
+    let Some(drivers) = probe_filter_drivers_timeout(dir, PREVIEW_GIT_TIMEOUT) else {
+        return HeadBlob::Refused;
+    };
+    let neutral = filter_neutralizers(&drivers);
+    match git_raw_bounded(
         dir,
         &[
             "cat-file".to_string(),
@@ -642,7 +655,23 @@ pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String
         PREVIEW_GIT_TIMEOUT,
         max_bytes,
         &neutral,
-    )
+    ) {
+        Some(blob) => HeadBlob::Blob(blob),
+        None => HeadBlob::Missing,
+    }
+}
+
+/// The committed version of a file, as `head_blob_sized` found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeadBlob {
+    /// The content at HEAD.
+    Blob(String),
+    /// No committed version: an untracked file, no commit yet, no
+    /// repository, a gitlink, or over the size cap.
+    Missing,
+    /// Git does not run in this repository: the config probe failed closed
+    /// (see `probe_filter_drivers`), so there is no trustworthy answer.
+    Refused,
 }
 
 /// Outcome of one bounded git call, so callers can tell "the command ran
@@ -1419,11 +1448,15 @@ mod tests {
         // our path must not: blob content for a normal file, None for the
         // gitlink, and no textconv execution either way
         let _ = std::fs::remove_file(&marker);
-        let blob = head_blob_sized(&repo, "f.txt", 1024).expect("blob at HEAD");
-        assert_eq!(blob, "hello\n");
+        assert_eq!(
+            head_blob_sized(&repo, "f.txt", 1024),
+            HeadBlob::Blob("hello\n".to_string()),
+            "blob at HEAD"
+        );
         assert!(!marker.exists(), "cat-file must not run textconv");
-        assert!(
-            head_blob_sized(&repo, "sub", 1024).is_none(),
+        assert_eq!(
+            head_blob_sized(&repo, "sub", 1024),
+            HeadBlob::Missing,
             "gitlink is not a blob"
         );
         assert!(
@@ -1673,10 +1706,30 @@ mod tests {
             .output()
             .unwrap();
         let _ = plain.status;
-        assert!(
-            marker.exists(),
-            "PoC premise: worktree add runs the config-defined hook even with hooksPath=/dev/null"
-        );
+        // Config-defined hooks only exist in newer git: 2.56 runs them
+        // (PoC-verified), while older releases such as 2.43 (Ubuntu 24.04)
+        // and 2.47 do not run them at all, so there is no attack to show.
+        // The premise is required from 2.56 on; the fail-closed checks below
+        // run on every version.
+        let version = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                let out = String::from_utf8_lossy(&o.stdout).into_owned();
+                crate::harness::compat::Version::parse(
+                    out.trim().trim_start_matches("git version "),
+                )
+            });
+        let ran = marker.exists();
+        if version.is_some_and(|v| v >= crate::harness::compat::Version(2, 56, 0)) {
+            assert!(
+                ran,
+                "PoC premise: worktree add runs the config-defined hook even with hooksPath=/dev/null"
+            );
+        } else if !ran {
+            eprintln!("git {version:?} runs no config-defined hooks: PoC premise not checked");
+        }
         let _ = std::fs::remove_file(&marker);
         let _ = std::process::Command::new("git")
             .arg("-C")
@@ -1729,6 +1782,55 @@ mod tests {
             tries += 1;
         }
         assert!(w.git(&repo, true).is_some(), "trusted: the scan ran");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A repository whose config probe fails closed is reported as
+    /// `refused` (the UI names it instead of hiding git silently), and its
+    /// diff preview gets `HeadBlob::Refused`, not "no old version". A plain
+    /// folder and a healthy repository are not refused.
+    #[test]
+    fn refused_repository_is_told_apart_from_no_repository() {
+        let base = tmp_base("refused");
+        let plain = base.join("plain");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("-c")
+                .arg("user.email=t@t")
+                .arg("-c")
+                .arg("user.name=t")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "."]);
+        std::fs::write(repo.join("f.txt"), "hello\n").unwrap();
+        git(&["add", "f.txt"]);
+        git(&["commit", "-qm", "one"]);
+
+        // healthy repository: branch known, not refused
+        let ok = read_git(&repo);
+        assert!(ok.branch.is_some() && !ok.refused, "{ok:?}");
+        assert_eq!(
+            head_blob_sized(&repo, "f.txt", 1024),
+            HeadBlob::Blob("hello\n".to_string())
+        );
+        // plain folder: no repository, nothing refused
+        let none = read_git(&plain);
+        assert!(none.branch.is_none() && !none.refused, "{none:?}");
+
+        // a repo-scope include makes the probe fail closed
+        git(&["config", "include.path", "extra.cfg"]);
+        let refused = read_git(&repo);
+        assert!(refused.branch.is_none(), "no git ran: {refused:?}");
+        assert!(refused.refused, "the refusal is reported: {refused:?}");
+        assert_eq!(head_blob_sized(&repo, "f.txt", 1024), HeadBlob::Refused);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -12,8 +12,9 @@ API keys.
 - `app/src/`: `main.rs` (CLI + window), `app.rs` + `app/settings.rs` (egui UI),
   `acp/` (JSON-RPC framing, protocol, client, session views),
   `harness/` (Vibe harness state, Vibe extension payloads, local git/file
-  lookups), `harness/ui/` (sidebar, header, transcript, composer, cards, right
-  panel, palette, artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
+  lookups, the tested Vibe version range in `compat.rs`), `harness/ui/`
+  (sidebar, header, transcript, composer, cards, right panel, palette,
+  artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
   `script.rs`, `formula.rs`, `markdown.rs`, `diff.rs`, `syntax.rs`, `memo.rs`,
   `artifacts.rs` (Artefakte view + previews), `theme.rs`, `icons.rs`,
   `i18n.rs` (UI language, gettext catalogs in `app/i18n/`),
@@ -24,8 +25,10 @@ API keys.
   as design references; never commit them.
 - `tools/icons/render.py`: renders the app icons (`app/assets/icon.png`,
   `dist/icons/`) from `theme::LOGO`; rerun it after changing the logo.
-- `tools/mockups/`: HTML mockups of proposed UI (not implemented), rendered
-  to `docs/mockups/`; not part of the app.
+- `tools/mockups/`: HTML mockups the preview pane, review comments,
+  activity feed and work details were designed from (all four are built
+  now), rendered to `docs/mockups/`; not part of the app. New UI proposals
+  go here first.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
   for `vibe-acp` with prepared demo sessions (`render.sh`); not part of the app.
 - `app/src/softrender.rs`: CPU rasterizer for egui frames, so the UI can be

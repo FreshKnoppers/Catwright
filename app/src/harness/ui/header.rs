@@ -61,7 +61,16 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         // trusted (a shipped .git/config is executable by git)
                         let trusted = h.trust.get(&cwd).is_some_and(|t| t.trusted);
                         if let Some(git) = h.watcher.git(&cwd, trusted).cloned() {
-                            git_chip(h, ui, &git, &cwd);
+                            if git.refused {
+                                ui.label(
+                                    RichText::new(tr("Git off for this repository"))
+                                        .size(12.0)
+                                        .color(theme::YELLOW),
+                                )
+                                .on_hover_text(git_refused_why());
+                            } else {
+                                git_chip(h, ui, &git, &cwd);
+                            }
                         } else if !trusted {
                             ui.label(
                                 RichText::new(tr("Git hidden until the folder is trusted"))
@@ -78,6 +87,12 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 });
             });
         });
+}
+
+/// Why git shows nothing in a repository whose config probe failed closed
+/// (the header label's and the environment card's tooltip).
+pub fn git_refused_why() -> &'static str {
+    tr("Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden.")
 }
 
 fn git_chip(

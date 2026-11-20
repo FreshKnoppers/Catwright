@@ -178,7 +178,8 @@ Catwright never logs or stores the dictated, summarised or spoken text.
 - Linux (Wayland or X11). Other systems are untested.
 - [Mistral Vibe](https://github.com/mistralai/mistral-vibe) installed and
   signed in: run `vibe` once in a terminal and follow the login. Tested with
-  Vibe 3.1.0 to 3.1.3.
+  Vibe 3.1.0 to 3.1.3. With an older or newer Vibe, Catwright says so once
+  and shows its version in yellow in the sidebar.
 - Optional: `notify-send` (libnotify) for desktop notifications.
 - Optional, for voice: a microphone and speakers. Vibe records and plays
   through PulseAudio or PipeWire (tested with Vibe 3.1.3).
