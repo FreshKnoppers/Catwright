@@ -828,14 +828,6 @@ pub(super) fn start_screen(h: &mut Harness, ui: &mut egui::Ui) {
         .map(|d| start_overview(h, d, chat))
         .unwrap_or_default();
     let content = 268.0 + overview.height();
-    eprintln!(
-        "DEBUG overview waiting={} new={} resume={} recent={} dir={:?}",
-        overview.waiting.len(),
-        overview.new.len(),
-        overview.resume.is_some(),
-        overview.recent.len(),
-        dir
-    );
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {

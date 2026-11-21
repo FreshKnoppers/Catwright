@@ -1898,3 +1898,15 @@ msgstr "Ativa pela última vez há {time}"
 
 msgid "Waiting for your approval"
 msgstr "À espera da tua aprovação"
+
+msgid "While Vibe works, the running turn is one summary line."
+msgstr "Enquanto o Vibe trabalha, a ronda em curso é uma linha de resumo."
+
+msgid "Tool calls as one closed line per group. The default."
+msgstr "Chamadas de ferramentas como uma linha fechada por grupo. A predefinição."
+
+msgid "Tool groups and thoughts open while Vibe works."
+msgstr "Grupos de ferramentas e pensamentos abertos enquanto o Vibe trabalha."
+
+msgid "Also every tool's output open while Vibe works."
+msgstr "Além disso, a saída de cada ferramenta aberta enquanto o Vibe trabalha."

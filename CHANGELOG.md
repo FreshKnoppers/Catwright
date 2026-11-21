@@ -66,6 +66,9 @@ tag (`## v0.2.0`) as that release's description.
   editor.
 - The fork button has its own icon instead of one that looked like the git
   branch mark.
+- Settings → General shows the transcript detail levels as four cards that
+  say what each level shows while Vibe works, with a small picture of how
+  much is open, instead of a list of four names.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

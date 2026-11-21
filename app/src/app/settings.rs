@@ -97,6 +97,145 @@ fn setting_row(ui: &mut egui::Ui, label: &str, help: &str, add: impl FnOnce(&mut
     ui.add_space(10.0);
 }
 
+/// One transcript detail level: id, name, what it shows, and the rows of
+/// its little picture (colour, share of the width): grey a folded line,
+/// orange a tool group, green a result, amber a thought.
+struct DetailLevel {
+    id: &'static str,
+    name: &'static str,
+    what: &'static str,
+    rows: [(egui::Color32, f32); 4],
+}
+
+fn detail_levels() -> [DetailLevel; 4] {
+    use theme::{AMBER, GREEN, ORANGE_DIM, RAISED};
+    [
+        DetailLevel {
+            id: "compact",
+            name: tr("Compact"),
+            what: tr("While Vibe works, the running turn is one summary line."),
+            rows: [
+                (RAISED, 0.7),
+                (ORANGE_DIM, 0.5),
+                (RAISED, 0.85),
+                (RAISED, 0.0),
+            ],
+        },
+        DetailLevel {
+            id: "standard",
+            name: tr("Standard"),
+            what: tr("Tool calls as one closed line per group. The default."),
+            rows: [
+                (RAISED, 0.7),
+                (ORANGE_DIM, 0.3),
+                (ORANGE_DIM, 0.36),
+                (RAISED, 0.8),
+            ],
+        },
+        DetailLevel {
+            id: "detailed",
+            name: tr("Detailed"),
+            what: tr("Tool groups and thoughts open while Vibe works."),
+            rows: [
+                (ORANGE_DIM, 0.8),
+                (GREEN, 0.75),
+                (ORANGE_DIM, 0.35),
+                (AMBER, 0.6),
+            ],
+        },
+        DetailLevel {
+            id: "verbose",
+            name: tr("Verbose"),
+            what: tr("Also every tool's output open while Vibe works."),
+            rows: [(AMBER, 0.85), (ORANGE_DIM, 0.4), (GREEN, 0.8), (GREEN, 0.7)],
+        },
+    ]
+}
+
+/// The detail levels as cards in a row (two rows when narrow); returns the
+/// level clicked in this frame.
+fn detail_cards(ui: &mut egui::Ui, current: &str) -> Option<&'static str> {
+    const GAP: f32 = 8.0;
+    const HEIGHT: f32 = 118.0;
+    let levels = detail_levels();
+    let width = ui.available_width();
+    let per_row = if width >= 4.0 * 150.0 + 3.0 * GAP {
+        4
+    } else {
+        2
+    };
+    let card_w = (width - GAP * (per_row - 1) as f32) / per_row as f32;
+    let mut chosen = None;
+    for row in levels.chunks(per_row) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            for level in row {
+                let selected = level.id == current;
+                let (rect, resp) =
+                    ui.allocate_exact_size(vec2(card_w, HEIGHT), egui::Sense::click());
+                let painter = ui.painter();
+                let stroke = if selected {
+                    egui::Stroke::new(1.5_f32, theme::ORANGE)
+                } else if resp.hovered() {
+                    egui::Stroke::new(1.0_f32, theme::BORDER)
+                } else {
+                    egui::Stroke::new(1.0_f32, theme::BORDER_SOFT)
+                };
+                painter.rect(rect, 4.0, theme::CARD, stroke);
+                let inner = rect.shrink(12.0);
+                // the check square, filled when chosen
+                let check =
+                    egui::Rect::from_min_size(inner.left_top() + vec2(0.0, 4.0), vec2(10.0, 10.0));
+                if selected {
+                    painter.rect_filled(check, 0.0, theme::ORANGE);
+                } else {
+                    painter.rect_stroke(check, 0.0, egui::Stroke::new(1.0_f32, theme::DIM));
+                }
+                let title = widgets::line_galley(
+                    ui,
+                    level.name,
+                    egui::FontId::new(14.0, crate::fonts::bold()),
+                    theme::TEXT,
+                    inner.width() - 18.0,
+                );
+                painter.galley(inner.left_top() + vec2(18.0, 0.0), title, theme::TEXT);
+                let what = ui.fonts(|f| {
+                    f.layout(
+                        level.what.to_string(),
+                        widgets::font(12.5),
+                        theme::MUTED,
+                        inner.width(),
+                    )
+                });
+                painter.galley(inner.left_top() + vec2(0.0, 24.0), what, theme::MUTED);
+                // the picture: how much of a running turn is open
+                for (i, (color, share)) in level.rows.iter().enumerate() {
+                    if *share <= 0.0 {
+                        continue;
+                    }
+                    let y = inner.bottom() - 4.0 - (3 - i) as f32 * 7.0;
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(inner.left(), y),
+                            vec2(inner.width() * share, 4.0),
+                        ),
+                        0.0,
+                        *color,
+                    );
+                }
+                let resp = resp
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(level.what);
+                if resp.clicked() {
+                    chosen = Some(level.id);
+                }
+            }
+        });
+        ui.add_space(GAP);
+    }
+    chosen
+}
+
 fn page_title(ui: &mut egui::Ui, title: &str) {
     ui.label(
         RichText::new(title)
@@ -298,40 +437,25 @@ impl App {
                 }
             },
         );
-        setting_row(
-            ui,
-            tr("Transcript detail while Vibe works"),
-            tr("How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."),
-            |ui| {
-                const LEVELS: [(&str, &str); 4] = [
-                    ("compact", "Compact"),
-                    ("standard", "Standard"),
-                    ("detailed", "Detailed"),
-                    ("verbose", "Verbose"),
-                ];
-                let current = self.settings.transcript_detail.clone();
-                let mut chosen = None;
-                egui::ComboBox::from_id_salt("settings_transcript_detail")
-                    .selected_text(
-                        LEVELS
-                            .iter()
-                            .find(|(id, _)| *id == current)
-                            .map(|(_, label)| tr(label))
-                            .unwrap_or_else(|| current.as_str()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for (id, label) in &LEVELS {
-                            if ui.selectable_label(*id == current, tr(label)).clicked() {
-                                chosen = Some(id.to_string());
-                            }
-                        }
-                    });
-                if let Some(id) = chosen {
-                    self.settings.transcript_detail = id.clone();
-                    self.harness.ui.transcript_detail = id;
-                }
-            },
+        // the detail level as four cards (each says what it shows), not a
+        // list of four bare names
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(tr("Transcript detail while Vibe works"))
+                .size(14.0)
+                .color(theme::TEXT),
         );
+        ui.label(
+            RichText::new(tr("How open tool calls and thoughts are while a turn runs. Changes and approvals stay visible at every level."))
+                .size(12.5)
+                .color(theme::DIM),
+        );
+        ui.add_space(8.0);
+        if let Some(id) = detail_cards(ui, &self.settings.transcript_detail) {
+            self.settings.transcript_detail = id.to_string();
+            self.harness.ui.transcript_detail = id.to_string();
+        }
+        ui.add_space(16.0);
         setting_row(
             ui,
             tr("Desktop notifications"),
