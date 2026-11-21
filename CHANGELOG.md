@@ -69,6 +69,12 @@ tag (`## v0.2.0`) as that release's description.
 - Settings → General shows the transcript detail levels as four cards that
   say what each level shows while Vibe works, with a small picture of how
   much is open, instead of a list of four names.
+- Performance: the preview pane and the Artefakte view lay out only the
+  visible code rows per frame and cache the syntax highlighting per file
+  version, so a large file no longer costs 50–150 ms per frame; the CSV
+  preview caches its parsed table instead of re-parsing every cell each
+  frame, and a running subagent's bar animates at 40 fps instead of the
+  full refresh rate.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

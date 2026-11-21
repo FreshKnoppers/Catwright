@@ -207,6 +207,71 @@ fn push_run(out: &mut Vec<(Tok, String)>, tok: Tok, text: &str) {
     out.push((tok, text.to_string()));
 }
 
+/// The highlighting of a text, line by line, as byte ranges into that
+/// text: one flat run list plus where each line's runs begin. Holding
+/// ranges instead of a `String` per run keeps a cached 2 MiB file at a few
+/// MB instead of ~19 MB, without one allocation per token.
+#[derive(Debug, Default)]
+pub struct LineRuns {
+    runs: Vec<(Tok, std::ops::Range<usize>)>,
+    /// `line_starts[i]..line_starts[i + 1]` are the runs of line `i`.
+    line_starts: Vec<usize>,
+}
+
+impl LineRuns {
+    /// Tokenize `code` line by line (as `str::lines` splits it).
+    pub fn new(lang: &str, code: &str) -> Self {
+        let mut runs = Vec::new();
+        let mut line_starts = vec![0];
+        for line in code.lines() {
+            // `lines` hands out sub-slices of `code`: their offset is the
+            // distance between the two pointers
+            let mut at = line.as_ptr() as usize - code.as_ptr() as usize;
+            // the runs of a line concatenate to exactly that line
+            for (tok, text) in tokenize(lang, line) {
+                runs.push((tok, at..at + text.len()));
+                at += text.len();
+            }
+            line_starts.push(runs.len());
+        }
+        Self { runs, line_starts }
+    }
+
+    /// Number of lines.
+    pub fn len(&self) -> usize {
+        self.line_starts.len() - 1
+    }
+
+    /// The runs of line `i`, sliced out of `code` (the text these runs were
+    /// made from). A range that does not fit `code` yields nothing rather
+    /// than panicking.
+    pub fn line<'a>(&'a self, code: &'a str, i: usize) -> impl Iterator<Item = (Tok, &'a str)> {
+        let runs = match (self.line_starts.get(i), self.line_starts.get(i + 1)) {
+            (Some(&from), Some(&to)) => &self.runs[from..to],
+            _ => &[],
+        };
+        runs.iter()
+            .filter_map(|(tok, r)| code.get(r.clone()).map(|text| (*tok, text)))
+    }
+}
+
+/// [`LineRuns`] of `code`, cached by content: the preview pane redraws
+/// every frame, tokenizing a large file each time cost tens of ms.
+pub fn tokenize_lines_cached(lang: &str, code: &str) -> std::sync::Arc<LineRuns> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<LineRuns>> = std::sync::OnceLock::new();
+    tokenize_lines_in(CACHE.get_or_init(|| crate::memo::Memo::new(4)), lang, code)
+}
+
+fn tokenize_lines_in(
+    memo: &crate::memo::Memo<LineRuns>,
+    lang: &str,
+    code: &str,
+) -> std::sync::Arc<LineRuns> {
+    memo.get_or_insert(crate::memo::hash_pair(Some(lang), code), || {
+        LineRuns::new(lang, code)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +332,60 @@ mod tests {
             kinds("true null", "json"),
             vec![Tok::Keyword, Tok::Plain, Tok::Keyword]
         );
+    }
+
+    #[test]
+    fn tokenize_lines_cached_reuses_one_entry_per_content() {
+        // a memo of its own: the global one is shared with tests running in
+        // parallel, whose inserts could clear it between two lookups here
+        let memo = crate::memo::Memo::new(4);
+        let code = "let x = 1;\n\nlet y = 2;";
+        let a = tokenize_lines_in(&memo, "rust", code);
+        let b = tokenize_lines_in(&memo, "rust", code);
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "same content, same entry");
+        assert_eq!(a.len(), 3);
+        let per_line: Vec<Vec<Tok>> = (0..a.len())
+            .map(|i| a.line(code, i).map(|(t, _)| t).collect())
+            .collect();
+        assert_eq!(
+            per_line,
+            vec![
+                vec![Tok::Keyword, Tok::Plain, Tok::Num, Tok::Plain],
+                Vec::<Tok>::new(),
+                vec![Tok::Keyword, Tok::Plain, Tok::Num, Tok::Plain],
+            ]
+        );
+        let other = tokenize_lines_in(&memo, "rust", "let x = 1;");
+        assert!(!std::sync::Arc::ptr_eq(&a, &other));
+        let other_lang = tokenize_lines_in(&memo, "python", code);
+        assert!(
+            !std::sync::Arc::ptr_eq(&a, &other_lang),
+            "lang is part of the key"
+        );
+        // the global entry point serves the same runs
+        let global = tokenize_lines_cached("rust", code);
+        assert_eq!(global.len(), 3);
+    }
+
+    #[test]
+    fn line_runs_slice_every_line_back_exactly() {
+        let code = "fn größe() {\r\n    \"ä 🐈\" // ü\r\n\n}\n";
+        let runs = LineRuns::new("rust", code);
+        let lines: Vec<&str> = code.lines().collect();
+        assert_eq!(runs.len(), lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            let joined: String = runs.line(code, i).map(|(_, t)| t).collect();
+            assert_eq!(&joined, line, "line {i} comes back byte for byte");
+            let direct: Vec<(Tok, String)> = runs
+                .line(code, i)
+                .map(|(t, s)| (t, s.to_string()))
+                .collect();
+            assert_eq!(direct, tokenize("rust", line), "same runs as tokenize");
+        }
+        assert_eq!(runs.line(code, lines.len()).count(), 0, "past the end");
+        // ranges that do not fit another text yield nothing, never a panic
+        assert_eq!(runs.line("x", 1).count(), 0);
+        assert_eq!(LineRuns::new("rust", "").len(), 0);
     }
 
     #[test]
