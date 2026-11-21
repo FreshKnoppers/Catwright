@@ -622,14 +622,12 @@ fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
                     None,
                 );
             }
-            ArtifactKind::Html => crate::render::render_code_block(ui, code_id, "html", text),
-            _ => {
-                if numbered {
-                    crate::render::render_code_block_lines(ui, code_id, "", text)
-                } else {
-                    crate::render::render_code_block(ui, code_id, "", text)
-                }
+            // whole files: only the rows in view are laid out (an HTML
+            // file keeps its source view without line numbers)
+            ArtifactKind::Html => {
+                crate::render::render_code_block_lines(ui, code_id, "html", text, false)
             }
+            _ => crate::render::render_code_block_lines(ui, code_id, "", text, numbered),
         },
         Preview::Image(bytes) => match png_texture(ui.ctx(), path, bytes) {
             Ok(tex) => {
@@ -887,17 +885,15 @@ fn preview_cache_insert(
     }
 }
 
-/// The file's preview, read once per file version (review M10): the view
-/// runs every frame, `artifacts::load_preview` caches each version too —
-/// but hands out a CLONE of up to [`artifacts::MAX_PREVIEW_BYTES`] per
-/// call, a 2 MiB copy per frame on the UI thread. This Arc keeps the one
-/// instance; every following frame borrows it until (mtime, size) say
-/// the file changed.
+/// The parsed table of a CSV preview: header cells, then the body rows.
 type CsvGrid = (
     Vec<Vec<crate::markdown::MdInline>>,
     Vec<Vec<Vec<crate::markdown::MdInline>>>,
 );
 
+/// The parsed table of `text`, cached by content: the view runs every
+/// frame, and re-parsing up to MAX_CSV_ROWS × MAX_CSV_COLS cells each time
+/// is avoidable load.
 fn csv_grid_cached(text: &str) -> std::sync::Arc<CsvGrid> {
     static CACHE: std::sync::OnceLock<crate::memo::Memo<CsvGrid>> = std::sync::OnceLock::new();
     CACHE
@@ -919,6 +915,12 @@ fn csv_grid_cached(text: &str) -> std::sync::Arc<CsvGrid> {
         })
 }
 
+/// The file's preview, read once per file version (review M10): the view
+/// runs every frame, `artifacts::load_preview` caches each version too —
+/// but hands out a CLONE of up to [`artifacts::MAX_PREVIEW_BYTES`] per
+/// call, a 2 MiB copy per frame on the UI thread. This Arc keeps the one
+/// instance; every following frame borrows it until (mtime, size) say
+/// the file changed.
 fn cached_preview(path: &str, kind: ArtifactKind) -> std::sync::Arc<Preview> {
     let meta = std::fs::metadata(path);
     let mtime = meta.as_ref().ok().and_then(|m| m.modified().ok());
