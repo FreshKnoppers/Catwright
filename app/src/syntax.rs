@@ -207,6 +207,17 @@ fn push_run(out: &mut Vec<(Tok, String)>, tok: Tok, text: &str) {
     out.push((tok, text.to_string()));
 }
 
+type LineTokens = Vec<Vec<(Tok, String)>>;
+
+pub fn tokenize_lines_cached(lang: &str, code: &str) -> std::sync::Arc<LineTokens> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<LineTokens>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| crate::memo::Memo::new(4))
+        .get_or_insert(crate::memo::hash_pair(Some(lang), code), || {
+            code.lines().map(|line| tokenize(lang, line)).collect()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +277,33 @@ mod tests {
         assert_eq!(
             kinds("true null", "json"),
             vec![Tok::Keyword, Tok::Plain, Tok::Keyword]
+        );
+    }
+
+    #[test]
+    fn tokenize_lines_cached_reuses_one_entry_per_content() {
+        let a = tokenize_lines_cached("rust", "let x = 1;\n\nlet y = 2;");
+        let b = tokenize_lines_cached("rust", "let x = 1;\n\nlet y = 2;");
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "same content, same entry");
+        assert_eq!(a.len(), 3);
+        let per_line: Vec<Vec<Tok>> = a
+            .iter()
+            .map(|l| l.iter().map(|(t, _)| *t).collect())
+            .collect();
+        assert_eq!(
+            per_line,
+            vec![
+                vec![Tok::Keyword, Tok::Plain, Tok::Num, Tok::Plain],
+                Vec::<Tok>::new(),
+                vec![Tok::Keyword, Tok::Plain, Tok::Num, Tok::Plain],
+            ]
+        );
+        let other = tokenize_lines_cached("rust", "let x = 1;");
+        assert!(!std::sync::Arc::ptr_eq(&a, &other));
+        let other_lang = tokenize_lines_cached("python", "let x = 1;\n\nlet y = 2;");
+        assert!(
+            !std::sync::Arc::ptr_eq(&a, &other_lang),
+            "lang is part of the key"
         );
     }
 

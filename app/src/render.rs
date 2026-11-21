@@ -939,13 +939,16 @@ pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &st
                 });
             });
             ui.add_space(2.0);
-            egui::ScrollArea::horizontal()
+            let lines = crate::syntax::tokenize_lines_cached(lang, code);
+            let row_h = ui.fonts(|f| f.row_height(&crate::widgets::mono(12.5)));
+            egui::ScrollArea::both()
                 .id_salt(id)
-                .auto_shrink([false, true])
+                .auto_shrink([false, false])
                 .max_width(ui.available_width())
-                .show(ui, |ui| {
-                    for (i, line) in code.lines().enumerate() {
+                .show_rows(ui, row_h, lines.len(), |ui, range| {
+                    for i in range {
                         ui.horizontal(|ui| {
+                            ui.set_min_height(row_h);
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(format!("{:>4}", i + 1))
@@ -957,7 +960,7 @@ pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &st
                             );
                             ui.add_space(8.0);
                             let mut job = egui::text::LayoutJob::default();
-                            for (tok, text) in crate::syntax::tokenize(lang, line) {
+                            for (tok, text) in &lines[i] {
                                 let color = match tok {
                                     crate::syntax::Tok::Keyword => crate::theme::BLUE,
                                     crate::syntax::Tok::Str => crate::theme::GREEN,

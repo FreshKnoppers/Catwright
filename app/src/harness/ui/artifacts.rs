@@ -613,23 +613,12 @@ fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
                 crate::render::render_blocks(ui, &blocks, 0, &mut rctx);
             }
             ArtifactKind::Csv => {
-                let mut grid = artifacts::parse_csv(text).into_iter();
-                let columns: Vec<Vec<crate::markdown::MdInline>> = grid
-                    .next()
-                    .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
-                    .unwrap_or_default();
-                let body: Vec<Vec<Vec<crate::markdown::MdInline>>> = grid
-                    .map(|row| {
-                        row.iter()
-                            .map(|c| crate::markdown::parse_inline(c))
-                            .collect()
-                    })
-                    .collect();
+                let grid = csv_grid_cached(text);
                 crate::render::render_table_grid(
                     ui,
                     egui::Id::new(("artifact_csv", path)),
-                    &columns,
-                    &body,
+                    &grid.0,
+                    &grid.1,
                     None,
                 );
             }
@@ -904,6 +893,32 @@ fn preview_cache_insert(
 /// call, a 2 MiB copy per frame on the UI thread. This Arc keeps the one
 /// instance; every following frame borrows it until (mtime, size) say
 /// the file changed.
+type CsvGrid = (
+    Vec<Vec<crate::markdown::MdInline>>,
+    Vec<Vec<Vec<crate::markdown::MdInline>>>,
+);
+
+fn csv_grid_cached(text: &str) -> std::sync::Arc<CsvGrid> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<CsvGrid>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| crate::memo::Memo::new(2))
+        .get_or_insert(crate::memo::hash_str(text), || {
+            let mut grid = artifacts::parse_csv(text).into_iter();
+            let columns = grid
+                .next()
+                .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
+                .unwrap_or_default();
+            let body = grid
+                .map(|row| {
+                    row.iter()
+                        .map(|c| crate::markdown::parse_inline(c))
+                        .collect()
+                })
+                .collect();
+            (columns, body)
+        })
+}
+
 fn cached_preview(path: &str, kind: ArtifactKind) -> std::sync::Arc<Preview> {
     let meta = std::fs::metadata(path);
     let mtime = meta.as_ref().ok().and_then(|m| m.modified().ok());
