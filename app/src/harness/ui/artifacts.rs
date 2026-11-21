@@ -613,34 +613,21 @@ fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
                 crate::render::render_blocks(ui, &blocks, 0, &mut rctx);
             }
             ArtifactKind::Csv => {
-                let mut grid = artifacts::parse_csv(text).into_iter();
-                let columns: Vec<Vec<crate::markdown::MdInline>> = grid
-                    .next()
-                    .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
-                    .unwrap_or_default();
-                let body: Vec<Vec<Vec<crate::markdown::MdInline>>> = grid
-                    .map(|row| {
-                        row.iter()
-                            .map(|c| crate::markdown::parse_inline(c))
-                            .collect()
-                    })
-                    .collect();
+                let grid = csv_grid_cached(text);
                 crate::render::render_table_grid(
                     ui,
                     egui::Id::new(("artifact_csv", path)),
-                    &columns,
-                    &body,
+                    &grid.0,
+                    &grid.1,
                     None,
                 );
             }
-            ArtifactKind::Html => crate::render::render_code_block(ui, code_id, "html", text),
-            _ => {
-                if numbered {
-                    crate::render::render_code_block_lines(ui, code_id, "", text)
-                } else {
-                    crate::render::render_code_block(ui, code_id, "", text)
-                }
+            // whole files: only the rows in view are laid out (an HTML
+            // file keeps its source view without line numbers)
+            ArtifactKind::Html => {
+                crate::render::render_code_block_lines(ui, code_id, "html", text, false)
             }
+            _ => crate::render::render_code_block_lines(ui, code_id, "", text, numbered),
         },
         Preview::Image(bytes) => match png_texture(ui.ctx(), path, bytes) {
             Ok(tex) => {
@@ -896,6 +883,36 @@ fn preview_cache_insert(
             None => break,
         }
     }
+}
+
+/// The parsed table of a CSV preview: header cells, then the body rows.
+type CsvGrid = (
+    Vec<Vec<crate::markdown::MdInline>>,
+    Vec<Vec<Vec<crate::markdown::MdInline>>>,
+);
+
+/// The parsed table of `text`, cached by content: the view runs every
+/// frame, and re-parsing up to MAX_CSV_ROWS × MAX_CSV_COLS cells each time
+/// is avoidable load.
+fn csv_grid_cached(text: &str) -> std::sync::Arc<CsvGrid> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<CsvGrid>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| crate::memo::Memo::new(2))
+        .get_or_insert(crate::memo::hash_str(text), || {
+            let mut grid = artifacts::parse_csv(text).into_iter();
+            let columns = grid
+                .next()
+                .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
+                .unwrap_or_default();
+            let body = grid
+                .map(|row| {
+                    row.iter()
+                        .map(|c| crate::markdown::parse_inline(c))
+                        .collect()
+                })
+                .collect();
+            (columns, body)
+        })
 }
 
 /// The file's preview, read once per file version (review M10): the view

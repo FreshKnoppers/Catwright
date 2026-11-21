@@ -661,7 +661,8 @@ pub fn subagent_bar(
     );
 
     if running {
-        ui.ctx().request_repaint();
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(25));
     }
     response
 }

@@ -5,6 +5,44 @@ tag (`## v0.2.0`) as that release's description.
 
 ## Unreleased
 
+- Answers with charts and calculators: the bars of a bar chart start at
+  the same place (before, each bar began right after its label), its
+  values no longer show float noise or run out of the card, a pie sits on
+  the middle of its legend, sliders have a square handle, and a button
+  inside columns keeps its size instead of stretching across.
+- Charts in answers are calmer: pie slices use the same hues a step darker
+  (amber, yellow, green and teal glared as large areas), in an order checked
+  for colour-blind and normal vision. Vibe can now mark what an element
+  means with `tone` (good, bad, warning, neutral) instead of costs landing
+  in alarm red by position; the catwright-ui skill describes it.
+
+## v0.7.0
+
+**Download:** `catwright-v0.7.0-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.7.0-x86_64-linux.tar.gz
+cd catwright-v0.7.0-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.7.0-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.7.0-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
 - Catwright now checks the Vibe version it connects to. With a Vibe older
   or newer than the tested range (3.1.0 to 3.1.3) it says so once, shows
   the version in yellow in the sidebar (the tooltip explains it) and on the
@@ -69,16 +107,15 @@ tag (`## v0.2.0`) as that release's description.
 - Settings → General shows the transcript detail levels as four cards that
   say what each level shows while Vibe works, with a small picture of how
   much is open, instead of a list of four names.
-- Answers with charts and calculators: the bars of a bar chart start at
-  the same place (before, each bar began right after its label), its
-  values no longer show float noise or run out of the card, a pie sits on
-  the middle of its legend, sliders have a square handle, and a button
-  inside columns keeps its size instead of stretching across.
-- Charts in answers are calmer: pie slices use the same hues a step darker
-  (amber, yellow, green and teal glared as large areas), in an order checked
-  for colour-blind and normal vision. Vibe can now mark what an element
-  means with `tone` (good, bad, warning, neutral) instead of costs landing
-  in alarm red by position; the catwright-ui skill describes it.
+- Performance: the preview pane and the Artefakte view lay out only the
+  visible code rows per frame and cache the syntax highlighting per file
+  version, so a large file no longer costs 50–150 ms per frame; the CSV
+  preview caches its parsed table instead of re-parsing every cell each
+  frame, and a running subagent's bar animates at 40 fps instead of the
+  full refresh rate.
+- The sidebar builds its session rows from references instead of cloning
+  the whole session list per project on every frame (microseconds up to
+  about 0.5 ms per frame with very many sessions).
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

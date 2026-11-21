@@ -919,31 +919,46 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, id: egui::Id, lang: &str, cod
                 .show(ui, |ui| {
                     let mut job = egui::text::LayoutJob::default();
                     for (tok, text) in crate::syntax::tokenize(lang, code) {
-                        let color = match tok {
-                            crate::syntax::Tok::Keyword => crate::theme::BLUE,
-                            crate::syntax::Tok::Str => crate::theme::GREEN,
-                            crate::syntax::Tok::Comment => crate::theme::DIM,
-                            crate::syntax::Tok::Num => crate::theme::AMBER,
-                            crate::syntax::Tok::Plain => TEXT,
-                        };
-                        job.append(
-                            text.as_str(),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: crate::widgets::mono(12.5),
-                                color,
-                                ..Default::default()
-                            },
-                        );
+                        append_code_run(&mut job, tok, &text);
                     }
                     ui.add(egui::Label::new(job).extend());
                 });
         });
 }
 
-/// Code block with line numbers (the preview pane): one row per line,
-/// horizontal scroll instead of truncation.
-pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &str, code: &str) {
+/// One highlighted run of a code block, in the token's colour.
+fn append_code_run(job: &mut egui::text::LayoutJob, tok: crate::syntax::Tok, text: &str) {
+    let color = match tok {
+        crate::syntax::Tok::Keyword => crate::theme::BLUE,
+        crate::syntax::Tok::Str => crate::theme::GREEN,
+        crate::syntax::Tok::Comment => crate::theme::DIM,
+        crate::syntax::Tok::Num => crate::theme::AMBER,
+        crate::syntax::Tok::Plain => TEXT,
+    };
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: crate::widgets::mono(12.5),
+            color,
+            ..Default::default()
+        },
+    );
+}
+
+/// Code block for whole files (the preview pane, the Artefakte view): one
+/// row per line, laid out only for the rows in view, with the highlighting
+/// cached per file content, so a large file costs no more per frame than a
+/// small one. `numbers`: a line-number column; without it the rows sit
+/// flush like the lines of [`render_code_block`]. Horizontal scroll instead
+/// of truncation.
+pub(crate) fn render_code_block_lines(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    lang: &str,
+    code: &str,
+    numbers: bool,
+) {
     egui::Frame::default()
         .fill(CODE_BG)
         .rounding(egui::Rounding::same(4.0))
@@ -972,47 +987,78 @@ pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &st
                 });
             });
             ui.add_space(2.0);
-            egui::ScrollArea::horizontal()
+            let lines = crate::syntax::tokenize_lines_cached(lang, code);
+            let row_h = code_rows_setup(ui, numbers);
+            egui::ScrollArea::both()
                 .id_salt(id)
+                // a short file ends under its last line; a long one takes the
+                // height that is left and scrolls inside
                 .auto_shrink([false, true])
                 .max_width(ui.available_width())
-                .show(ui, |ui| {
-                    for (i, line) in code.lines().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("{:>4}", i + 1))
-                                        .monospace()
-                                        .size(11.0)
-                                        .color(crate::theme::DIM),
-                                )
-                                .extend(),
-                            );
-                            ui.add_space(8.0);
-                            let mut job = egui::text::LayoutJob::default();
-                            for (tok, text) in crate::syntax::tokenize(lang, line) {
-                                let color = match tok {
-                                    crate::syntax::Tok::Keyword => crate::theme::BLUE,
-                                    crate::syntax::Tok::Str => crate::theme::GREEN,
-                                    crate::syntax::Tok::Comment => crate::theme::DIM,
-                                    crate::syntax::Tok::Num => crate::theme::AMBER,
-                                    crate::syntax::Tok::Plain => TEXT,
-                                };
-                                job.append(
-                                    text.as_str(),
-                                    0.0,
-                                    egui::TextFormat {
-                                        font_id: crate::widgets::mono(12.5),
-                                        color,
-                                        ..Default::default()
-                                    },
-                                );
-                            }
-                            ui.add(egui::Label::new(job).extend());
-                        });
+                .show_rows(ui, row_h, lines.len(), |ui, range| {
+                    for i in range {
+                        code_row(ui, &lines, code, i, numbers, row_h);
                     }
                 });
         });
+}
+
+/// Spacing for the rows of [`render_code_block_lines`]; returns the row
+/// height. `show_rows` places row `i` at `i × (height + item spacing)`,
+/// so every row must come out exactly this tall: a taller row (a
+/// horizontal layout is at least `interact_size.y` high) would shift the
+/// rows against the scroll offset — a page down skipped lines and the
+/// scrollbar misjudged the length. With numbers the rows keep the
+/// interactive height (the airy look of the line-number view); without,
+/// they sit flush at the font's row height like one text block.
+fn code_rows_setup(ui: &mut egui::Ui, numbers: bool) -> f32 {
+    // what a laid-out code line really allocates (the galley's height is
+    // rounded, the font's bare row height is not)
+    let font_h = ui
+        .fonts(|f| f.layout_no_wrap("0".into(), crate::widgets::mono(12.5), TEXT))
+        .size()
+        .y;
+    let row_h = if numbers {
+        font_h.max(ui.spacing().interact_size.y)
+    } else {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        font_h
+    };
+    ui.spacing_mut().interact_size.y = row_h;
+    row_h
+}
+
+/// One line of [`render_code_block_lines`]: optional number, then the
+/// highlighted runs.
+fn code_row(
+    ui: &mut egui::Ui,
+    lines: &crate::syntax::LineRuns,
+    code: &str,
+    i: usize,
+    numbers: bool,
+    row_h: f32,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.set_min_height(row_h);
+        if numbers {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{:>4}", i + 1))
+                        .monospace()
+                        .size(11.0)
+                        .color(crate::theme::DIM),
+                )
+                .extend(),
+            );
+            ui.add_space(8.0);
+        }
+        let mut job = egui::text::LayoutJob::default();
+        for (tok, text) in lines.line(code, i) {
+            append_code_run(&mut job, tok, text);
+        }
+        ui.add(egui::Label::new(job).extend());
+    })
+    .response
 }
 
 /// Inner column widths for a table of the given natural widths. Everything
@@ -2543,6 +2589,46 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
 
 #[cfg(test)]
 mod tests {
+    /// `show_rows` places code rows at `i × (row height + item spacing)`:
+    /// the rows `code_row` paints must have exactly that pitch, with the
+    /// app's theme (its `interact_size.y` is taller than a code line), with
+    /// and without line numbers, for text and empty lines alike.
+    #[test]
+    fn code_rows_have_the_pitch_show_rows_assumes() {
+        let ctx = egui::Context::default();
+        crate::fonts::install_fallback_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let code = "fn main() {\n\n    let x = \"ä\"; // c\n}";
+        let lines = crate::syntax::LineRuns::new("rust", code);
+        for numbers in [true, false] {
+            let mut rects = Vec::new();
+            let mut expected = (0.0, 0.0);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let row_h = super::code_rows_setup(ui, numbers);
+                    expected = (row_h, row_h + ui.spacing().item_spacing.y);
+                    for i in 0..lines.len() {
+                        rects.push(super::code_row(ui, &lines, code, i, numbers, row_h).rect);
+                    }
+                });
+            });
+            let (row_h, pitch) = expected;
+            for (i, r) in rects.iter().enumerate() {
+                assert_eq!(r.height(), row_h, "numbers={numbers}: row {i} height");
+            }
+            for pair in rects.windows(2) {
+                assert_eq!(
+                    pair[1].top() - pair[0].top(),
+                    pitch,
+                    "numbers={numbers}: pitch"
+                );
+            }
+            if !numbers {
+                assert_eq!(pitch, row_h, "rows without numbers sit flush");
+            }
+        }
+    }
+
     /// Paint one agent message through the real renderer for a few frames.
     fn paint_message(
         text: &str,

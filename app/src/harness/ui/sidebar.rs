@@ -181,7 +181,8 @@ fn workspace_list(h: &mut Harness, ui: &mut egui::Ui) {
             if h.projects.is_empty() {
                 empty_projects(ui, &mut ops);
             }
-            for p in h.projects.clone() {
+            for i in 0..h.projects.len() {
+                let p = h.projects[i].clone();
                 workspace_tree(h, ui, &p, &mut ops);
             }
         });
