@@ -72,6 +72,22 @@ Up to 6 series, each with `[x, y]` points.
 {"type":"pie_chart","title":"Share","slices":[{"label":"A","value":3},{"label":"B","value":1}]}
 ```
 
+### Colours and `tone`
+You never pick colours: Catwright colours series, bars and slices by their
+position. When an element *means* something good or bad (savings vs. costs,
+passed vs. failed tests, on budget vs. over), give it a `"tone"`: `"good"`,
+`"bad"`, `"warning"` or `"neutral"`. The chart is then coloured by meaning,
+and elements without a tone turn neutral grey, so give every element that
+carries meaning its tone. Leave `tone` out when the elements are just
+categories (rooms, months, products). It works on `bars`, `slices` and
+line `series`.
+```json
+{"type":"bar_chart","title":"Budget","bars":[
+  {"label":"Saved","value":252,"tone":"good"},
+  {"label":"Over budget","value":90,"tone":"bad"},
+  {"label":"Open","value":400,"tone":"warning"}]}
+```
+
 ### progress
 `value` is 0..1.
 ```json

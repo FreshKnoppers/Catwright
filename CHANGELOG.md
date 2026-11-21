@@ -3,6 +3,19 @@
 Release notes per version. The release workflow publishes the section of a
 tag (`## v0.2.0`) as that release's description.
 
+## Unreleased
+
+- Answers with charts and calculators: the bars of a bar chart start at
+  the same place (before, each bar began right after its label), its
+  values no longer show float noise or run out of the card, a pie sits on
+  the middle of its legend, sliders have a square handle, and a button
+  inside columns keeps its size instead of stretching across.
+- Charts in answers are calmer: pie slices use the same hues a step darker
+  (amber, yellow, green and teal glared as large areas), in an order checked
+  for colour-blind and normal vision. Vibe can now mark what an element
+  means with `tone` (good, bad, warning, neutral) instead of costs landing
+  in alarm red by position; the catwright-ui skill describes it.
+
 ## v0.7.0
 
 **Download:** `catwright-v0.7.0-x86_64-linux.tar.gz` below, then:
