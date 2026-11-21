@@ -43,3 +43,10 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+      # Known vulnerabilities in the locked dependencies fail the build;
+      # "unmaintained" warnings (e.g. paste, ttf-parser) only report.
+      - name: Audit dependencies
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
