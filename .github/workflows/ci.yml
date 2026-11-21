@@ -1,4 +1,7 @@
-# Format, lint and test on every push and pull request.
+# Format, lint and test on every push and pull request; audit the locked
+# dependencies against the RustSec advisory DB in a parallel job, plus once
+# a week so new advisories surface even when nobody pushes (schedule runs
+# on the default branch).
 # Needs no system packages: the binary loads Wayland, X11 and OpenGL at run
 # time (dlopen), and the tests run headless against recorded ACP traffic.
 # No secrets, no real Vibe: Vibe compatibility is not checked here.
@@ -7,6 +10,9 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -44,9 +50,37 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-      # Known vulnerabilities in the locked dependencies fail the build;
-      # "unmaintained" warnings (e.g. paste, ttf-parser) only report.
+  # Kept out of the test job: a newly reported advisory in an existing
+  # dependency then fails only this job, the test run stays green on its own.
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # The pinned cargo-audit binary is cached, so it is not recompiled on
+      # every run; bumping the version below changes the key and rebuilds
+      # it once. The advisory DB is cached with restore-keys to keep the
+      # weekly run fast.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/advisory-db
+          key: cargo-audit-${{ runner.os }}-v0.23.0
+          restore-keys: cargo-audit-${{ runner.os }}-
+
+      # Vulnerabilities in the locked dependencies fail the job;
+      # "unmaintained" warnings (currently paste, ttf-parser via egui, no
+      # fixed upgrade available) only report.
       - name: Audit dependencies
         run: |
-          cargo install cargo-audit --locked
+          cargo install cargo-audit --locked --version 0.23.0
           cargo audit
