@@ -2203,28 +2203,30 @@ impl Harness {
     /// `sidebar_entries`) — a session Vibe has not listed yet stays visible
     /// and clickable in the sidebar.
     pub fn sidebar_rows(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
-        let list = self.listed.get(dir).cloned().unwrap_or_default();
-        let list: Vec<SessionInfo> = list
-            .into_iter()
-            .filter(|s| !self.archived.contains(&s.session_id))
-            .collect();
         let active = self
             .active
             .as_deref()
             .and_then(|sid| self.sessions.get(sid))
             .filter(|v| v.cwd == dir)
             .filter(|v| !self.archived.contains(&v.session_id));
-        sidebar_entries(&list, active, default_title, &self.pinned)
+        let listed = self
+            .listed
+            .get(dir)
+            .into_iter()
+            .flatten()
+            .filter(|s| !self.archived.contains(&s.session_id));
+        sidebar_entries(listed, active, default_title, &self.pinned)
     }
 
     /// The archived sessions of one workspace, for the sidebar's own group.
     pub fn sidebar_rows_archived(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
-        let list = self.listed.get(dir).cloned().unwrap_or_default();
-        let list: Vec<SessionInfo> = list
+        let listed = self
+            .listed
+            .get(dir)
             .into_iter()
-            .filter(|s| self.archived.contains(&s.session_id))
-            .collect();
-        sidebar_entries(&list, None, default_title, &self.pinned)
+            .flatten()
+            .filter(|s| self.archived.contains(&s.session_id));
+        sidebar_entries(listed, None, default_title, &self.pinned)
     }
 
     /// Mark a session unread (its dot shows in the sidebar until opened).
@@ -4163,15 +4165,15 @@ pub struct SidebarEntry {
 /// from `session_info_update` (`SessionView::title`) wins over the
 /// possibly stale title of the list entry. `default_title` is the German
 /// placeholder for sessions without a title.
-pub fn sidebar_entries(
-    listed: &[SessionInfo],
+pub fn sidebar_entries<'a>(
+    listed: impl IntoIterator<Item = &'a SessionInfo>,
     active: Option<&SessionView>,
     default_title: &str,
     pinned: &HashSet<String>,
 ) -> Vec<SidebarEntry> {
     // pinned first, then most recently updated (`updatedAt` is ISO-8601,
     // so string order is time order; sessions without one sort last)
-    let mut listed: Vec<&SessionInfo> = listed.iter().collect();
+    let mut listed: Vec<&SessionInfo> = listed.into_iter().collect();
     listed.sort_by(|a, b| {
         let pa = pinned.contains(&a.session_id);
         let pb = pinned.contains(&b.session_id);
@@ -4202,10 +4204,10 @@ pub fn sidebar_entries(
         // the open session's own title is the freshest one
         let own = active
             .filter(|v| v.session_id == s.session_id)
-            .and_then(|v| v.title.clone());
-        let title = own.or_else(|| s.title.clone()).map_or_else(
+            .and_then(|v| v.title.as_deref());
+        let title = own.or(s.title.as_deref()).map_or_else(
             || default_title.to_string(),
-            |t| display_title(&t, default_title),
+            |t| display_title(t, default_title),
         );
         out.push(SidebarEntry {
             session_id: s.session_id.clone(),

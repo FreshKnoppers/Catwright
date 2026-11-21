@@ -75,6 +75,9 @@ tag (`## v0.2.0`) as that release's description.
   preview caches its parsed table instead of re-parsing every cell each
   frame, and a running subagent's bar animates at 40 fps instead of the
   full refresh rate.
+- The sidebar builds its session rows from references instead of cloning
+  the whole session list per project on every frame (microseconds up to
+  about 0.5 ms per frame with very many sessions).
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).
