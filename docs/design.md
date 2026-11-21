@@ -163,6 +163,11 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   only while points stand at least 8 pt apart, one title style for cards and
   charts (TEXT, bold); computed numbers use `ORANGE_DIM`.
 - **Command palette** (Strg K): sessions, projects, actions, slash commands.
+- **Transcript detail** (Settings → General): the four levels as cards in a
+  row (two rows when narrow), each with a check square, its name, what it
+  shows while Vibe works, and a little picture of how much is open (grey a
+  folded line, orange a tool group, green a result, amber a thought). The
+  chosen card has an ORANGE edge.
 
 Playful is welcome (pixel mascot, gradient blocks), but readability first:
 contrast of body text against `BG` stays high, and the pixel accents never carry

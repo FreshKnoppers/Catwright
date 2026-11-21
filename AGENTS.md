@@ -27,7 +27,7 @@ API keys.
   `dist/icons/`) from `theme::LOGO`; rerun it after changing the logo.
 - `tools/mockups/`: HTML mockups the preview pane, review comments,
   activity feed, work details, start screen and right panel were designed
-  from (1–4 are built, 5 and 6 too, without the work details setting),
+  from (all six are built; of 4 the level cards, not its large preview),
   rendered to `docs/mockups/` (`node tools/mockups/render.js [file …]`);
   not part of the app. New UI proposals go here first.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
