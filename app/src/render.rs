@@ -1718,14 +1718,19 @@ pub fn render_ui_node(
                 label.clone()
             };
             let fill = if armed { crate::theme::AMBER } else { ACCENT };
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
-                        .fill(fill)
-                        .rounding(egui::Rounding::same(3.0)),
-                )
-                .clicked()
-            {
+            // its own width, also inside columns (egui lays those out
+            // justified, which stretched the button into a banner)
+            let clicked = ui
+                .horizontal(|ui| {
+                    ui.add(
+                        egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
+                            .fill(fill)
+                            .rounding(egui::Rounding::same(3.0)),
+                    )
+                    .clicked()
+                })
+                .inner;
+            if clicked {
                 if armed {
                     disarm_button(id);
                     ctx.ui_events.push(UiEvent::Button {
@@ -1862,31 +1867,67 @@ pub fn render_ui_node(
                         .map(|b| b.value)
                         .fold(0.0_f64, f64::max)
                         .max(1.0);
-                    let bar_area_w = (ui.available_width() - 140.0).max(40.0);
-                    for b in bars {
-                        ui.horizontal(|ui| {
-                            ui.set_min_width(120.0);
-                            ui.label(RichText::new(&b.label).color(TEXT).size(13.0));
-                            let frac = (b.value / max) as f32;
-                            let h = 14.0;
-                            let rect = egui::Rect::from_min_size(
-                                ui.cursor().min + egui::vec2(0.0, 2.0),
-                                egui::vec2(bar_area_w, h),
-                            );
-                            ui.allocate_rect(rect, egui::Sense::hover());
-                            ui.painter().rect_filled(
-                                rect,
-                                egui::Rounding::same(0.0),
-                                crate::theme::RAISED,
-                            );
-                            let fill = egui::Rect::from_min_size(
-                                rect.min,
-                                egui::vec2((bar_area_w * frac).max(2.0), h),
-                            );
-                            ui.painter()
-                                .rect_filled(fill, egui::Rounding::same(0.0), ACCENT);
-                            ui.label(RichText::new(format!("{}", b.value)).color(DIM).small());
-                        });
+                    // one column for the labels, so every bar starts at the
+                    // same x and the lengths compare; one for the values;
+                    // the bars share what is left and never widen the card
+                    let width = ui.available_width();
+                    let measure = |ui: &egui::Ui, text: &str, font: egui::FontId| {
+                        ui.fonts(|f| f.layout_no_wrap(text.to_string(), font, TEXT))
+                            .size()
+                            .x
+                    };
+                    let values: Vec<String> = bars
+                        .iter()
+                        .map(|b| i18n::decimal(tick_label(b.value)))
+                        .collect();
+                    let label_w = bars
+                        .iter()
+                        .map(|b| measure(ui, &b.label, egui::FontId::proportional(13.0)))
+                        .fold(0.0_f32, f32::max)
+                        .min(width * 0.4)
+                        + 8.0;
+                    let value_w = values
+                        .iter()
+                        .map(|v| measure(ui, v, egui::FontId::monospace(11.5)))
+                        .fold(0.0_f32, f32::max)
+                        .min(width * 0.25)
+                        + 8.0;
+                    let bar_area_w = (width - label_w - value_w).max(24.0);
+                    for (b, value) in bars.iter().zip(&values) {
+                        let (row, _) =
+                            ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+                        let painter = ui.painter();
+                        let label = crate::widgets::line_galley(
+                            ui,
+                            &b.label,
+                            egui::FontId::proportional(13.0),
+                            TEXT,
+                            label_w - 8.0,
+                        );
+                        crate::widgets::paint_line(ui, row.left(), row.center().y, label);
+                        let track = egui::Rect::from_min_size(
+                            egui::pos2(row.left() + label_w, row.center().y - 7.0),
+                            egui::vec2(bar_area_w, 14.0),
+                        );
+                        painter.rect_filled(track, egui::Rounding::same(0.0), crate::theme::RAISED);
+                        let frac = (b.value / max).clamp(0.0, 1.0) as f32;
+                        let fill = egui::Rect::from_min_size(
+                            track.min,
+                            egui::vec2((bar_area_w * frac).max(2.0), 14.0),
+                        );
+                        painter.rect_filled(
+                            fill,
+                            egui::Rounding::same(0.0),
+                            crate::theme::ORANGE_DIM,
+                        );
+                        let v = crate::widgets::line_galley(
+                            ui,
+                            value,
+                            egui::FontId::monospace(11.5),
+                            DIM,
+                            value_w - 8.0,
+                        );
+                        crate::widgets::paint_line(ui, track.right() + 8.0, row.center().y, v);
                     }
                 });
             ui.add_space(6.0);
@@ -2374,13 +2415,47 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                 ui.label(RichText::new(tr("No data.")).color(DIM).small());
                 return;
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 let size = 120.0;
+                // painted after the legend is laid out: next to a taller
+                // legend the pie sits on its middle, not at its top
+                let slot = ui.painter().add(egui::Shape::Noop);
                 let (rect, _resp) =
                     ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-                let center = rect.center();
+                ui.add_space(10.0);
+                let legend = ui
+                    .vertical(|ui| {
+                        for (i, s) in slices.iter().enumerate() {
+                            let pct = s.value.max(0.0) / total * 100.0;
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(8.0, 8.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    r,
+                                    egui::Rounding::same(0.0),
+                                    series_color(i),
+                                );
+                                ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
+                                ui.label(
+                                    RichText::new(i18n::decimal(format!("{pct:.1} %")))
+                                        .color(DIM)
+                                        .monospace()
+                                        .size(11.5),
+                                );
+                            });
+                        }
+                    })
+                    .response
+                    .rect;
+                let center = if legend.height() > size {
+                    egui::pos2(rect.center().x, legend.center().y)
+                } else {
+                    rect.center()
+                };
                 let radius = size / 2.0 - 2.0;
-                let painter = ui.painter();
+                let mut shapes: Vec<egui::Shape> = Vec::new();
                 let fracs: Vec<f32> = slices
                     .iter()
                     .map(|s| (s.value.max(0.0) / total) as f32)
@@ -2411,32 +2486,17 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                     }
                     rims.push(egui::Shape::line(rim, egui::Stroke::new(1.0_f32, color)));
                 }
-                painter.add(fill);
-                painter.extend(rims);
+                shapes.push(egui::Shape::mesh(fill));
+                shapes.extend(rims);
                 // the gaps between slices: straight radial lines, which
                 // meet cleanly in the centre
                 for a in pie_boundaries(&fracs) {
-                    painter.line_segment([center, point(a)], egui::Stroke::new(1.5_f32, CODE_BG));
+                    shapes.push(egui::Shape::line_segment(
+                        [center, point(a)],
+                        egui::Stroke::new(1.5_f32, CODE_BG),
+                    ));
                 }
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    for (i, s) in slices.iter().enumerate() {
-                        let pct = s.value.max(0.0) / total * 100.0;
-                        ui.horizontal(|ui| {
-                            let (r, _) =
-                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter()
-                                .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
-                            ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
-                            ui.label(
-                                RichText::new(i18n::decimal(format!("{pct:.1} %")))
-                                    .color(DIM)
-                                    .monospace()
-                                    .size(11.5),
-                            );
-                        });
-                    }
-                });
+                ui.painter().set(slot, egui::Shape::Vec(shapes));
             });
         });
 }
@@ -2461,6 +2521,53 @@ mod tests {
                     super::render_blocks(ui, &blocks, 0, &mut rctx);
                 });
             });
+        }
+    }
+
+    /// Every ui node type through the real renderer, as one picture:
+    /// paints without panicking and, with CATWRIGHT_SHOT_DIR set, saves
+    /// `ui-gallery.png` to look at (not committed).
+    #[test]
+    fn ui_node_gallery_renders() {
+        let msg = concat!(
+            "```ui\n",
+            r#"[{"type":"heading","level":2,"text":"Gallery"},"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"bar_chart","title":"Revenue by quarter","bars":[{"label":"Q1","value":12.5},{"label":"Second quarter","value":18},{"label":"Q3","value":0.30000000000000004},{"label":"Q4 (forecast)","value":9}]},"#,
+            r#"{"type":"pie_chart","title":"Energy costs","slices":[{"label":"Heating","value":57.4},{"label":"Hot water","value":15},{"label":"Kitchen","value":8.8},{"label":"Lighting","value":3.7},{"label":"Home office","value":6.8},{"label":"Laundry","value":4.8},{"label":"Other","value":3.5}]}]},"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"card","title":"Calculator","children":["#,
+            r#"{"type":"slider","name":"a","label":"Amount","min":0,"max":100,"step":1,"value":40},"#,
+            r#"{"type":"number","name":"y","label":"Years","value":10},"#,
+            r#"{"type":"select","name":"k","label":"Kind","options":["1","2"],"value":"1"},"#,
+            r#"{"type":"toggle","name":"m","label":"Monthly","value":true},"#,
+            r#"{"type":"computed","label":"Result","expr":"a*y","decimals":0,"unit":"€"}]},"#,
+            r#"{"type":"card","title":"Status","children":["#,
+            r#"{"type":"progress","label":"Migration","value":0.42},"#,
+            r#"{"type":"checklist","items":[{"text":"Write tests","done":true},{"text":"Update docs"}]},"#,
+            r#"{"type":"kv","rows":[["Region","eu-central"],["Latency","12 ms"]]},"#,
+            r#"{"type":"button","label":"Show details","action":"details"}]}]},"#,
+            r#"{"type":"pie_chart","title":"Two slices","slices":[{"label":"A","value":3},{"label":"B","value":1}]}]"#,
+            "\n```\n"
+        );
+        let blocks = crate::markdown::parse(msg);
+        let mut events = Vec::new();
+        let mut forms = std::collections::HashMap::new();
+        let img = crate::softrender::render_ui([900, 1000], 3, |ctx| {
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(crate::theme::BG)
+                        .inner_margin(16.0),
+                )
+                .show(ctx, |ui| {
+                    let mut rctx = super::RenderCtx::new(&mut events, &mut forms, "s1");
+                    super::render_blocks(ui, &blocks, 0, &mut rctx);
+                });
+        });
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            img.save(std::path::Path::new(&out).join("ui-gallery.png"))
+                .unwrap();
         }
     }
 

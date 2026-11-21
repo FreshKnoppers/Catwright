@@ -140,6 +140,11 @@ pub fn apply(ctx: &egui::Context) {
     visuals.selection.stroke = Stroke::new(1.0_f32, TEXT);
     visuals.hyperlink_color = AMBER;
     visuals.text_cursor.stroke = Stroke::new(2.0_f32, ORANGE);
+    // sliders in the pixel style: a narrow square-cornered handle instead of
+    // egui's round knob, and the stretch left of it filled (SELECTION), so
+    // the value reads at a glance
+    visuals.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.5 };
+    visuals.slider_trailing_fill = true;
     // Body text colour via the widget fg strokes, not override_text_color:
     // the override would also brighten hint texts (placeholders).
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);

@@ -69,6 +69,11 @@ tag (`## v0.2.0`) as that release's description.
 - Settings → General shows the transcript detail levels as four cards that
   say what each level shows while Vibe works, with a small picture of how
   much is open, instead of a list of four names.
+- Answers with charts and calculators: the bars of a bar chart start at
+  the same place (before, each bar began right after its label), its
+  values no longer show float noise or run out of the card, a pie sits on
+  the middle of its legend, sliders have a square handle, and a button
+  inside columns keeps its size instead of stretching across.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).
