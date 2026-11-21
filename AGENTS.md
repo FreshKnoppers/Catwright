@@ -53,6 +53,15 @@ API keys.
   and identifiers are English.
 - Keep `cargo fmt --check`, `cargo clippy --all-targets` (no new warnings)
   and `cargo test` green.
+- Run as root (many containers), `cargo test` fails three tests that make a
+  directory read-only (`store::tests::save_settings_fails_into_a_read_only_directory`,
+  `store::tests::write_private_failure_keeps_old_file_and_cleans_up_temp`,
+  `app::tests::failed_autosave_is_visible_in_the_settings_status_line`):
+  root may write anyway. The tests are right; do not skip or change them.
+  To see the suite green there, build it with `cargo test --no-run` and run
+  the printed `target/debug/deps/catwright-…` binary as an unprivileged
+  user with its own `HOME` and `TMPDIR` (e.g. `runuser -u <user> -- env
+  HOME=/tmp/u TMPDIR=/tmp/u <binary>`). CI runs as a normal user.
 
 ## Seeing the UI (no display needed)
 
