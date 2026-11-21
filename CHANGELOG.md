@@ -3,7 +3,32 @@
 Release notes per version. The release workflow publishes the section of a
 tag (`## v0.2.0`) as that release's description.
 
-## Unreleased
+## v0.7.1
+
+**Download:** `catwright-v0.7.1-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.7.1-x86_64-linux.tar.gz
+cd catwright-v0.7.1-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.7.1-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.7.1-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
 
 - Answers with charts and calculators: the bars of a bar chart start at
   the same place (before, each bar began right after its label), its
@@ -14,7 +39,8 @@ tag (`## v0.2.0`) as that release's description.
   (amber, yellow, green and teal glared as large areas), in an order checked
   for colour-blind and normal vision. Vibe can now mark what an element
   means with `tone` (good, bad, warning, neutral) instead of costs landing
-  in alarm red by position; the catwright-ui skill describes it.
+  in alarm red by position. The catwright-ui skill describes it: reinstall
+  it under Settings → Vibe, the installed copy counts as outdated.
 
 ## v0.7.0
 
