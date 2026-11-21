@@ -2,13 +2,17 @@
 // They show proposed UI that is not implemented. Needs Node and Playwright
 // with Chromium; run from anywhere: node tools/mockups/render.js
 // (if Playwright is installed globally: NODE_PATH=<global node_modules>).
+// Pass file names (node tools/mockups/render.js 5-start.html) to render
+// only those.
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 
 const here = __dirname;
 const out = path.join(here, "..", "..", "docs", "mockups");
-const pages = fs.readdirSync(here).filter((f) => /^\d-.*\.html$/.test(f)).sort();
+const pages = process.argv.length > 2
+  ? process.argv.slice(2).map((f) => path.basename(f))
+  : fs.readdirSync(here).filter((f) => /^\d-.*\.html$/.test(f)).sort();
 
 (async () => {
   fs.mkdirSync(out, { recursive: true });

@@ -19,8 +19,14 @@ pub const CODE_BG: Color32 = crate::theme::CARD;
 pub const TEXT: Color32 = crate::theme::TEXT;
 pub const DIM: Color32 = crate::theme::DIM;
 pub const LINK: Color32 = crate::theme::AMBER;
-/// Inline code spans.
-const CODE_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
+/// Inline code spans: a calm warm tint on a quiet box. The box shows where
+/// the code starts and ends (a trailing dot is not part of a command), so
+/// the colour can stay calm and a function name is never the loudest word
+/// of a sentence.
+const CODE_TEXT: Color32 = Color32::from_rgb(0xe3, 0xd4, 0xc2);
+const CODE_SPAN_BG: Color32 = Color32::from_rgb(0x26, 0x26, 0x2b);
+/// File chips keep the warmer tint: they are the clickable ones.
+const CHIP_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
 
 /// True only for link schemes we are willing to open from a model answer:
 /// http://, https:// and mailto: (case-insensitive, after trim). Everything
@@ -1077,6 +1083,10 @@ pub(crate) fn render_table_grid(
     }
     let widths = table_widths(&natural, ui.available_width() - 2.0, PADDING, MINIMUM);
     let total: f32 = widths.iter().map(|w| w + PADDING).sum();
+    // columns of numbers align right, so digits of the same place line up
+    let numeric: Vec<bool> = (0..cols)
+        .map(|c| numeric_column(rows.iter().take(shown_rows).map(|r| r.get(c))))
+        .collect();
 
     egui::Frame::none()
         .rounding(egui::Rounding::same(4.0))
@@ -1098,7 +1108,17 @@ pub(crate) fn render_table_grid(
                                     ui.set_min_width(width + PADDING);
                                     frame.show(ui, |ui| {
                                         ui.set_width(*width);
-                                        if let Some(cell) = cells.get(col) {
+                                        let Some(cell) = cells.get(col) else {
+                                            return;
+                                        };
+                                        if numeric.get(col).copied().unwrap_or(false) {
+                                            let mut job = egui::text::LayoutJob::default();
+                                            append_inline(&mut job, cell, st);
+                                            ui.with_layout(
+                                                egui::Layout::top_down(egui::Align::RIGHT),
+                                                |ui| ui.add(egui::Label::new(job)),
+                                            );
+                                        } else {
                                             render_table_cell(ui, cell, st, chips.as_deref_mut());
                                         }
                                     });
@@ -1142,6 +1162,49 @@ pub(crate) fn render_table_grid(
 
 /// One grid cell: a horizontal run of inline markdown, with zero item
 /// spacing so several snippets look like one line of text.
+/// A table cell that holds a number: "12", "-1.5", "1,234.5", "48.3 °C",
+/// "57.4 %", "€3465.80". Dates ("2026-10-01") and versions ("1.2.3-rc")
+/// are not numbers here.
+fn is_numeric_cell(cell: &[MdInline]) -> bool {
+    let [MdInline::Text(text)] = cell else {
+        return false;
+    };
+    let mut t = text.trim();
+    for prefix in ["+", "-", "−", "$", "€", "£"] {
+        t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
+    }
+    for suffix in ["%", "°C", "°F", "°", "€", "$", "£"] {
+        t = t.strip_suffix(suffix).unwrap_or(t).trim_end();
+    }
+    let starts = t.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let ends = t.chars().next_back().is_some_and(|c| c.is_ascii_digit());
+    starts
+        && ends
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '\'' | '\u{2009}'))
+}
+
+/// True when a column holds numbers: at least one, and every other body
+/// cell empty or a dash.
+fn numeric_column<'a>(cells: impl Iterator<Item = Option<&'a Vec<MdInline>>>) -> bool {
+    let mut any = false;
+    for cell in cells.flatten() {
+        let blank = match cell.as_slice() {
+            [] => true,
+            [MdInline::Text(t)] => matches!(t.trim(), "" | "-" | "–" | "—"),
+            _ => false,
+        };
+        if blank {
+            continue;
+        }
+        if !is_numeric_cell(cell) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn render_table_cell(
     ui: &mut egui::Ui,
     cell: &[MdInline],
@@ -1225,6 +1288,7 @@ fn append_inline(job: &mut egui::text::LayoutJob, inl: &[MdInline], st: InlineSt
                 egui::TextFormat {
                     font_id: egui::FontId::monospace(st.size - 1.5),
                     color: CODE_TEXT,
+                    background: CODE_SPAN_BG,
                     line_height: Some(st.size * 1.42),
                     ..Default::default()
                 },
@@ -1422,7 +1486,7 @@ fn file_chip(ui: &mut egui::Ui, token: &str, path: &Path, size: f32, open: &mut 
         ui,
         token,
         egui::FontId::monospace(size - 2.0),
-        CODE_TEXT,
+        CHIP_TEXT,
         220.0,
     );
     let h = size + 6.0;
@@ -1544,7 +1608,8 @@ fn render_inline_styled(
                     RichText::new(c)
                         .monospace()
                         .size(st.size - 2.0)
-                        .color(CODE_TEXT),
+                        .color(CODE_TEXT)
+                        .background_color(CODE_SPAN_BG),
                 );
             }
             MdInline::Link { text, url } => {
@@ -1591,12 +1656,7 @@ pub fn render_ui_node(
                 .inner_margin(egui::Margin::same(12.0))
                 .show(ui, |ui| {
                     if let Some(t) = title {
-                        ui.label(
-                            RichText::new(t)
-                                .color(ACCENT)
-                                .size(15.0)
-                                .family(crate::fonts::bold()),
-                        );
+                        block_title(ui, t);
                         ui.add_space(4.0);
                     }
                     for c in children {
@@ -1660,7 +1720,7 @@ pub fn render_ui_node(
             let fill = if armed { crate::theme::AMBER } else { ACCENT };
             if ui
                 .add(
-                    egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                    egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
                         .fill(fill)
                         .rounding(egui::Rounding::same(3.0)),
                 )
@@ -1746,7 +1806,7 @@ pub fn render_ui_node(
                     let fill = if armed { crate::theme::AMBER } else { ACCENT };
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                            egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
                                 .fill(fill)
                                 .rounding(egui::Rounding::same(3.0)),
                         )
@@ -1794,7 +1854,7 @@ pub fn render_ui_node(
                 .inner_margin(egui::Margin::same(10.0))
                 .show(ui, |ui| {
                     if let Some(t) = title {
-                        ui.label(RichText::new(t).color(DIM).small().strong());
+                        block_title(ui, t);
                         ui.add_space(4.0);
                     }
                     let max = bars
@@ -1999,7 +2059,7 @@ pub fn render_ui_node(
                 match result {
                     Ok(v) => ui.label(
                         RichText::new(format_computed(i18n::lang(), v, *decimals, unit.as_deref()))
-                            .color(ACCENT)
+                            .color(crate::theme::ORANGE_DIM)
                             .monospace()
                             .size(14.0)
                             .strong(),
@@ -2087,6 +2147,59 @@ pub fn render_ui_node(
 }
 
 /// Line chart: axes, up to 6 series in gradient colours, legend.
+/// The title of a card or chart: one style for all of them, so siblings
+/// on a dashboard read as equals (no orange: the accent is for actions).
+fn block_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(
+        RichText::new(title)
+            .color(TEXT)
+            .size(13.5)
+            .family(crate::fonts::bold()),
+    );
+}
+
+/// Round axis ticks for `[min, max]`: a step of 1, 2 or 5 times a power
+/// of ten that gives about `target` ticks, the first at or below `min`, the
+/// last at or above `max` (a chart from -1.1 to 21.2 gets 0 / 10 / 20 …
+/// instead of -1.1 / 10.05 / 21.2).
+fn nice_ticks(min: f64, max: f64, target: usize) -> Vec<f64> {
+    if !(min.is_finite() && max.is_finite()) || max <= min || target < 2 {
+        return vec![min, max];
+    }
+    let raw = (max - min) / (target - 1) as f64;
+    let mag = 10f64.powf(raw.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .map(|m| m * mag)
+        .find(|s| *s >= raw)
+        .unwrap_or(10.0 * mag);
+    // round to the step's decimals: 3 × 0.2 is 0.6000000000000001 in floats
+    let scale = 10f64.powi((-step.log10().floor()).max(0.0) as i32 + 1);
+    let snap = |v: f64| (v * scale).round() / scale;
+    let first = (min / step).floor();
+    let mut out = Vec::new();
+    // bounded: at most target + 3 ticks for any input
+    for k in 0..(target as u32 + 3) {
+        let v = snap((first + k as f64) * step);
+        out.push(v);
+        if v >= max - step * 1e-9 {
+            break;
+        }
+    }
+    out
+}
+
+/// An axis value without float noise or trailing zeros.
+fn tick_label(v: f64) -> String {
+    let s = format!("{v:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 fn render_line_chart(
     ui: &mut egui::Ui,
     title: Option<&str>,
@@ -2101,7 +2214,7 @@ fn render_line_chart(
         .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             if let Some(t) = title {
-                ui.label(RichText::new(t).color(DIM).small().strong());
+                block_title(ui, t);
                 ui.add_space(4.0);
             }
             let series = &series[..series.len().min(6)];
@@ -2124,6 +2237,19 @@ fn render_line_chart(
             if y_max <= y_min {
                 y_max = y_min + 1.0;
             }
+            // the y range grows to round ticks; x keeps the data's range
+            // and labels the round values inside it
+            let y_ticks = nice_ticks(y_min, y_max, 6);
+            y_min = y_ticks.first().copied().unwrap_or(y_min);
+            y_max = y_ticks
+                .last()
+                .copied()
+                .unwrap_or(y_max)
+                .max(y_min + f64::EPSILON);
+            let x_ticks: Vec<f64> = nice_ticks(x_min, x_max, 6)
+                .into_iter()
+                .filter(|x| *x >= x_min - 1e-9 && *x <= x_max + 1e-9)
+                .collect();
             let w = ui.available_width().max(120.0);
             let h = 140.0;
             let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
@@ -2141,8 +2267,9 @@ fn render_line_chart(
                 [plot.left_bottom(), plot.left_top()],
                 egui::Stroke::new(1.0_f32, crate::theme::BORDER),
             );
-            // grid lines + y labels (min / mid / max)
-            for (i, frac) in [0.0_f32, 0.5, 1.0].iter().enumerate() {
+            // grid lines + y labels at the round ticks
+            for (i, value) in y_ticks.iter().enumerate() {
+                let frac = ((value - y_min) / (y_max - y_min)) as f32;
                 let y = plot.bottom() - plot.height() * frac;
                 if i > 0 {
                     painter.line_segment(
@@ -2150,36 +2277,33 @@ fn render_line_chart(
                         egui::Stroke::new(1.0_f32, crate::theme::RAISED),
                     );
                 }
-                let value = y_min + (y_max - y_min) * *frac as f64;
                 painter.text(
                     egui::pos2(plot.left() - 4.0, y),
                     egui::Align2::RIGHT_CENTER,
-                    format!("{value:.4}")
-                        .trim_end_matches('0')
-                        .trim_end_matches('.'),
-                    egui::FontId::monospace(10.0),
+                    tick_label(*value),
+                    egui::FontId::monospace(10.5),
                     DIM,
                 );
             }
-            // x labels (min / max)
-            painter.text(
-                plot.left_bottom() + egui::vec2(0.0, 3.0),
-                egui::Align2::LEFT_TOP,
-                format!("{x_min:.4}")
-                    .trim_end_matches('0')
-                    .trim_end_matches('.'),
-                egui::FontId::monospace(10.0),
-                DIM,
-            );
-            painter.text(
-                plot.right_bottom() + egui::vec2(0.0, 3.0),
-                egui::Align2::RIGHT_TOP,
-                format!("{x_max:.4}")
-                    .trim_end_matches('0')
-                    .trim_end_matches('.'),
-                egui::FontId::monospace(10.0),
-                DIM,
-            );
+            // x labels at the round values inside the data's range
+            for (i, value) in x_ticks.iter().enumerate() {
+                let frac = ((value - x_min) / (x_max - x_min)) as f32;
+                let x = plot.left() + plot.width() * frac;
+                let align = if i == 0 && frac < 0.05 {
+                    egui::Align2::LEFT_TOP
+                } else if frac > 0.95 {
+                    egui::Align2::RIGHT_TOP
+                } else {
+                    egui::Align2::CENTER_TOP
+                };
+                painter.text(
+                    egui::pos2(x, plot.bottom() + 3.0),
+                    align,
+                    tick_label(*value),
+                    egui::FontId::monospace(10.5),
+                    DIM,
+                );
+            }
             let to_screen = |p: &[f64; 2]| {
                 let fx = ((p[0] - x_min) / (x_max - x_min)) as f32;
                 let fy = ((p[1] - y_min) / (y_max - y_min)) as f32;
@@ -2194,7 +2318,11 @@ fn render_line_chart(
                 for pair in pts.windows(2) {
                     painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.8_f32, color));
                 }
-                for p in &pts {
+                // point marks only while they stand apart: on a dense line
+                // they merge into a beaded, fuzzy stroke
+                let spacing = plot.width() / pts.len().max(1) as f32;
+                let marks = if spacing >= 8.0 { pts.as_slice() } else { &[] };
+                for p in marks {
                     painter.rect_filled(
                         egui::Rect::from_center_size(*p, egui::vec2(3.0, 3.0)),
                         egui::Rounding::same(0.0),
@@ -2238,7 +2366,7 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
         .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             if let Some(t) = title {
-                ui.label(RichText::new(t).color(DIM).small().strong());
+                block_title(ui, t);
                 ui.add_space(4.0);
             }
             let total: f64 = slices.iter().map(|s| s.value.max(0.0)).sum();
@@ -2420,6 +2548,61 @@ mod tests {
         assert_eq!(columns_per_row(300, 800.0), 6);
         assert_eq!(columns_per_row(4, 100.0), 1);
         assert_eq!(columns_per_row(0, 800.0), 1);
+    }
+
+    #[test]
+    fn nice_ticks_are_round_and_cover_the_range() {
+        use super::{nice_ticks, tick_label};
+        // the dashboard's outdoor temperatures
+        assert_eq!(
+            nice_ticks(-1.1, 21.2, 6),
+            [-5.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0]
+        );
+        // hours of a week
+        assert_eq!(nice_ticks(0.0, 167.0, 6), [0.0, 50.0, 100.0, 150.0, 200.0]);
+        // small values without float noise
+        assert_eq!(nice_ticks(0.0, 1.0, 6), [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
+        assert_eq!(tick_label(0.30000000000000004), "0.3");
+        assert_eq!(tick_label(-0.0), "0");
+        assert_eq!(tick_label(150.0), "150");
+        // degenerate input stays bounded
+        assert_eq!(nice_ticks(3.0, 3.0, 6), [3.0, 3.0]);
+        assert!(nice_ticks(0.0, 1e12, 6).len() <= 9);
+    }
+
+    #[test]
+    fn numeric_cells_and_columns() {
+        use super::{is_numeric_cell, numeric_column};
+        use crate::markdown::MdInline;
+        let cell = |t: &str| vec![MdInline::Text(t.to_string())];
+        for n in [
+            "12",
+            "-1.5",
+            "1,234.5",
+            "48.3 °C",
+            "57.4 %",
+            "€3465.80",
+            "−2",
+            "0.000",
+        ] {
+            assert!(is_numeric_cell(&cell(n)), "{n} is a number");
+        }
+        for t in [
+            "2026-10-01",
+            "1.2.3-rc",
+            "Setup",
+            "12 items",
+            "",
+            "v2",
+            "1/2",
+        ] {
+            assert!(!is_numeric_cell(&cell(t)), "{t} is not a number");
+        }
+        assert!(!is_numeric_cell(&[MdInline::Code("12".to_string())]));
+        let col = |cells: Vec<Vec<MdInline>>| numeric_column(cells.iter().map(Some));
+        assert!(col(vec![cell("2.5"), cell("–"), cell("16.9")]));
+        assert!(!col(vec![cell("2.5"), cell("n/a")]));
+        assert!(!col(vec![cell("–"), cell("")]), "no number at all");
     }
 
     #[test]

@@ -14,6 +14,61 @@ tag (`## v0.2.0`) as that release's description.
   in the header ("Git off for this repository") and in the environment
   card, instead of the git info just disappearing. Its diff preview says
   so instead of showing the whole file as new.
+- Calmer accent: the composer no longer wears a permanent orange ring
+  (the send button carries the orange once there is text), the Code/Diff
+  switch of the preview is a segmented control instead of an orange
+  button, selected text gets a translucent orange, and inline code in
+  answers uses a calm tint on a quiet box instead of peach (the box shows
+  where a command ends). While an approval or a
+  question waits, "Send to Vibe" steps back to a secondary button, so the
+  approval is the one orange button on screen.
+- The header calls git's count "N uncommitted" and the side panel's card
+  "Session changes" (Vibe's edits in this session), so "4 changed" next to
+  "Changes · 2 files" no longer looks like a contradiction.
+- Subagent cards show the subagent's name instead of Vibe's "Starting
+  <name>" title, which stayed after the subagent was done, and how long a
+  running subagent has been at it. The agent type is shown only when it is
+  not Vibe's usual "generic", and no longer made up when Vibe sends none.
+- In a session with subagents, Vibe's wait call shows as "Waiting for
+  subagents" instead of "Waiting for input", which read as if Catwright
+  waited for you.
+- The activity feed shows what a waiting approval would allow (command,
+  all arguments, the diff of an edit) above its buttons, like the pinned
+  card; the buttons look like the card's.
+- The diff preview shows line numbers, keeps long lines whole (scroll
+  sideways) and draws added and removed lines as continuous bands; the file
+  name is no longer repeated as its path when the file sits in the
+  workspace root.
+- Columns of numbers in tables align right.
+- Routines read "Mondays at 09:00" or "daily at 08:30" instead of a cron
+  expression (unusual expressions stay as they are); "Delete all" is a red
+  button now.
+- Error notes read "Vibe error: rate limited (-31001). Open approvals were
+  discarded …" instead of running Vibe's message into the next sentence.
+- The quota meter in the sidebar is labelled ("Quota 12.0 %"), the input
+  field of a started session says "Reply to Vibe …", an unfolded round's
+  row says "Fold round" instead of repeating the message right below it,
+  and the activity feed has a proper title.
+- The start screen shows what the sidebar does not: sessions that wait
+  for you (with the command of their approval), new results of this run
+  with their first line, the session to continue and the project's git
+  state. The recent list follows only while nothing waits and nothing is
+  new. Heading and project picker share one size and line; the input
+  field's placeholder names `@` and `/`.
+- The side panel has flat sections with hairlines instead of boxes in a
+  box; folded sections show a summary. The context meter no longer
+  overstates a small fill (4 % lit three blocks), and "Compact context"
+  appears from 50 % on.
+- Charts get round axis values (0 / 50 / 100 instead of 0 / 167), lines
+  with many points no longer look beaded, and cards and charts share one
+  title style; computed values are no longer orange.
+- Diff comments line up with the code, with even gaps in the comment
+  editor.
+- The fork button has its own icon instead of one that looked like the git
+  branch mark.
+- Better contrast: Primary buttons and the send button use dark text on
+  orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
+  a little lighter (now at least 4.5:1).
 - Fixed: the worktree delete dialog's warning that changes could not be
   checked showed in English in every language.
 - Fixed: the "L12:" line label of review comments had no translation

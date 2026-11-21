@@ -231,8 +231,8 @@ msgstr "Aucun fichier concerné."
 msgid "Rewind"
 msgstr "Revenir en arrière"
 
-msgid "{n} changed"
-msgstr "{n} modifié(s)"
+msgid "{n} uncommitted"
+msgstr "{n} non validé(s)"
 
 msgid "Work panel (Ctrl J)"
 msgstr "Panneau de travail (Ctrl J)"
@@ -243,8 +243,8 @@ msgstr "Ouvrir le dossier du projet"
 msgid "Fork session"
 msgstr "Forker la session"
 
-msgid "Changed files in the working directory (git status) — click for the list"
-msgstr "Fichiers modifiés dans le répertoire de travail (git status) — clique pour voir la liste"
+msgid "Uncommitted files in the working directory (git status) — click for the list"
+msgstr "Fichiers non validés dans le répertoire de travail (git status) — clique pour voir la liste"
 
 msgid "… {n} more"
 msgstr "… {n} de plus"
@@ -300,8 +300,8 @@ msgstr "Mettre le message suivant en file d'attente …"
 msgid "Message to Vibe …"
 msgstr "Message pour Vibe …"
 
-msgid "What do you want to build?"
-msgstr "Que veux-tu construire ?"
+msgid "Describe a task. @ adds files, / runs commands"
+msgstr "Décris une tâche. @ ajoute des fichiers, / lance des commandes"
 
 msgid "Remove attachment"
 msgstr "Retirer la pièce jointe"
@@ -606,8 +606,8 @@ msgstr "Libre"
 msgid "Split estimated (from Vibe’s measurement)"
 msgstr "Répartition estimée (d'après la mesure de Vibe)"
 
-msgid "Changes"
-msgstr "Modifications"
+msgid "Session changes"
+msgstr "Modifications de la session"
 
 msgid "Revert change"
 msgstr "Annuler la modification"
@@ -768,8 +768,8 @@ msgstr "Le fichier n'a pas pu être lu."
 msgid "Vibe asked a question that cannot be shown."
 msgstr "Vibe a posé une question qui ne peut pas être affichée."
 
-msgid "Error ({code}): {message}"
-msgstr "Erreur ({code}) : {message}"
+msgid "Vibe error: {message} ({code})."
+msgstr "Erreur de Vibe : {message} ({code})."
 
 msgid "Fork failed: {detail}"
 msgstr "Échec du fork : {detail}"
@@ -1832,3 +1832,69 @@ msgstr "Catwright n’exécute pas git ici : la configuration git du dépôt con
 
 msgid "Diff preview is off: Catwright runs no git in this repository."
 msgstr "Aperçu de diff désactivé : Catwright n’exécute pas git dans ce dépôt."
+
+msgid "Running time so far"
+msgstr "Durée d’exécution jusqu’ici"
+
+msgid "Waiting for subagents"
+msgstr "En attente des sous-agents"
+
+msgid "Quota {pct} %"
+msgstr "Quota {pct} %"
+
+msgid "Reply to Vibe …"
+msgstr "Répondre à Vibe …"
+
+msgid "every hour at :{minute}"
+msgstr "toutes les heures à :{minute}"
+
+msgid "daily at {time}"
+msgstr "tous les jours à {time}"
+
+msgid "weekdays at {time}"
+msgstr "en semaine à {time}"
+
+msgid "{day} at {time}"
+msgstr "{day} à {time}"
+
+msgid "Sundays"
+msgstr "le dimanche"
+
+msgid "Mondays"
+msgstr "le lundi"
+
+msgid "Tuesdays"
+msgstr "le mardi"
+
+msgid "Wednesdays"
+msgstr "le mercredi"
+
+msgid "Thursdays"
+msgstr "le jeudi"
+
+msgid "Fridays"
+msgstr "le vendredi"
+
+msgid "Saturdays"
+msgstr "le samedi"
+
+msgid "none"
+msgstr "aucune"
+
+msgid "Needs you"
+msgstr "T’attend"
+
+msgid "New results"
+msgstr "Nouveaux résultats"
+
+msgid "In this project"
+msgstr "Dans ce projet"
+
+msgid "Approval:"
+msgstr "Approbation :"
+
+msgid "Last active {time} ago"
+msgstr "Active pour la dernière fois il y a {time}"
+
+msgid "Waiting for your approval"
+msgstr "En attente de ton approbation"

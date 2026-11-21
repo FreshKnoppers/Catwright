@@ -26,9 +26,10 @@ API keys.
 - `tools/icons/render.py`: renders the app icons (`app/assets/icon.png`,
   `dist/icons/`) from `theme::LOGO`; rerun it after changing the logo.
 - `tools/mockups/`: HTML mockups the preview pane, review comments,
-  activity feed and work details were designed from (all four are built
-  now), rendered to `docs/mockups/`; not part of the app. New UI proposals
-  go here first.
+  activity feed, work details, start screen and right panel were designed
+  from (1–4 are built, 5 and 6 too, without the work details setting),
+  rendered to `docs/mockups/` (`node tools/mockups/render.js [file …]`);
+  not part of the app. New UI proposals go here first.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
   for `vibe-acp` with prepared demo sessions (`render.sh`); not part of the app.
 - `app/src/softrender.rs`: CPU rasterizer for egui frames, so the UI can be

@@ -25,10 +25,17 @@ enum FeedOp {
 pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
     let mut close = false;
     let mut ops: Vec<FeedOp> = Vec::new();
-    ui.add_space(6.0);
+    // a destination of its own (like the start screen), so a real title
+    // with air above it instead of a small label at the window's edge
+    ui.add_space(24.0);
     column(ui, |ui| {
         ui.horizontal(|ui| {
-            theme::section_header(ui, tr("Activity"), true);
+            ui.label(
+                RichText::new(tr("Activity"))
+                    .size(20.0)
+                    .strong()
+                    .color(theme::TEXT),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(IconButton::new(Icon::Close, tr("Back to the session")).side(22.0))
@@ -41,7 +48,7 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
         // the user is looking at the feed: what arrives meanwhile is seen,
         // too (opening it already marked the rest)
         h.ui.activity_seen = h.activity.len();
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         let events: Vec<ActivityEvent> = h
             .activity
             .iter()
@@ -167,32 +174,55 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 ops.push(FeedOp::Open { cwd, sid });
             }
             ui.add_space(2.0);
-            ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
-            ui.add_space(4.0);
-            // a waiting permission can be answered right here while it
-            // is still open in its session
-            if e.kind == ActivityKind::Waiting {
-                ui.horizontal(|ui| {
-                    if let (Some(rid), Some(v)) = (&e.request_id, h.sessions.get(&e.sid)) {
-                        if let Some(p) = v.permissions.iter().find(|p| &p.request_id == rid) {
-                            for opt in &p.request.options {
-                                let label = if opt.name.is_empty() {
-                                    extras::permission_label(&opt.option_id, "")
-                                } else {
-                                    opt.name.clone()
-                                };
-                                if widgets::button(ui, &label, ButtonKind::Secondary).clicked() {
-                                    ops.push(FeedOp::Answer {
-                                        sid: e.sid.clone(),
-                                        request_id: rid.clone(),
-                                        option_id: opt.option_id.clone(),
-                                    });
-                                }
-                            }
-                        }
-                    }
+            // a waiting permission can be answered right here while it is
+            // still open in its session, with everything the pinned card
+            // shows (command, arguments, diff): no blind approvals
+            let pending = e
+                .request_id
+                .as_ref()
+                .filter(|_| e.kind == ActivityKind::Waiting)
+                .and_then(|rid| {
+                    let v = h.sessions.get(&e.sid)?;
+                    let p = v.permissions.iter().find(|p| &p.request_id == rid)?;
+                    Some((v, p))
                 });
+            // the entry's text is the call's title; the details below show
+            // that same title when the call has no command, so it is not
+            // printed twice
+            let repeated = pending.is_some_and(|(v, p)| {
+                let call = v.tool_for_permission(p);
+                let has_command = call
+                    .and_then(|t| t.raw_input.as_ref())
+                    .and_then(|r| r.get("command"))
+                    .is_some();
+                let title = call
+                    .map(|t| t.title.as_str())
+                    .or(p.request.tool_call.title.as_deref());
+                !has_command && title == Some(e.text.as_str())
+            });
+            if !repeated {
+                ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
             }
+            if let Some((v, p)) = pending {
+                ui.add_space(2.0);
+                super::cards::permission_body(
+                    ui,
+                    v,
+                    p,
+                    egui::Id::new(("feed_permission", &e.sid, p.request_id.to_string())),
+                );
+                ui.add_space(4.0);
+                let mut answers = Vec::new();
+                super::cards::option_row(ui, p, false, &mut answers);
+                for (request_id, option_id) in answers {
+                    ops.push(FeedOp::Answer {
+                        sid: e.sid.clone(),
+                        request_id,
+                        option_id,
+                    });
+                }
+            }
+            ui.add_space(2.0);
         });
     ui.add_space(6.0);
 }

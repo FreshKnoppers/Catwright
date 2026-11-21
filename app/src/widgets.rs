@@ -317,7 +317,7 @@ pub enum ButtonKind {
 /// A text button in the pixel style.
 pub fn button(ui: &mut Ui, label: &str, kind: ButtonKind) -> Response {
     let (fill, text, stroke) = match kind {
-        ButtonKind::Primary => (theme::ORANGE, Color32::WHITE, Stroke::NONE),
+        ButtonKind::Primary => (theme::ORANGE, theme::ON_ACCENT, Stroke::NONE),
         ButtonKind::Secondary => (theme::RAISED, theme::TEXT, Stroke::NONE),
         ButtonKind::Danger => (
             Color32::TRANSPARENT,
@@ -405,6 +405,68 @@ pub fn badge(ui: &mut Ui, text: &str, color: Color32) -> Response {
         .rect_stroke(rect, 2.0, Stroke::new(1.0_f32, color.gamma_multiply(0.5)));
     ui.painter().galley(rect.min + vec2(4.0, 2.0), g, color);
     resp
+}
+
+/// A segmented switch between a few views (Code | Diff): one soft frame,
+/// the chosen segment RAISED with TEXT and a 2 pt ORANGE underline, the
+/// others DIM. A state, not an action, so it never takes the Primary fill.
+/// Returns the index of the segment clicked in this frame.
+pub fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
+    const PAD_X: f32 = 9.0;
+    const HEIGHT: f32 = 24.0;
+    let galleys: Vec<Arc<Galley>> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let color = if i == selected {
+                theme::TEXT
+            } else {
+                theme::DIM
+            };
+            line_galley(ui, label, font(12.5), color, 160.0)
+        })
+        .collect();
+    let width: f32 = galleys.iter().map(|g| g.size().x + 2.0 * PAD_X).sum();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, HEIGHT), Sense::hover());
+    let mut clicked = None;
+    let mut x = rect.left();
+    for (i, g) in galleys.into_iter().enumerate() {
+        let seg = Rect::from_min_size(pos2(x, rect.top()), vec2(g.size().x + 2.0 * PAD_X, HEIGHT));
+        x = seg.right();
+        let resp = ui
+            .interact(seg, ui.id().with(("segmented", i)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let painter = ui.painter();
+        if i == selected {
+            painter.rect_filled(seg.shrink(1.0), 2.0, theme::RAISED);
+            painter.rect_filled(
+                Rect::from_min_max(
+                    pos2(seg.left() + 1.0, seg.bottom() - 3.0),
+                    seg.right_bottom() - vec2(1.0, 1.0),
+                ),
+                0.0,
+                theme::ORANGE,
+            );
+        } else if resp.hovered() {
+            painter.rect_filled(seg.shrink(1.0), 2.0, theme::HOVER);
+        }
+        let color = if i == selected {
+            theme::TEXT
+        } else {
+            theme::DIM
+        };
+        painter.galley(
+            pos2(seg.left() + PAD_X, seg.center().y - g.size().y / 2.0),
+            g,
+            color,
+        );
+        if resp.clicked() && i != selected {
+            clicked = Some(i);
+        }
+    }
+    ui.painter()
+        .rect_stroke(rect, 3.0, Stroke::new(1.0_f32, theme::BORDER_SOFT));
+    clicked
 }
 
 /// A pixel on/off switch. Returns the response; the caller flips the value.

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::acp::protocol::{PermissionKind, ToolCallContent, ToolKind};
-use crate::acp::session::{repeated_tool_call, PendingPermission, TurnState};
+use crate::acp::session::{repeated_tool_call, PendingPermission, SessionView, TurnState};
 use crate::harness::extras::{self, QuestionAnswer};
 use crate::i18n::{tr, trf};
 use egui::Event;
@@ -288,133 +288,7 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 ui.set_width(ui.available_width());
                 theme::section_header(ui, tr("Approval required"), true);
                 ui.add_space(2.0);
-                if let Some(t) = s.tool_for_permission(p) {
-                    let headline = match t.kind {
-                        ToolKind::Execute => tr("Run command"),
-                        ToolKind::Edit => tr("Edit file"),
-                        ToolKind::Delete => tr("Delete file"),
-                        ToolKind::Move => tr("Move file"),
-                        ToolKind::Fetch => tr("Fetch web page"),
-                        ToolKind::Read => tr("Read file"),
-                        _ => tr("Run action"),
-                    };
-                    ui.label(RichText::new(headline).size(14.0).color(theme::TEXT));
-                    let command = t
-                        .raw_input
-                        .as_ref()
-                        .and_then(|v| v.get("command"))
-                        .and_then(Value::as_str);
-                    let shown = command.map_or_else(|| t.title.clone(), |c| format!("$ {c}"));
-                    egui::Frame::none()
-                        .fill(theme::BG)
-                        .rounding(egui::Rounding::same(3.0))
-                        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(shown)
-                                        .monospace()
-                                        .size(12.5)
-                                        .color(theme::TEXT),
-                                )
-                                .wrap(),
-                            );
-                        });
-                    // what the tool will actually be called with: the title
-                    // is Vibe's summary ("Reading README.md"), the arguments
-                    // are the truth (full paths, URLs, patterns). ALL of
-                    // them are shown — this card is the user's only
-                    // safeguard when approving, so an argument that sits
-                    // next to `command` (cwd, env, …) must not be hidden.
-                    let has_diff = t
-                        .content
-                        .iter()
-                        .any(|c| matches!(c, ToolCallContent::Diff { .. }));
-                    let (args, cut) = permission_arguments(t.raw_input.as_ref(), has_diff);
-                    // the command itself is the headline above; its key
-                    // stays out of the argument list
-                    let args: Vec<(String, String)> = if command.is_some() {
-                        args.into_iter().filter(|(k, _)| k != "command").collect()
-                    } else {
-                        args
-                    };
-                    if !args.is_empty() {
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new(trf("Arguments ({n})", &[("n", &args.len())]))
-                                .size(12.0)
-                                .color(theme::DIM),
-                        );
-                        egui::ScrollArea::vertical()
-                            .id_salt(("permission_args", idx))
-                            .max_height(140.0)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                for (key, value) in &args {
-                                    ui.horizontal_top(|ui| {
-                                        ui.label(
-                                            RichText::new(key)
-                                                .monospace()
-                                                .size(12.0)
-                                                .color(theme::DIM),
-                                        );
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(value)
-                                                    .monospace()
-                                                    .size(12.0)
-                                                    .color(theme::TEXT),
-                                            )
-                                            .wrap(),
-                                        );
-                                    });
-                                }
-                            });
-                        if cut > 0 {
-                            ui.label(
-                                RichText::new(trf(
-                                    "… {n} values cut to {chars} characters",
-                                    &[("n", &cut), ("chars", &MAX_ARGUMENT_CHARS)],
-                                ))
-                                .size(11.0)
-                                .color(theme::DIM),
-                            );
-                        }
-                    }
-                    for content in &t.content {
-                        if let ToolCallContent::Diff {
-                            path,
-                            old_text,
-                            new_text,
-                        } = content
-                        {
-                            ui.add_space(2.0);
-                            ui.label(
-                                RichText::new(relative_path(path, &s.cwd))
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(theme::MUTED),
-                            );
-                            egui::ScrollArea::vertical()
-                                .id_salt(("permission_diff", idx, path))
-                                .max_height(180.0)
-                                .auto_shrink([false, true])
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    transcript::diff_body(
-                                        ui,
-                                        old_text.as_deref(),
-                                        new_text,
-                                        200,
-                                        None,
-                                    );
-                                });
-                        }
-                    }
-                } else {
-                    unknown_call(ui, &p.request.tool_call);
-                }
+                permission_body(ui, s, p, egui::Id::new(("permission", idx)));
                 ui.add_space(4.0);
                 option_row(ui, p, idx == 0 && digits, &mut answers);
             });
@@ -423,6 +297,134 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     }
     for (request_id, option_id) in answers {
         h.answer_permission(sid, &request_id, &option_id);
+    }
+}
+
+/// What a pending approval would allow: headline, the command or Vibe's
+/// title, ALL arguments and the diff of an edit. Shared by the pinned card
+/// and the activity feed, so no place offers an approval without showing
+/// what it approves. `salt` keeps the scroll areas of several cards apart.
+pub(super) fn permission_body(
+    ui: &mut egui::Ui,
+    s: &SessionView,
+    p: &PendingPermission,
+    salt: egui::Id,
+) {
+    if let Some(t) = s.tool_for_permission(p) {
+        let headline = match t.kind {
+            ToolKind::Execute => tr("Run command"),
+            ToolKind::Edit => tr("Edit file"),
+            ToolKind::Delete => tr("Delete file"),
+            ToolKind::Move => tr("Move file"),
+            ToolKind::Fetch => tr("Fetch web page"),
+            ToolKind::Read => tr("Read file"),
+            _ => tr("Run action"),
+        };
+        ui.label(RichText::new(headline).size(14.0).color(theme::TEXT));
+        let command = t
+            .raw_input
+            .as_ref()
+            .and_then(|v| v.get("command"))
+            .and_then(Value::as_str);
+        let shown = command.map_or_else(|| t.title.clone(), |c| format!("$ {c}"));
+        egui::Frame::none()
+            .fill(theme::BG)
+            .rounding(egui::Rounding::same(3.0))
+            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(shown)
+                            .monospace()
+                            .size(12.5)
+                            .color(theme::TEXT),
+                    )
+                    .wrap(),
+                );
+            });
+        // what the tool will actually be called with: the title
+        // is Vibe's summary ("Reading README.md"), the arguments
+        // are the truth (full paths, URLs, patterns). ALL of
+        // them are shown — this card is the user's only
+        // safeguard when approving, so an argument that sits
+        // next to `command` (cwd, env, …) must not be hidden.
+        let has_diff = t
+            .content
+            .iter()
+            .any(|c| matches!(c, ToolCallContent::Diff { .. }));
+        let (args, cut) = permission_arguments(t.raw_input.as_ref(), has_diff);
+        // the command itself is the headline above; its key
+        // stays out of the argument list
+        let args: Vec<(String, String)> = if command.is_some() {
+            args.into_iter().filter(|(k, _)| k != "command").collect()
+        } else {
+            args
+        };
+        if !args.is_empty() {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(trf("Arguments ({n})", &[("n", &args.len())]))
+                    .size(12.0)
+                    .color(theme::DIM),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt(salt.with("permission_args"))
+                .max_height(140.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (key, value) in &args {
+                        ui.horizontal_top(|ui| {
+                            ui.label(RichText::new(key).monospace().size(12.0).color(theme::DIM));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(value)
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(theme::TEXT),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    }
+                });
+            if cut > 0 {
+                ui.label(
+                    RichText::new(trf(
+                        "… {n} values cut to {chars} characters",
+                        &[("n", &cut), ("chars", &MAX_ARGUMENT_CHARS)],
+                    ))
+                    .size(11.0)
+                    .color(theme::DIM),
+                );
+            }
+        }
+        for content in &t.content {
+            if let ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } = content
+            {
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(relative_path(path, &s.cwd))
+                        .monospace()
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt(salt.with(("permission_diff", path)))
+                    .max_height(180.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        transcript::diff_body(ui, old_text.as_deref(), new_text, 200, None);
+                    });
+            }
+        }
+    } else {
+        unknown_call(ui, &p.request.tool_call);
     }
 }
 
@@ -537,7 +539,7 @@ fn option_digit(kind: PermissionKind, eligible_before: usize) -> Option<usize> {
 
 /// The request's options; `digits` also binds number keys to the eligible
 /// ones.
-fn option_row(
+pub(super) fn option_row(
     ui: &mut egui::Ui,
     p: &PendingPermission,
     digits: bool,

@@ -1,7 +1,9 @@
 //! The Artefakte view in the main area: every file the agent touched, grouped
 //! by project, with a preview by file type.
 
-use super::transcript::{comment_section, diff_body, send_comments, Comments, MessageOp};
+use super::transcript::{
+    comment_section, diff_rows, send_comments, Comments, DiffLayout, MessageOp,
+};
 use super::*;
 use crate::artifacts::{self, ArtifactKind, Preview};
 use crate::i18n::{self, tr, trf};
@@ -193,6 +195,10 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     // else in the file's own parent — and only when THAT folder is trusted
     let git_dir = git_dir_for(&p.path, base.as_deref());
     let git_trusted = h.trust.get(&git_dir).is_some_and(|t| t.trusted);
+    let decision_open = h
+        .active
+        .as_deref()
+        .is_some_and(|sid| h.session_state(sid) == SessionState::Waiting);
     let out = egui::SidePanel::right("harness_preview")
         .resizable(true)
         .default_width(p.width)
@@ -220,17 +226,11 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                         close = true;
                     }
                     ui.add_space(4.0);
-                    if ui
-                        .selectable_label(mode == PreviewMode::Diff, tr("Diff"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Diff;
-                    }
-                    if ui
-                        .selectable_label(mode == PreviewMode::Code, tr("Code"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Code;
+                    let current = usize::from(mode == PreviewMode::Diff);
+                    match widgets::segmented(ui, &[tr("Code"), tr("Diff")], current) {
+                        Some(0) => mode = PreviewMode::Code,
+                        Some(_) => mode = PreviewMode::Diff,
+                        None => {}
                     }
                 });
             });
@@ -241,16 +241,20 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                     .unwrap_or_else(|_| p.path.clone()),
                 None => p.path.clone(),
             };
-            ui.add(
-                egui::Label::new(
-                    RichText::new(&shown)
-                        .monospace()
-                        .size(11.0)
-                        .color(theme::DIM),
+            // the path line only adds something when the file is not right
+            // in the workspace root (else it repeats the name above)
+            if shown != artifacts::file_name(&p.path) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&shown)
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::DIM),
+                    )
+                    .truncate(),
                 )
-                .truncate(),
-            )
-            .on_hover_text(&p.path);
+                .on_hover_text(&p.path);
+            }
             // re-check every frame, not only at open: a symlink swapped in
             // after the confirm must flip the badge (the read itself is
             // capped and non-blocking, but it must not look trusted)
@@ -262,28 +266,35 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                 outside_workspace_badge(ui);
             }
             ui.add_space(4.0);
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match mode {
-                    PreviewMode::Code => preview_content(ui, &p.path, true),
-                    PreviewMode::Diff => {
-                        // review comments work here like in the transcript;
-                        // the draft names the path as shown above
-                        let key = format!("preview::{}", p.path);
-                        let mut comments =
-                            Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
-                        // git scans (and so the diff's HEAD read) only run
-                        // for folders the agent reported as trusted
-                        diff_content(
-                            ui,
-                            &p.path,
-                            base.as_deref(),
-                            git_trusted,
-                            (&key, &mut comments, &mut ops),
-                        );
-                        comment_section(ui, &key, &shown, &mut comments, &mut ops);
-                    }
-                });
+            // the diff keeps code lines whole and scrolls sideways; the code
+            // view has its own horizontal scroll inside
+            let area = match mode {
+                PreviewMode::Diff => egui::ScrollArea::both(),
+                PreviewMode::Code => egui::ScrollArea::vertical(),
+            };
+            area.auto_shrink([false, false]).show(ui, |ui| match mode {
+                PreviewMode::Code => preview_content(ui, &p.path, true),
+                PreviewMode::Diff => {
+                    // review comments work here like in the transcript;
+                    // the draft names the path as shown above
+                    let key = format!("preview::{}", p.path);
+                    let mut comments = Comments::new(
+                        &mut h.ui.diff_comments,
+                        &mut h.ui.comment_edit,
+                        decision_open,
+                    );
+                    // git scans (and so the diff's HEAD read) only run
+                    // for folders the agent reported as trusted
+                    diff_content(
+                        ui,
+                        &p.path,
+                        base.as_deref(),
+                        git_trusted,
+                        (&key, &mut comments, &mut ops),
+                    );
+                    comment_section(ui, &key, &shown, &mut comments, &mut ops);
+                }
+            });
         });
     for op in ops {
         match op {
@@ -508,13 +519,18 @@ fn diff_content(
             ui,
             tr("Diff preview is off: Catwright runs no git in this repository."),
         ),
-        (_, HeadBlob::Blob(old)) if old != current => {
-            diff_body(ui, Some(&old), &current, 400, Some(comment))
-        }
+        (_, HeadBlob::Blob(old)) if old != current => diff_rows(
+            ui,
+            Some(&old),
+            &current,
+            400,
+            Some(comment),
+            DiffLayout::PREVIEW,
+        ),
         (_, HeadBlob::Blob(_)) => notice(ui, tr("No changes against the last commit.")),
         // no commit yet, or the file is untracked: every line is new
         (_, HeadBlob::Missing) if !current.is_empty() => {
-            diff_body(ui, None, &current, 400, Some(comment))
+            diff_rows(ui, None, &current, 400, Some(comment), DiffLayout::PREVIEW)
         }
         (_, HeadBlob::Missing) => notice(ui, tr("No changes against the last commit.")),
     }
