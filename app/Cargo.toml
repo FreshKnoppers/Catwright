@@ -1,6 +1,6 @@
 [package]
 name = "catwright"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Catwright: native Rust desktop GUI harness for the Mistral Vibe agent (via ACP); privacy-first. Unofficial, not affiliated with Mistral AI."
 license = "MIT OR Apache-2.0"
