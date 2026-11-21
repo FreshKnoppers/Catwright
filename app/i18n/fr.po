@@ -1812,6 +1812,9 @@ msgstr "Git masqué tant que le dossier n'est pas approuvé"
 msgid "Diff preview needs a trusted folder."
 msgstr "L’aperçu de diff nécessite un dossier approuvé."
 
+msgid "Diff is being prepared …"
+msgstr "Préparation de l’aperçu du diff …"
+
 msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
 msgstr "Catwright a été testé avec Vibe {min} à {max}. Vibe {version} est plus récent : si quelque chose ne marche pas, merci de le signaler."
 

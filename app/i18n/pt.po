@@ -1812,6 +1812,9 @@ msgstr "Git oculto até a pasta ser de confiança"
 msgid "Diff preview needs a trusted folder."
 msgstr "A pré-visualização de diff precisa de uma pasta de confiança."
 
+msgid "Diff is being prepared …"
+msgstr "Preparando a prévia do diff …"
+
 msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
 msgstr "O Catwright foi testado com o Vibe {min} a {max}. O Vibe {version} é mais recente: se algo não funcionar, comunique, por favor."
 

@@ -6397,7 +6397,17 @@ fn changed_files_open_as_a_commentable_preview_diff() {
             text: "rename it back".to_string(),
         }],
     );
-    let all = render_texts(&mut h, 3).join("\n");
+    let mut all = render_texts(&mut h, 3).join("\n");
+    // the diff loads in its background thread now: keep rendering until
+    // the cached entry is Ready (bounded, so a hang still fails the test
+    // instead of running forever)
+    for _ in 0..250 {
+        if all.contains("old_line = 1") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        all = render_texts(&mut h, 1).join("\n");
+    }
     assert!(all.contains("old_line = 1"), "HEAD's version:\n{all}");
     assert!(all.contains("new_line = 2"), "the working tree:\n{all}");
     assert!(all.contains("L1: rename it back"), "comment row:\n{all}");

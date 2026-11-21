@@ -1812,6 +1812,9 @@ msgstr "Git nascosto finché la cartella non è attendibile"
 msgid "Diff preview needs a trusted folder."
 msgstr "L’anteprima della diff richiede una cartella attendibile."
 
+msgid "Diff is being prepared …"
+msgstr "Preparazione dell’anteprima del diff …"
+
 msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
 msgstr "Catwright è stato testato con Vibe da {min} a {max}. Vibe {version} è più recente: se qualcosa non funziona, segnalalo per favore."
 
