@@ -80,7 +80,12 @@ jobs:
       # Vulnerabilities in the locked dependencies fail the job;
       # "unmaintained" warnings (currently paste, ttf-parser via egui, no
       # fixed upgrade available) only report.
+      # The cache restores the bare binary, which `cargo install` does not
+      # track ("binary already exists in destination"): install only when
+      # the pinned version is not there yet, and replace an older one.
       - name: Audit dependencies
         run: |
-          cargo install cargo-audit --locked --version 0.23.0
+          if ! cargo audit --version 2>/dev/null | grep -qF '0.23.0'; then
+            cargo install cargo-audit --locked --version 0.23.0 --force
+          fi
           cargo audit
