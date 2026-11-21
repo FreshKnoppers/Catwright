@@ -83,6 +83,35 @@ pub const CHART_SERIES: [Color32; 9] = [
     PROJECT_PALETTE[2], // orange
 ];
 
+/// Area colours of charts (pie slices): the hues of `CHART_SERIES` stepped
+/// into the lightness band for dark surfaces (OKLCH L 0.48–0.67, C ≥ 0.10) —
+/// at their old brightness amber, yellow, green and teal glared as large
+/// areas. Ordered for the largest distance between neighbours: adjacent
+/// OKLab ΔE ≥ 9.0 under simulated protan/deutan vision and ≥ 19.1
+/// unsimulated, ≥ 3:1 on `CARD` (validated with the dataviz palette
+/// validator; the test below re-checks band and unsimulated distance).
+/// Thin lines keep `CHART_SERIES`.
+pub const CHART_FILLS: [Color32; 8] = [
+    Color32::from_rgb(0xc9, 0x45, 0x37), // red
+    Color32::from_rgb(0xab, 0x91, 0x08), // yellow
+    Color32::from_rgb(0x44, 0x84, 0xec), // blue
+    Color32::from_rgb(0xc2, 0x84, 0x03), // amber
+    Color32::from_rgb(0x07, 0xa9, 0x98), // teal
+    Color32::from_rgb(0xe6, 0x65, 0x3e), // orange-red
+    Color32::from_rgb(0x9f, 0x69, 0xda), // purple
+    Color32::from_rgb(0x27, 0xae, 0x55), // green
+];
+
+/// Chart colours by meaning (`tone` in a ui block), never mixed with the
+/// positional colours in one chart. In the same band; every pair of good,
+/// bad and warning stays apart for red–green colour blindness too (ΔE ≥ 9.8
+/// simulated, ≥ 18.2 unsimulated) — that is why "good" leans to blue-green.
+pub const TONE_GOOD: Color32 = Color32::from_rgb(0x06, 0x9c, 0x82);
+pub const TONE_BAD: Color32 = Color32::from_rgb(0xc8, 0x39, 0x3a);
+pub const TONE_WARNING: Color32 = Color32::from_rgb(0xbd, 0x87, 0x03);
+/// Elements without a meaning in a chart where others have one.
+pub const TONE_NEUTRAL: Color32 = Color32::from_rgb(0x7a, 0x7a, 0x82);
+
 /// Our own pixel mark: a cat sitting on a red branch, facing right, its tail
 /// hanging down over the branch. The eye is an empty cell, so the dark tile
 /// shows through. `o` = ORANGE, `r` = RED, `.` = empty (`y` = YELLOW is
@@ -806,6 +835,60 @@ mod tests {
         assert_eq!(status_color(&ToolStatus::Completed), GREEN);
         assert_eq!(status_color(&ToolStatus::Failed), RED);
         assert_eq!(status_color(&ToolStatus::Other), DIM);
+    }
+
+    /// OKLab of an sRGB colour (Björn Ottosson's matrices), for the palette
+    /// checks below.
+    fn oklab(c: Color32) -> [f64; 3] {
+        let lin = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
+        let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+        let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+        let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+        [
+            0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+        ]
+    }
+
+    fn delta_e(a: Color32, b: Color32) -> f64 {
+        let (x, y) = (oklab(a), oklab(b));
+        100.0 * ((x[0] - y[0]).powi(2) + (x[1] - y[1]).powi(2) + (x[2] - y[2]).powi(2)).sqrt()
+    }
+
+    /// Chart areas stay in the dark-surface lightness band with colour in
+    /// them, and neighbours stay clearly apart for full colour vision.
+    #[test]
+    fn chart_fills_sit_in_the_dark_band_and_stay_apart() {
+        for c in CHART_FILLS {
+            let [l, a, b] = oklab(c);
+            assert!((0.48..=0.67).contains(&l), "{c:?} lightness {l:.3}");
+            assert!(a.hypot(b) >= 0.10, "{c:?} reads grey");
+        }
+        for pair in CHART_FILLS.windows(2) {
+            let d = delta_e(pair[0], pair[1]);
+            assert!(
+                d >= 15.0,
+                "{:?} and {:?} only ΔE {d:.1} apart",
+                pair[0],
+                pair[1]
+            );
+        }
+        let tones = [TONE_GOOD, TONE_BAD, TONE_WARNING];
+        for (i, a) in tones.iter().enumerate() {
+            assert!((0.48..=0.67).contains(&oklab(*a)[0]), "{a:?} lightness");
+            for b in &tones[i + 1..] {
+                assert!(delta_e(*a, *b) >= 15.0, "{a:?} and {b:?} too close");
+            }
+        }
     }
 
     #[test]

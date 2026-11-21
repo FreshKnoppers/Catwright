@@ -130,6 +130,44 @@ pub enum UiNode {
 pub struct Series {
     pub name: String,
     pub points: Vec<[f64; 2]>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_tone"
+    )]
+    pub tone: Option<Tone>,
+}
+
+/// What a chart element means (`"tone"` on a series, bar or slice): the
+/// chart is then coloured by meaning instead of by position. The agent
+/// never picks colours itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tone {
+    Good,
+    Bad,
+    Warning,
+    Neutral,
+}
+
+/// A tone in any letter case; anything else (an unknown word, a number) is
+/// no tone, so a block never fails over it.
+fn lenient_tone<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Tone>, D::Error> {
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(
+        match v
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("good") => Some(Tone::Good),
+            Some("bad") => Some(Tone::Bad),
+            Some("warning") => Some(Tone::Warning),
+            Some("neutral") => Some(Tone::Neutral),
+            _ => None,
+        },
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -157,6 +195,12 @@ fn field_text() -> String {
 pub struct Bar {
     pub label: String,
     pub value: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_tone"
+    )]
+    pub tone: Option<Tone>,
 }
 
 /// An interaction the user made with a rendered UI block.
@@ -372,6 +416,29 @@ mod tests {
                 }
             }
             other => panic!("expected card, got {other:?}"),
+        }
+    }
+    /// `tone` on bars, slices and series: any letter case; an unknown word
+    /// or a number is no tone, and never makes the block fail.
+    #[test]
+    fn tones_parse_leniently() {
+        let nodes = parse_ui_blocks(concat!(
+            "```ui\n",
+            r#"[{"type":"pie_chart","slices":[{"label":"a","value":1,"tone":"Good"},{"label":"b","value":2,"tone":"pink"},{"label":"c","value":3,"tone":4},{"label":"d","value":4}]},"#,
+            r#"{"type":"line_chart","series":[{"name":"s","points":[[0,1]],"tone":"warning"}]}]"#,
+            "\n```\n"
+        ));
+        assert_eq!(nodes.len(), 2, "the block parses");
+        match &nodes[0] {
+            UiNode::PieChart { slices, .. } => {
+                let tones: Vec<Option<Tone>> = slices.iter().map(|s| s.tone).collect();
+                assert_eq!(tones, [Some(Tone::Good), None, None, None]);
+            }
+            other => panic!("expected pie_chart, got {other:?}"),
+        }
+        match &nodes[1] {
+            UiNode::LineChart { series, .. } => assert_eq!(series[0].tone, Some(Tone::Warning)),
+            other => panic!("expected line_chart, got {other:?}"),
         }
     }
 }

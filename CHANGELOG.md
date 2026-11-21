@@ -74,6 +74,11 @@ tag (`## v0.2.0`) as that release's description.
   values no longer show float noise or run out of the card, a pie sits on
   the middle of its legend, sliders have a square handle, and a button
   inside columns keeps its size instead of stretching across.
+- Charts in answers are calmer: pie slices use the same hues a step darker
+  (amber, yellow, green and teal glared as large areas), in an order checked
+  for colour-blind and normal vision. Vibe can now mark what an element
+  means with `tone` (good, bad, warning, neutral) instead of costs landing
+  in alarm red by position; the catwright-ui skill describes it.
 - Better contrast: Primary buttons and the send button use dark text on
   orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
   a little lighter (now at least 4.5:1).

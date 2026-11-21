@@ -709,6 +709,39 @@ fn series_color(i: usize) -> Color32 {
     crate::theme::CHART_SERIES[i % crate::theme::CHART_SERIES.len()]
 }
 
+/// Area colour of slice `i`: `theme::CHART_FILLS`, the calmer steps for
+/// large areas.
+fn fill_color(i: usize) -> Color32 {
+    crate::theme::CHART_FILLS[i % crate::theme::CHART_FILLS.len()]
+}
+
+fn tone_color(tone: crate::model::Tone) -> Color32 {
+    use crate::model::Tone;
+    match tone {
+        Tone::Good => crate::theme::TONE_GOOD,
+        Tone::Bad => crate::theme::TONE_BAD,
+        Tone::Warning => crate::theme::TONE_WARNING,
+        Tone::Neutral => crate::theme::TONE_NEUTRAL,
+    }
+}
+
+/// The colours of a chart's elements: by meaning as soon as one element
+/// has a tone (the others are neutral then: meaning and position never mix
+/// in one chart, or "series 1" would look like "good"), else by position.
+fn element_colors(
+    tones: &[Option<crate::model::Tone>],
+    by_position: impl Fn(usize) -> Color32,
+) -> Vec<Color32> {
+    if tones.iter().any(Option::is_some) {
+        tones
+            .iter()
+            .map(|t| tone_color(t.unwrap_or(crate::model::Tone::Neutral)))
+            .collect()
+    } else {
+        (0..tones.len()).map(by_position).collect()
+    }
+}
+
 /// The parsed nodes of a ```ui fence, cached by its content: the same memo
 /// pattern as `markdown::parse_cached` — the frame asks for the same block
 /// again and again, and parsing its json again is per-frame work for
@@ -1893,7 +1926,12 @@ pub fn render_ui_node(
                         .min(width * 0.25)
                         + 8.0;
                     let bar_area_w = (width - label_w - value_w).max(24.0);
-                    for (b, value) in bars.iter().zip(&values) {
+                    // one series: one colour, unless bars carry meaning
+                    let colors =
+                        element_colors(&bars.iter().map(|b| b.tone).collect::<Vec<_>>(), |_| {
+                            crate::theme::ORANGE_DIM
+                        });
+                    for ((b, value), color) in bars.iter().zip(&values).zip(&colors) {
                         let (row, _) =
                             ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
                         let painter = ui.painter();
@@ -1915,11 +1953,7 @@ pub fn render_ui_node(
                             track.min,
                             egui::vec2((bar_area_w * frac).max(2.0), 14.0),
                         );
-                        painter.rect_filled(
-                            fill,
-                            egui::Rounding::same(0.0),
-                            crate::theme::ORANGE_DIM,
-                        );
+                        painter.rect_filled(fill, egui::Rounding::same(0.0), *color);
                         let v = crate::widgets::line_galley(
                             ui,
                             value,
@@ -2353,8 +2387,12 @@ fn render_line_chart(
                     plot.bottom() - plot.height() * fy,
                 )
             };
+            let colors = element_colors(
+                &series.iter().map(|s| s.tone).collect::<Vec<_>>(),
+                series_color,
+            );
             for (i, s) in series.iter().enumerate() {
-                let color = series_color(i);
+                let color = colors[i];
                 let pts: Vec<egui::Pos2> = s.points.iter().map(to_screen).collect();
                 for pair in pts.windows(2) {
                     painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.8_f32, color));
@@ -2377,7 +2415,7 @@ fn render_line_chart(
                 for (i, s) in series.iter().enumerate() {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter()
-                        .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
+                        .rect_filled(r, egui::Rounding::same(0.0), colors[i]);
                     ui.label(RichText::new(&s.name).color(DIM).small());
                     ui.add_space(6.0);
                 }
@@ -2415,6 +2453,11 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                 ui.label(RichText::new(tr("No data.")).color(DIM).small());
                 return;
             }
+            // areas take the calmer fills, or the colours of their meaning
+            let colors = element_colors(
+                &slices.iter().map(|s| s.tone).collect::<Vec<_>>(),
+                fill_color,
+            );
             ui.horizontal_top(|ui| {
                 let size = 120.0;
                 // painted after the legend is laid out: next to a taller
@@ -2432,11 +2475,8 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                                     egui::vec2(8.0, 8.0),
                                     egui::Sense::hover(),
                                 );
-                                ui.painter().rect_filled(
-                                    r,
-                                    egui::Rounding::same(0.0),
-                                    series_color(i),
-                                );
+                                ui.painter()
+                                    .rect_filled(r, egui::Rounding::same(0.0), colors[i]);
                                 ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
                                 ui.label(
                                     RichText::new(i18n::decimal(format!("{pct:.1} %")))
@@ -2471,7 +2511,7 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                 let mut fill = egui::Mesh::default();
                 let mut rims = Vec::new();
                 for (i, start, sweep) in pie_slices(&fracs) {
-                    let color = series_color(i);
+                    let color = colors[i];
                     let steps = ((sweep / 0.05).ceil() as usize).max(2);
                     let rim: Vec<egui::Pos2> = (0..=steps)
                         .map(|k| point(start + sweep * (k as f32 / steps as f32)))
@@ -2547,13 +2587,16 @@ mod tests {
             r#"{"type":"checklist","items":[{"text":"Write tests","done":true},{"text":"Update docs"}]},"#,
             r#"{"type":"kv","rows":[["Region","eu-central"],["Latency","12 ms"]]},"#,
             r#"{"type":"button","label":"Show details","action":"details"}]}]},"#,
-            r#"{"type":"pie_chart","title":"Two slices","slices":[{"label":"A","value":3},{"label":"B","value":1}]}]"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"pie_chart","title":"Two slices","slices":[{"label":"A","value":3},{"label":"B","value":1}]},"#,
+            r#"{"type":"bar_chart","title":"Budget (tones)","bars":[{"label":"Saved","value":252,"tone":"good"},{"label":"Spent","value":1737,"tone":"bad"},{"label":"Open","value":400,"tone":"warning"},{"label":"Other","value":90}]}]},"#,
+            r#"{"type":"pie_chart","title":"Tests (tones)","slices":[{"label":"Passed","value":182,"tone":"Good"},{"label":"Failed","value":3,"tone":"bad"},{"label":"Skipped","value":2,"tone":"pink"}]}]"#,
             "\n```\n"
         );
         let blocks = crate::markdown::parse(msg);
         let mut events = Vec::new();
         let mut forms = std::collections::HashMap::new();
-        let img = crate::softrender::render_ui([900, 1000], 3, |ctx| {
+        let img = crate::softrender::render_ui([900, 1150], 3, |ctx| {
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::none()
@@ -3000,6 +3043,31 @@ mod tests {
         assert!(values.contains_key(&super::field_key("b", 1, 0, "x")));
         assert!(values.contains_key("ab#1#0#x"));
         assert_eq!(values.len(), 2);
+    }
+
+    /// Meaning wins over position for the whole chart: once one element
+    /// has a tone, the others are neutral, never a positional colour.
+    #[test]
+    fn element_colors_follow_meaning_or_position() {
+        use crate::model::Tone;
+        let positional = super::element_colors(&[None, None, None], super::fill_color);
+        assert_eq!(
+            positional,
+            crate::theme::CHART_FILLS[..3].to_vec(),
+            "without tones: by position"
+        );
+        let toned = super::element_colors(
+            &[Some(Tone::Good), None, Some(Tone::Bad)],
+            super::fill_color,
+        );
+        assert_eq!(
+            toned,
+            vec![
+                crate::theme::TONE_GOOD,
+                crate::theme::TONE_NEUTRAL,
+                crate::theme::TONE_BAD
+            ]
+        );
     }
 
     #[test]

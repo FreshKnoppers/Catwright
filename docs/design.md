@@ -164,8 +164,15 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   charts (TEXT, bold); computed numbers use `ORANGE_DIM`. Bar charts keep
   their labels in one column so all bars start at the same x, bars in
   `ORANGE_DIM`, values without float noise. A pie sits on the middle of a
-  taller legend. The agent picks no colours: series and slices take
-  `theme::CHART_SERIES` by position. Sliders have a narrow square handle
+  taller legend. The agent picks no colours: lines take
+  `theme::CHART_SERIES` by position, areas (pie slices) the calmer
+  `theme::CHART_FILLS` (same hues in the dark-surface band OKLCH L
+  0.48–0.67, ordered for the largest neighbour distance, validated for
+  colour-blind and normal vision). An element with a `tone` (good, bad,
+  warning, neutral) colours the whole chart by meaning (`TONE_*`; elements
+  without one turn neutral grey), never mixed with positional colours.
+  "Good" leans blue-green so it stays apart from bad for red–green colour
+  blindness. Sliders have a narrow square handle
   with the stretch left of it filled; a ui button keeps its own width,
   also inside columns.
 - **Command palette** (Strg K): sessions, projects, actions, slash commands.
