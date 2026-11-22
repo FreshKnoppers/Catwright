@@ -93,9 +93,9 @@ fn trust_banner(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             trust.detected_files.join(", ")
         };
         ui.label(
-            RichText::new(format!(
-                "Vibe hat hier {files} gefunden. Anweisungen, Skills und Hooks aus dem Projekt \
-                 werden erst nach deiner Freigabe geladen. Vertraue nur Ordnern, deren Inhalt du kennst."
+            RichText::new(trf(
+                "Vibe found {files} here. Instructions, skills and hooks from the project load only after you allow it. Trust only folders whose content you know.",
+                &[("files", &files)],
             ))
             .size(13.0)
             .color(theme::MUTED),

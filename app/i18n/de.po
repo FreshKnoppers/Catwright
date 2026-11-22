@@ -1814,3 +1814,6 @@ msgstr "{n} weitere Antworten nicht angezeigt – gib stattdessen eine eigene An
 
 msgid "{n} lines – all of them run. Scroll through the box before you allow it."
 msgstr "{n} Zeilen – alle werden ausgeführt. Scrolle durch die Box, bevor du erlaubst."
+
+msgid "Vibe found {files} here. Instructions, skills and hooks from the project load only after you allow it. Trust only folders whose content you know."
+msgstr "Vibe hat hier {files} gefunden. Anweisungen, Skills und Hooks aus dem Projekt werden erst nach deiner Freigabe geladen. Vertraue nur Ordnern, deren Inhalt du kennst."
