@@ -713,7 +713,14 @@ fn parse_ui_blocks_cached(code: &str) -> std::sync::Arc<Vec<UiNode>> {
     CACHE
         .get_or_init(|| crate::memo::Memo::new(256))
         .get_or_insert(crate::memo::hash_str(code), || {
-            parse_ui_blocks(&format!("```ui\n{code}\n```"))
+            let mut nodes = parse_ui_blocks(&format!("```ui\n{code}\n```"));
+            // the ui-js node budget for ui fences too (audit M7): a bigger
+            // block shows as its source, lists inside are capped
+            if crate::model::node_count(&nodes) > crate::script::MAX_NODES {
+                return Vec::new();
+            }
+            crate::model::cap_with_note(&mut nodes);
+            nodes
         })
 }
 
@@ -1504,21 +1511,44 @@ fn file_chip(ui: &mut egui::Ui, token: &str, path: &Path, size: f32, open: &mut 
     }
 }
 
+/// Largest inline run (in bytes of text) laid out as widgets: links and
+/// file chips make every word its own label, each with a workspace lookup,
+/// so a 512 KiB quote of "a a a …" was 260 000 widgets per frame (audit
+/// M8). A bigger run is one layout job: its links and chips show as text.
+const MAX_WIDGET_RUN_BYTES: usize = 8 * 1024;
+
+/// Bytes of text in an inline run, nested styles included.
+fn inline_text_len(inl: &[MdInline]) -> usize {
+    inl.iter()
+        .map(|item| match item {
+            MdInline::Text(t) | MdInline::Code(t) => t.len(),
+            MdInline::Bold(inner) | MdInline::Italic(inner) => inline_text_len(inner),
+            MdInline::Link { text, url } => text.len() + url.len(),
+        })
+        .sum()
+}
+
+/// An inline run as one wrapped layout job (one widget).
+fn inline_job(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle) {
+    let mut job = egui::text::LayoutJob::default();
+    append_inline(&mut job, inl, st);
+    job.wrap.max_width = ui.available_width();
+    ui.add(egui::Label::new(job).wrap());
+}
+
 /// One paragraph-like block. A single layout job wraps cleanly and selects
 /// as one text; a run with links or file chips keeps the widget path (both
-/// are clickable).
+/// are clickable) while it is small enough (`MAX_WIDGET_RUN_BYTES`).
 fn paragraph(ui: &mut egui::Ui, inl: &[MdInline], st: InlineStyle, chips: Option<&mut FileChips>) {
-    if has_link(inl) || has_file_chip(inl, chips.as_deref()) {
+    let small = inline_text_len(inl) <= MAX_WIDGET_RUN_BYTES;
+    if small && (has_link(inl) || has_file_chip(inl, chips.as_deref())) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             render_inline_styled(ui, inl, st, chips);
         });
         return;
     }
-    let mut job = egui::text::LayoutJob::default();
-    append_inline(&mut job, inl, st);
-    job.wrap.max_width = ui.available_width();
-    ui.add(egui::Label::new(job).wrap());
+    inline_job(ui, inl, st);
 }
 
 fn render_inline_styled(
@@ -1527,6 +1557,11 @@ fn render_inline_styled(
     st: InlineStyle,
     mut chips: Option<&mut FileChips>,
 ) {
+    // quotes and table cells come here directly: the same budget
+    if inline_text_len(inl) > MAX_WIDGET_RUN_BYTES {
+        inline_job(ui, inl, st);
+        return;
+    }
     for item in inl {
         match item {
             MdInline::Text(t) => {
@@ -2365,6 +2400,45 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
 
 #[cfg(test)]
 mod tests {
+    /// Audit M7/M8: a ui fence over the node budget shows as its source,
+    /// and an inline run over the widget budget becomes one layout job.
+    #[test]
+    fn oversized_ui_blocks_and_runs_stay_cheap() {
+        let many = vec![r#"{"type":"divider"}"#; crate::script::MAX_NODES + 1].join(",");
+        assert!(super::parse_ui_blocks_cached(&format!("[{many}]")).is_empty());
+        let few = [r#"{"type":"divider"}"#; 3].join(",");
+        assert_eq!(super::parse_ui_blocks_cached(&format!("[{few}]")).len(), 3);
+        use crate::markdown::MdInline;
+        let run = vec![
+            MdInline::Text("ab".into()),
+            MdInline::Bold(vec![MdInline::Code("cde".into())]),
+            MdInline::Link {
+                text: "f".into(),
+                url: "gh".into(),
+            },
+        ];
+        assert_eq!(super::inline_text_len(&run), 8);
+        // a big quote with file chips on renders without one widget per
+        // word: the frame's shapes stay few (it was one label per word)
+        let quote = crate::markdown::parse(&format!("> {}", "a ".repeat(50_000)));
+        let cwd = std::env::temp_dir();
+        let ctx = egui::Context::default();
+        let out = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut events = Vec::new();
+                let mut forms = std::collections::HashMap::new();
+                let mut open = Vec::new();
+                let mut rctx = super::RenderCtx::new(&mut events, &mut forms, "t");
+                rctx.file_chips = Some(super::FileChips {
+                    cwd: &cwd,
+                    open: &mut open,
+                });
+                super::render_blocks(ui, &quote, 0, &mut rctx);
+            });
+        });
+        assert!(out.shapes.len() < 100, "{} shapes", out.shapes.len());
+    }
+
     #[test]
     fn only_rows_in_view_are_laid_out() {
         use super::visible_rows;

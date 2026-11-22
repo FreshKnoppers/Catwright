@@ -1853,3 +1853,6 @@ msgstr "não é um ficheiro normal"
 
 msgid "file too large"
 msgstr "ficheiro demasiado grande"
+
+msgid "{n} more entries of this view not shown."
+msgstr "Mais {n} entradas desta vista não exibidas."

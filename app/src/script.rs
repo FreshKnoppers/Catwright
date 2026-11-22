@@ -951,7 +951,10 @@ impl ScriptTool {
         };
         // this runs in the parent (the child sends raw JSON), so the
         // text composes in the UI language directly
-        nodes.map_err(|e| trf("Script error: invalid node: {detail}", &[("detail", &e)]))
+        let mut nodes =
+            nodes.map_err(|e| trf("Script error: invalid node: {detail}", &[("detail", &e)]))?;
+        crate::model::cap_with_note(&mut nodes);
+        Ok(nodes)
     }
 }
 

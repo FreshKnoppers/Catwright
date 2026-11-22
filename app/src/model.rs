@@ -170,6 +170,77 @@ pub enum UiEvent {
     },
 }
 
+/// Most entries a list inside one node keeps (audit M7: a block of up to
+/// 512 KiB could hold 15 000 bars, each painted every frame; the node
+/// budget never saw them, bars are not nodes).
+pub const MAX_BARS: usize = 100;
+pub const MAX_PIE_SLICES: usize = 64;
+pub const MAX_LIST_ITEMS: usize = 200;
+pub const MAX_FORM_FIELDS: usize = 64;
+pub const MAX_SERIES: usize = 12;
+pub const MAX_POINTS: usize = 2_000;
+
+/// `v` cut to `max` entries; returns how many were dropped.
+fn cut<T>(v: &mut Vec<T>, max: usize) -> usize {
+    let dropped = v.len().saturating_sub(max);
+    v.truncate(max);
+    dropped
+}
+
+/// Cap every list inside `nodes` (bars, slices, items, rows, series,
+/// points, options, fields, recursively); returns how many entries were
+/// dropped. Tables are capped where they render (32 × 200 cells).
+pub fn cap_lists(nodes: &mut [UiNode]) -> usize {
+    nodes.iter_mut().map(cap_node).sum()
+}
+
+fn cap_node(node: &mut UiNode) -> usize {
+    match node {
+        UiNode::Columns { children } | UiNode::Card { children, .. } => cap_lists(children),
+        UiNode::BarChart { bars, .. } => cut(bars, MAX_BARS),
+        UiNode::PieChart { slices, .. } => cut(slices, MAX_PIE_SLICES),
+        UiNode::Checklist { items } => cut(items, MAX_LIST_ITEMS),
+        UiNode::Kv { rows } => cut(rows, MAX_LIST_ITEMS),
+        UiNode::Select { options, .. } => cut(options, MAX_LIST_ITEMS),
+        UiNode::Form { fields, .. } => cut(fields, MAX_FORM_FIELDS),
+        UiNode::LineChart { series, .. } => {
+            cut(series, MAX_SERIES)
+                + series
+                    .iter_mut()
+                    .map(|s| cut(&mut s.points, MAX_POINTS))
+                    .sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+/// [`cap_lists`], with a note node at the end when anything was dropped,
+/// so a cut chart or list never looks complete.
+pub fn cap_with_note(nodes: &mut Vec<UiNode>) {
+    let dropped = cap_lists(nodes);
+    if dropped > 0 {
+        nodes.push(UiNode::Text {
+            text: crate::i18n::trf(
+                "{n} more entries of this view not shown.",
+                &[("n", &dropped)],
+            ),
+        });
+    }
+}
+
+/// How many nodes `nodes` holds, containers and their children included.
+pub fn node_count(nodes: &[UiNode]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            UiNode::Columns { children } | UiNode::Card { children, .. } => {
+                1 + node_count(children)
+            }
+            _ => 1,
+        })
+        .sum()
+}
+
 /// Extract and parse all ```ui fenced blocks in a message text.
 pub fn parse_ui_blocks(text: &str) -> Vec<UiNode> {
     let mut out = Vec::new();
@@ -193,6 +264,45 @@ pub fn parse_ui_blocks(text: &str) -> Vec<UiNode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit M7: lists inside a node are capped, the cut is said, and the
+    /// node count sees nested children.
+    #[test]
+    fn lists_are_capped_with_a_note() {
+        let bars: Vec<String> = (0..15_000)
+            .map(|i| format!("{{\"label\":\"b{i}\",\"value\":{i}}}"))
+            .collect();
+        let points: Vec<String> = (0..5_000).map(|i| format!("[{i},{i}]")).collect();
+        let text = format!(
+            "```ui\n[{{\"type\":\"bar_chart\",\"bars\":[{}]}},\
+             {{\"type\":\"card\",\"children\":[{{\"type\":\"line_chart\",\"series\":[{{\"name\":\"s\",\"points\":[{}]}}]}}]}}]\n```",
+            bars.join(","),
+            points.join(",")
+        );
+        let mut nodes = parse_ui_blocks(&text);
+        assert_eq!(node_count(&nodes), 3);
+        cap_with_note(&mut nodes);
+        match &nodes[0] {
+            UiNode::BarChart { bars, .. } => assert_eq!(bars.len(), MAX_BARS),
+            other => panic!("expected bars, got {other:?}"),
+        }
+        match &nodes[1] {
+            UiNode::Card { children, .. } => match &children[0] {
+                UiNode::LineChart { series, .. } => assert_eq!(series[0].points.len(), MAX_POINTS),
+                other => panic!("expected line chart, got {other:?}"),
+            },
+            other => panic!("expected card, got {other:?}"),
+        }
+        let dropped = (15_000 - MAX_BARS) + (5_000 - MAX_POINTS);
+        match nodes.last() {
+            Some(UiNode::Text { text }) => assert!(text.contains(&dropped.to_string()), "{text}"),
+            other => panic!("expected the note, got {other:?}"),
+        }
+        // nothing cut: no note
+        let mut small = parse_ui_blocks("```ui\n{\"type\":\"divider\"}\n```");
+        cap_with_note(&mut small);
+        assert_eq!(small.len(), 1);
+    }
 
     #[test]
     fn old_ui_blocks_parse_unchanged() {
