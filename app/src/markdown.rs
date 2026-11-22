@@ -360,21 +360,92 @@ fn starts_other_block(t: &str) -> bool {
         || t.strip_prefix("> ").is_some()
 }
 
-/// A code span at the start of `s` (which begins with a backtick), as in
-/// CommonMark: it opens with a run of n backticks and closes at the next run
-/// of exactly n, so "` ```ui-js `" is the code "```ui-js". One space on
-/// each side is stripped when both are there (that is how a span starting
-/// or ending with a backtick is written). Returns the code (None when no
-/// closing run follows), the opening run's length and the bytes consumed.
-fn code_span(s: &str) -> (Option<&str>, usize, usize) {
-    let open = s.bytes().take_while(|b| *b == b'`').count();
-    let body = &s[open..];
-    let mut i = 0;
-    while let Some(off) = body[i..].find('`') {
-        let start = i + off;
-        let run = body[start..].bytes().take_while(|b| *b == b'`').count();
-        if run == open {
-            let mut code = &body[..start];
+/// The next occurrence of `needle` at or after a position of `hay`,
+/// remembering the last answer: a search further on reuses it while it is
+/// still ahead, and a miss stays a miss. Positions only grow while a line
+/// is parsed, so each needle scans the line about once, and the parser is
+/// linear instead of quadratic (audit M5: a 64 KiB line of `[` took
+/// 0.6 s per parse, every frame while it streamed).
+struct Next {
+    needle: &'static str,
+    /// Where the remembered search started, and what it found.
+    from: usize,
+    found: Option<usize>,
+}
+
+impl Next {
+    fn new(needle: &'static str) -> Self {
+        Self {
+            needle,
+            from: usize::MAX,
+            found: None,
+        }
+    }
+
+    fn at(&mut self, hay: &str, p: usize) -> Option<usize> {
+        if p >= self.from {
+            match self.found {
+                None => return None,
+                Some(f) if f >= p => return Some(f),
+                _ => {}
+            }
+        }
+        self.from = p;
+        self.found = hay[p..].find(self.needle).map(|o| p + o);
+        self.found
+    }
+}
+
+/// The next run of exactly n backticks per n, remembered like [`Next`].
+#[derive(Default)]
+struct Runs(std::collections::HashMap<usize, (usize, Option<usize>)>);
+
+impl Runs {
+    /// Start of the first run of exactly `n` backticks at or after `p`
+    /// (`p` is never inside a run).
+    fn at(&mut self, hay: &str, n: usize, p: usize) -> Option<usize> {
+        if let Some(&(from, found)) = self.0.get(&n) {
+            if p >= from {
+                match found {
+                    None => return None,
+                    Some(f) if f >= p => return Some(f),
+                    _ => {}
+                }
+            }
+        }
+        let bytes = hay.as_bytes();
+        let mut i = p;
+        let found = loop {
+            let Some(off) = hay[i..].find('`') else {
+                break None;
+            };
+            let start = i + off;
+            let run = bytes[start..].iter().take_while(|b| **b == b'`').count();
+            if run == n {
+                break Some(start);
+            }
+            i = start + run;
+        };
+        self.0.insert(n, (p, found));
+        found
+    }
+}
+
+/// A code span starting at `pos` of `hay` (a backtick), as in CommonMark:
+/// it opens with a run of n backticks and closes at the next run of
+/// exactly n, so "` ```ui-js `" is the code "```ui-js". One space on each
+/// side is stripped when both are there (that is how a span starting or
+/// ending with a backtick is written). Returns the code (None when no
+/// closing run follows), the opening run's length and the bytes used.
+fn code_span<'a>(hay: &'a str, pos: usize, runs: &mut Runs) -> (Option<&'a str>, usize, usize) {
+    let open = hay.as_bytes()[pos..]
+        .iter()
+        .take_while(|b| **b == b'`')
+        .count();
+    let body = pos + open;
+    match runs.at(hay, open, body) {
+        Some(start) => {
+            let mut code = &hay[body..start];
             if code.len() >= 2
                 && code.starts_with(' ')
                 && code.ends_with(' ')
@@ -382,81 +453,81 @@ fn code_span(s: &str) -> (Option<&str>, usize, usize) {
             {
                 code = &code[1..code.len() - 1];
             }
-            return (Some(code), open, open + start + run);
+            (Some(code), open, start + open - pos)
         }
-        i = start + run;
+        None => (None, open, open),
     }
-    (None, open, open)
 }
 
 /// Inline parser: ***bold italic***, **bold**, *italic*, `code`, [text](url).
 /// Bold and italic nest (`**a *b* c**`).
 pub fn parse_inline(input: &str) -> Vec<MdInline> {
     let mut out = Vec::new();
-    let mut rest = input;
-    while !rest.is_empty() {
-        // find earliest marker
+    let (mut star, mut tick, mut bracket) = (Next::new("*"), Next::new("`"), Next::new("["));
+    let (mut double, mut triple) = (Next::new("**"), Next::new("***"));
+    let (mut close_bracket, mut close_paren) = (Next::new("]"), Next::new(")"));
+    let mut runs = Runs::default();
+    let mut at = 0;
+    while at < input.len() {
+        // the earliest marker ("**" starts at a "*", so "*" covers it)
         let candidates = [
-            rest.find("**"),
-            rest.find('*'),
-            rest.find('`'),
-            rest.find('['),
+            star.at(input, at),
+            tick.at(input, at),
+            bracket.at(input, at),
         ];
         let Some(pos) = candidates.iter().flatten().min().copied() else {
-            out.push(MdInline::Text(rest.to_string()));
+            out.push(MdInline::Text(input[at..].to_string()));
             break;
         };
-        let marker_len = if rest[pos..].starts_with("**") { 2 } else { 1 };
-        if pos > 0 {
-            out.push(MdInline::Text(rest[..pos].to_string()));
+        let here = &input[pos..];
+        let marker_len = if here.starts_with("**") { 2 } else { 1 };
+        if pos > at {
+            out.push(MdInline::Text(input[at..pos].to_string()));
         }
-        let after = &rest[pos + marker_len..];
-        if rest[pos..].starts_with("***") {
-            let inner_start = &rest[pos + 3..];
-            if let Some(end) = inner_start.find("***") {
-                if end > 0 {
+        let after = pos + marker_len;
+        if here.starts_with("***") {
+            if let Some(end) = triple.at(input, pos + 3) {
+                if end > pos + 3 {
                     out.push(MdInline::Bold(vec![MdInline::Italic(parse_inline(
-                        &inner_start[..end],
+                        &input[pos + 3..end],
                     ))]));
-                    rest = &inner_start[end + 3..];
+                    at = end + 3;
                     continue;
                 }
             }
         }
-        if rest[pos..].starts_with("**") {
-            if let Some(end) = after.find("**") {
-                out.push(MdInline::Bold(parse_inline(&after[..end])));
-                rest = &after[end + 2..];
+        if here.starts_with("**") {
+            if let Some(end) = double.at(input, after) {
+                out.push(MdInline::Bold(parse_inline(&input[after..end])));
+                at = end + 2;
                 continue;
             }
-        } else if rest[pos..].starts_with('*') {
-            if let Some(end) = after.find('*') {
-                if end > 0 {
-                    out.push(MdInline::Italic(parse_inline(&after[..end])));
-                    rest = &after[end + 1..];
+        } else if here.starts_with('*') {
+            if let Some(end) = star.at(input, after) {
+                if end > after {
+                    out.push(MdInline::Italic(parse_inline(&input[after..end])));
+                    at = end + 1;
                     continue;
                 }
             }
-        } else if rest[pos..].starts_with('`') {
-            let (code, len, used) = code_span(&rest[pos..]);
+        } else if here.starts_with('`') {
+            let (code, len, used) = code_span(input, pos, &mut runs);
             match code {
                 Some(code) => out.push(MdInline::Code(code.to_string())),
                 // an unmatched backtick run is literal text, whole
-                None => out.push(MdInline::Text(rest[pos..pos + len].to_string())),
+                None => out.push(MdInline::Text(input[pos..pos + len].to_string())),
             }
-            rest = &rest[pos + used..];
+            at = pos + used;
             continue;
-        } else if rest[pos..].starts_with('[') {
-            if let Some(close) = after.find(']') {
-                let text = &after[..close];
-                let after_close = &after[close + 1..];
-                if let Some(url) = after_close.strip_prefix('(') {
-                    if let Some(end) = url.find(')') {
+        } else if here.starts_with('[') {
+            if let Some(close) = close_bracket.at(input, after) {
+                if input[close + 1..].starts_with('(') {
+                    if let Some(end) = close_paren.at(input, close + 2) {
                         out.push(MdInline::Link {
-                            text: text.to_string(),
-                            url: url[..end].to_string(),
+                            text: input[after..close].to_string(),
+                            url: input[close + 2..end].to_string(),
                         });
-                        rest = &url[end + 1..];
+                        at = end + 1;
                         continue;
                     }
                 }
@@ -464,8 +535,8 @@ pub fn parse_inline(input: &str) -> Vec<MdInline> {
         }
         // no closing marker: emit the marker literally
         // (the text before it was pushed above)
-        out.push(MdInline::Text(rest[pos..pos + marker_len].to_string()));
-        rest = &rest[pos + marker_len..];
+        out.push(MdInline::Text(input[pos..pos + marker_len].to_string()));
+        at = pos + marker_len;
     }
     // merge adjacent plain text
     let mut merged: Vec<MdInline> = Vec::new();
@@ -779,5 +850,177 @@ mod tests {
                 MdBlock::Para(vec![MdInline::Text("|---|---|".into())]),
             ]
         );
+    }
+}
+
+/// The quadratic inline parser before audit M5, kept as the reference the
+/// linear one must match exactly.
+#[cfg(test)]
+mod inline_reference {
+    use super::MdInline;
+
+    /// A code span at the start of `s` (which begins with a backtick), as in
+    /// CommonMark: it opens with a run of n backticks and closes at the next run
+    /// of exactly n, so "` ```ui-js `" is the code "```ui-js". One space on
+    /// each side is stripped when both are there (that is how a span starting
+    /// or ending with a backtick is written). Returns the code (None when no
+    /// closing run follows), the opening run's length and the bytes consumed.
+    fn ref_code_span(s: &str) -> (Option<&str>, usize, usize) {
+        let open = s.bytes().take_while(|b| *b == b'`').count();
+        let body = &s[open..];
+        let mut i = 0;
+        while let Some(off) = body[i..].find('`') {
+            let start = i + off;
+            let run = body[start..].bytes().take_while(|b| *b == b'`').count();
+            if run == open {
+                let mut code = &body[..start];
+                if code.len() >= 2
+                    && code.starts_with(' ')
+                    && code.ends_with(' ')
+                    && !code.trim().is_empty()
+                {
+                    code = &code[1..code.len() - 1];
+                }
+                return (Some(code), open, open + start + run);
+            }
+            i = start + run;
+        }
+        (None, open, open)
+    }
+
+    /// Inline parser: ***bold italic***, **bold**, *italic*, `code`, [text](url).
+    /// Bold and italic nest (`**a *b* c**`).
+    fn ref_parse_inline(input: &str) -> Vec<MdInline> {
+        let mut out = Vec::new();
+        let mut rest = input;
+        while !rest.is_empty() {
+            // find earliest marker
+            let candidates = [
+                rest.find("**"),
+                rest.find('*'),
+                rest.find('`'),
+                rest.find('['),
+            ];
+            let Some(pos) = candidates.iter().flatten().min().copied() else {
+                out.push(MdInline::Text(rest.to_string()));
+                break;
+            };
+            let marker_len = if rest[pos..].starts_with("**") { 2 } else { 1 };
+            if pos > 0 {
+                out.push(MdInline::Text(rest[..pos].to_string()));
+            }
+            let after = &rest[pos + marker_len..];
+            if rest[pos..].starts_with("***") {
+                let inner_start = &rest[pos + 3..];
+                if let Some(end) = inner_start.find("***") {
+                    if end > 0 {
+                        out.push(MdInline::Bold(vec![MdInline::Italic(ref_parse_inline(
+                            &inner_start[..end],
+                        ))]));
+                        rest = &inner_start[end + 3..];
+                        continue;
+                    }
+                }
+            }
+            if rest[pos..].starts_with("**") {
+                if let Some(end) = after.find("**") {
+                    out.push(MdInline::Bold(ref_parse_inline(&after[..end])));
+                    rest = &after[end + 2..];
+                    continue;
+                }
+            } else if rest[pos..].starts_with('*') {
+                if let Some(end) = after.find('*') {
+                    if end > 0 {
+                        out.push(MdInline::Italic(ref_parse_inline(&after[..end])));
+                        rest = &after[end + 1..];
+                        continue;
+                    }
+                }
+            } else if rest[pos..].starts_with('`') {
+                let (code, len, used) = ref_code_span(&rest[pos..]);
+                match code {
+                    Some(code) => out.push(MdInline::Code(code.to_string())),
+                    // an unmatched backtick run is literal text, whole
+                    None => out.push(MdInline::Text(rest[pos..pos + len].to_string())),
+                }
+                rest = &rest[pos + used..];
+                continue;
+            } else if rest[pos..].starts_with('[') {
+                if let Some(close) = after.find(']') {
+                    let text = &after[..close];
+                    let after_close = &after[close + 1..];
+                    if let Some(url) = after_close.strip_prefix('(') {
+                        if let Some(end) = url.find(')') {
+                            out.push(MdInline::Link {
+                                text: text.to_string(),
+                                url: url[..end].to_string(),
+                            });
+                            rest = &url[end + 1..];
+                            continue;
+                        }
+                    }
+                }
+            }
+            // no closing marker: emit the marker literally
+            // (the text before it was pushed above)
+            out.push(MdInline::Text(rest[pos..pos + marker_len].to_string()));
+            rest = &rest[pos + marker_len..];
+        }
+        let mut merged: Vec<MdInline> = Vec::new();
+        for item in out {
+            match (merged.last_mut(), &item) {
+                (Some(MdInline::Text(a)), MdInline::Text(b)) => a.push_str(b),
+                _ => merged.push(item),
+            }
+        }
+        merged
+    }
+
+    /// xorshift, so the cases are the same on every run
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    #[test]
+    fn the_linear_parser_matches_the_reference() {
+        const ALPHABET: [&str; 10] = ["*", "*", "`", "`", "[", "]", "(", ")", "a", " ü"];
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..60_000 {
+            let len = (next(&mut state) % 24) as usize;
+            let input: String = (0..len)
+                .map(|_| ALPHABET[(next(&mut state) % ALPHABET.len() as u64) as usize])
+                .collect();
+            assert_eq!(
+                super::parse_inline(&input),
+                ref_parse_inline(&input),
+                "input {input:?}"
+            );
+        }
+    }
+
+    /// Worst cases of the old parser stay fast: 256 KiB lines of a single
+    /// marker, or of unmatched backtick runs of growing length.
+    #[test]
+    fn marker_floods_parse_in_linear_time() {
+        let runs: String = (1..700).map(|n| "`".repeat(n) + " ").collect();
+        for flood in [
+            "[".repeat(1 << 18),
+            "*a".repeat(1 << 17),
+            "**x".repeat(1 << 16),
+            runs,
+        ] {
+            let t = std::time::Instant::now();
+            let parsed = super::parse_inline(&flood);
+            assert!(!parsed.is_empty());
+            // generous for debug builds; the old parser took minutes here
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(2),
+                "{:?}",
+                t.elapsed()
+            );
+        }
     }
 }
