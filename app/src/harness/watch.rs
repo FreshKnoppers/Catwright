@@ -75,8 +75,33 @@ pub fn parse_git(branch: &str, status: &str) -> GitInfo {
     }
 }
 
+/// Whether `root` (git's `--show-toplevel` for `dir`) is the work tree
+/// git discovered from `dir`: the nearest ancestor of `dir` (or `dir`
+/// itself) that holds `.git`. A repository's `core.worktree` can point the
+/// work tree anywhere (`$HOME`, `/`), and `git status` would then list and
+/// scan that tree every few seconds (audit M10); such a root is refused.
+fn plausible_root(dir: &Path, root: &Path) -> bool {
+    let Ok(dir) = std::fs::canonicalize(dir) else {
+        return false;
+    };
+    let Some(discovered) = dir
+        .ancestors()
+        .find(|a| std::fs::symlink_metadata(a.join(".git")).is_ok())
+    else {
+        return false;
+    };
+    std::fs::canonicalize(root).is_ok_and(|r| r == discovered)
+}
+
 /// Read the git state of `dir` (blocking: git subprocesses).
 fn read_git(dir: &Path) -> GitInfo {
+    // the work tree first: a repo-chosen one elsewhere is never scanned
+    let Some(root) = git_output(dir, &["rev-parse", "--show-toplevel"])
+        .map(|r| PathBuf::from(r.trim()))
+        .filter(|r| !r.as_os_str().is_empty() && plausible_root(dir, r))
+    else {
+        return GitInfo::default();
+    };
     let branch = git_output(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
     // `--ignore-submodules=all`: `status` would otherwise recurse into
     // submodules, whose shipped `.git/modules/*/config` can define more
@@ -88,9 +113,7 @@ fn read_git(dir: &Path) -> GitInfo {
     match (branch, status) {
         (Some(b), Some(s)) => {
             let mut info = parse_git(&b, &s);
-            info.root = git_output(dir, &["rev-parse", "--show-toplevel"])
-                .map(|r| PathBuf::from(r.trim()))
-                .filter(|r| !r.as_os_str().is_empty());
+            info.root = Some(root);
             info
         }
         _ => GitInfo::default(),
@@ -781,7 +804,13 @@ fn git_raw(
 /// Tracked and untracked-but-not-ignored files of a git repository, else a
 /// bounded walk that skips hidden and build folders.
 fn list_files(dir: &Path) -> Vec<String> {
-    if let Some(out) = git_output(dir, &["ls-files", "-co", "--exclude-standard"]) {
+    // git only for the work tree git discovered here (see plausible_root)
+    let own_tree = git_output(dir, &["rev-parse", "--show-toplevel"])
+        .is_some_and(|r| plausible_root(dir, Path::new(r.trim())));
+    if let Some(out) = own_tree
+        .then(|| git_output(dir, &["ls-files", "-co", "--exclude-standard"]))
+        .flatten()
+    {
         let mut files: Vec<String> = out
             .lines()
             .filter(|l| !l.is_empty())
@@ -1689,5 +1718,93 @@ mod tests {
         }
         assert!(w.git(&repo, true).is_some(), "trusted: the scan ran");
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod worktree_root_tests {
+    use super::*;
+
+    fn dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "catwright-root-{tag}-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Audit M10: `core.worktree` pointing outside the repository (here a
+    /// stand-in for `$HOME` with a secret in it) must not make the app list
+    /// or scan that tree; the repo shows no git state instead.
+    #[test]
+    fn a_repo_chosen_work_tree_elsewhere_is_refused() {
+        let home = dir("home");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/id_rsa"), "secret").unwrap();
+        let repo = dir("repo");
+        git_output(&repo, &["init", "-q"]).unwrap();
+        git_output(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "c",
+            ],
+        )
+        .unwrap();
+        git_output(&repo, &["config", "core.worktree", home.to_str().unwrap()]).unwrap();
+        // without the check, git really lists the foreign tree
+        let listed = git_output(&repo, &["status", "--porcelain", "-uall"]).unwrap_or_default();
+        assert!(listed.contains(".ssh/id_rsa"), "{listed}");
+        let info = read_git(&repo);
+        assert!(info.root.is_none(), "{:?}", info.root);
+        assert!(info.files.is_empty() && info.branch.is_none());
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    /// The ordinary cases still work: the repo root itself and a folder
+    /// inside it.
+    #[test]
+    fn the_discovered_work_tree_is_accepted() {
+        let repo = dir("plain");
+        git_output(&repo, &["init", "-q"]).unwrap();
+        // HEAD needs a commit, or there is no branch to show
+        git_output(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "c",
+            ],
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(repo.join("sub/new.txt"), "x").unwrap();
+        let root = std::fs::canonicalize(&repo).unwrap();
+        let info = read_git(&repo);
+        assert_eq!(info.root.as_deref(), Some(root.as_path()));
+        assert_eq!(info.changed, 1);
+        let info = read_git(&repo.join("sub"));
+        assert_eq!(info.root.as_deref(), Some(root.as_path()));
+        assert!(!plausible_root(&repo.join("sub"), &repo.join("sub")));
+        std::fs::remove_dir_all(&repo).ok();
     }
 }
