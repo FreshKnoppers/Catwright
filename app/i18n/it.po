@@ -1847,3 +1847,9 @@ msgstr "Consenti sempre queste cartelle"
 
 msgid "{name} (sends “{id}”)"
 msgstr "{name} (invia «{id}»)"
+
+msgid "not a regular file"
+msgstr "non è un file regolare"
+
+msgid "file too large"
+msgstr "file troppo grande"

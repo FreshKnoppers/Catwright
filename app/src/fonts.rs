@@ -76,11 +76,10 @@ pub fn pick_fallbacks(
 
 /// Reads a font file, skipping unreadable files and files over the size cap.
 fn read_font_file(path: &str) -> Option<Vec<u8>> {
-    let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_FONT_FILE_BYTES {
-        return None;
+    match crate::store::read_regular_capped(Path::new(path), MAX_FONT_FILE_BYTES) {
+        crate::store::CappedRead::Bytes(b) => Some(b),
+        _ => None,
     }
-    std::fs::read(path).ok()
 }
 
 /// Default font definitions with the picked fallback fonts appended at the

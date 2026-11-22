@@ -225,68 +225,18 @@ pub fn load_text_capped(path: &str) -> Preview {
     }
 }
 
-/// `File::open` for preview reads that must never block on the open itself.
-/// On unix the open carries `O_NONBLOCK`, so a FIFO swapped in after the
-/// path's type check opens instantly instead of hanging the UI thread; the
-/// caller rejects it right after via the handle's `fstat`. Regular files
-/// ignore the flag, so their reads are unchanged.
-fn open_nonblock(path: &str) -> std::io::Result<std::fs::File> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(0o4000); // O_NONBLOCK
-    }
-    opts.open(path)
-}
-
+/// Capped read for previews: [`crate::store::read_regular_capped`] (type
+/// checked before the open and on the handle, non-blocking open, at most
+/// `cap + 1` bytes), mapped to what the preview shows. Anything that is
+/// not a regular file shows like a vanished one.
 pub(crate) fn load_preview_capped(path: &str, cap: u64) -> Preview {
-    // Special files never reach the open: a FIFO without a writer
-    // blocks the open indefinitely — and this runs on the UI thread —
-    // so the path's type decides here, before `File::open`. Only a
-    // regular file proceeds; everything else (missing, directory,
-    // socket, FIFO, device) reports like a vanished file (final
-    // audit B: the cap-introducing rewrite had dropped the type
-    // check `metadata(path).is_file()` that guarded the open before).
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => {}
-        Ok(_) => return Preview::Missing,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Preview::Missing,
-        Err(_) => return Preview::Unreadable,
+    use crate::store::CappedRead;
+    match crate::store::read_regular_capped(Path::new(path), cap) {
+        CappedRead::Bytes(bytes) => Preview::Image(bytes),
+        CappedRead::Missing | CappedRead::NotRegular => Preview::Missing,
+        CappedRead::TooLarge(size) => Preview::TooLarge(size),
+        CappedRead::Failed(_) => Preview::Unreadable,
     }
-    // Reading without a size-check window (TOCTOU): open the file and read
-    // at most `cap + 1` bytes through the very same handle, so a file that
-    // grows between a `stat` and the read can no longer be loaded whole.
-    // The open itself is non-blocking (see open_nonblock), so a FIFO raced
-    // in between the two checks cannot hang here either — the handle's
-    // fstat below rejects it.
-    let file = match open_nonblock(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Preview::Missing,
-        Err(_) => return Preview::Unreadable,
-    };
-    // Stats of the *open handle*, not of the path: a directory stays
-    // `Missing`, and a file that vanished mid-preview does either way.
-    let meta = match file.metadata() {
-        Ok(meta) if meta.is_file() => meta,
-        Ok(_) => return Preview::Missing,
-        Err(_) => return Preview::Unreadable,
-    };
-    // one byte over the cap proves the file is too large, everything else
-    // is the preview
-    use std::io::Read;
-    let mut bytes = Vec::new();
-    let read = match (&file).take(cap.saturating_add(1)).read_to_end(&mut bytes) {
-        Ok(read) => read,
-        Err(_) => return Preview::Unreadable,
-    };
-    if read as u64 > cap {
-        // name the bigger of the handle's size and the bytes that
-        // overflowed, since special files (procfs) understate their size
-        return Preview::TooLarge(meta.len().max(read as u64));
-    }
-    Preview::Image(bytes)
 }
 
 /// Decode preview bytes for a text kind (lossy: a binary file with a

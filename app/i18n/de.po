@@ -1847,3 +1847,9 @@ msgstr "Diese Ordner immer erlauben"
 
 msgid "{name} (sends “{id}”)"
 msgstr "{name} (sendet „{id}“)"
+
+msgid "not a regular file"
+msgstr "keine reguläre Datei"
+
+msgid "file too large"
+msgstr "Datei zu groß"

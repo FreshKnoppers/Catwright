@@ -318,6 +318,65 @@ pub fn settings_path() -> Option<PathBuf> {
     Some(config_dir()?.join("settings.json"))
 }
 
+/// What [`read_regular_capped`] found.
+#[derive(Debug)]
+pub enum CappedRead {
+    Bytes(Vec<u8>),
+    /// No such file.
+    Missing,
+    /// Something that is not a regular file (directory, FIFO, device, …).
+    NotRegular,
+    /// Over the cap: the bigger of the file's size and the bytes read.
+    TooLarge(u64),
+    Failed(std::io::Error),
+}
+
+/// Read a regular file of at most `cap` bytes without ever blocking or
+/// reading without bound: the path's type is checked before the open (a
+/// FIFO without a writer would block `open(2)` forever), the open is
+/// non-blocking (a FIFO swapped in after that check opens at once), the
+/// open handle's own type is checked again, and at most `cap + 1` bytes
+/// are read through it (`/dev/zero` behind a symlink, or a file growing
+/// after a `stat`, cannot be read whole). Symlinks to regular files work.
+pub fn read_regular_capped(path: &Path, cap: u64) -> CappedRead {
+    use std::io::{ErrorKind, Read};
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return CappedRead::NotRegular,
+        Err(e) if e.kind() == ErrorKind::NotFound => return CappedRead::Missing,
+        Err(e) => return CappedRead::Failed(e),
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(0o4000); // O_NONBLOCK
+    }
+    let file = match opts.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => return CappedRead::Missing,
+        Err(e) => return CappedRead::Failed(e),
+    };
+    let meta = match file.metadata() {
+        Ok(meta) if meta.is_file() => meta,
+        Ok(_) => return CappedRead::NotRegular,
+        Err(e) => return CappedRead::Failed(e),
+    };
+    let mut bytes = Vec::new();
+    let read = match (&file).take(cap.saturating_add(1)).read_to_end(&mut bytes) {
+        Ok(read) => read,
+        Err(e) => return CappedRead::Failed(e),
+    };
+    if read as u64 > cap {
+        return CappedRead::TooLarge(meta.len().max(read as u64));
+    }
+    CappedRead::Bytes(bytes)
+}
+
+/// Largest settings file read (a few KiB in practice).
+const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
+
 pub fn load_settings() -> Result<Settings, String> {
     match settings_path() {
         Some(p) => load_settings_from(&p),
@@ -330,16 +389,20 @@ pub fn load_settings() -> Result<Settings, String> {
 /// falling back to defaults would make the next save overwrite the file
 /// and the user's project list with it (Handoff 2026-11-09, Bug 5).
 fn load_settings_from(path: &Path) -> Result<Settings, String> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
-        Err(e) => {
-            return Err(trf(
-                "The settings could not be read: {error}",
-                &[("error", &e)],
-            ))
-        }
+    let fail = |e: &dyn std::fmt::Display| {
+        trf(
+            "The settings could not be read: {error}",
+            &[("error", &e.to_string())],
+        )
     };
+    let bytes = match read_regular_capped(path, MAX_SETTINGS_BYTES) {
+        CappedRead::Bytes(b) => b,
+        CappedRead::Missing => return Ok(Settings::default()),
+        CappedRead::NotRegular => return Err(fail(&tr("not a regular file"))),
+        CappedRead::TooLarge(_) => return Err(fail(&tr("file too large"))),
+        CappedRead::Failed(e) => return Err(fail(&e)),
+    };
+    let text = String::from_utf8(bytes).map_err(|e| fail(&e))?;
     serde_json::from_str(&text)
         .map_err(|e| trf("The settings could not be read: {error}", &[("error", &e)]))
 }
@@ -532,15 +595,81 @@ pub fn install_vibe_skill() -> std::io::Result<PathBuf> {
 
 /// True when the skill exists and matches the shipped version.
 pub fn vibe_skill_installed() -> bool {
-    vibe_skill_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|text| text == UI_DSL_SKILL)
-        .unwrap_or(false)
+    vibe_skill_path().is_some_and(|p| skill_file_matches(&p))
+}
+
+/// Whether `path` holds the shipped skill. Called every frame while the
+/// settings are open: never blocks, never reads more than one byte past
+/// the shipped skill (audit M3).
+fn skill_file_matches(path: &Path) -> bool {
+    matches!(
+        read_regular_capped(path, UI_DSL_SKILL.len() as u64),
+        CappedRead::Bytes(b) if b == UI_DSL_SKILL.as_bytes()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit M3: files an agent or repo tool could swap in must never hang
+    /// or exhaust the app: a FIFO without a writer, `/dev/zero` behind a
+    /// symlink, an oversized file. Each call has to return at once.
+    #[cfg(unix)]
+    #[test]
+    fn capped_reads_never_block_or_read_without_bound() {
+        let dir = std::env::temp_dir().join(format!("catwright-capped-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(made, "mkfifo");
+        let zero = dir.join("zero");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        let big = dir.join("big");
+        std::fs::write(&big, vec![b'x'; 5000]).unwrap();
+        let ok = dir.join("ok");
+        std::fs::write(&ok, "fine").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&ok, &link).unwrap();
+
+        let t = std::time::Instant::now();
+        assert!(matches!(
+            read_regular_capped(&fifo, 4096),
+            CappedRead::NotRegular
+        ));
+        assert!(matches!(
+            read_regular_capped(&zero, 4096),
+            CappedRead::NotRegular
+        ));
+        assert!(matches!(
+            read_regular_capped(&big, 4096),
+            CappedRead::TooLarge(5000)
+        ));
+        assert!(matches!(
+            read_regular_capped(&dir.join("none"), 4096),
+            CappedRead::Missing
+        ));
+        assert!(matches!(
+            read_regular_capped(&dir, 4096),
+            CappedRead::NotRegular
+        ));
+        assert!(matches!(read_regular_capped(&ok, 4096), CappedRead::Bytes(b) if b == b"fine"));
+        assert!(matches!(read_regular_capped(&link, 4096), CappedRead::Bytes(b) if b == b"fine"));
+        // the callers: settings, the skill check (every frame), fonts
+        assert!(load_settings_from(&fifo).is_err());
+        assert!(load_settings_from(&zero).is_err());
+        assert!(!skill_file_matches(&fifo));
+        assert!(!skill_file_matches(&zero));
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t.elapsed()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// A second instance does not get the settings lock while the first
     /// holds it, and gets it once the first is gone.

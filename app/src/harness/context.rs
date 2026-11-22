@@ -73,11 +73,10 @@ pub fn sizes_path(session_id: &str) -> Option<PathBuf> {
 /// Read the saved sizes of a session (None if missing or unreadable).
 pub fn load_sizes(session_id: &str) -> Option<ContextSizes> {
     let path = sizes_path(session_id)?;
-    let meta = std::fs::metadata(&path).ok()?;
-    if meta.len() > 64 * 1024 {
-        return None;
+    match crate::store::read_regular_capped(&path, 64 * 1024) {
+        crate::store::CappedRead::Bytes(b) => parse_sizes(&String::from_utf8_lossy(&b)),
+        _ => None,
     }
-    parse_sizes(&std::fs::read_to_string(path).ok()?)
 }
 
 /// Split `used` tokens over the four slices in proportion to their sizes,

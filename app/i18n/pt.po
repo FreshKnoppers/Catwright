@@ -1847,3 +1847,9 @@ msgstr "Permitir sempre estas pastas"
 
 msgid "{name} (sends “{id}”)"
 msgstr "{name} (envia «{id}»)"
+
+msgid "not a regular file"
+msgstr "não é um ficheiro normal"
+
+msgid "file too large"
+msgstr "ficheiro demasiado grande"

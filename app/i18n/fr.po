@@ -1847,3 +1847,9 @@ msgstr "Toujours autoriser ces dossiers"
 
 msgid "{name} (sends “{id}”)"
 msgstr "{name} (envoie « {id} »)"
+
+msgid "not a regular file"
+msgstr "pas un fichier ordinaire"
+
+msgid "file too large"
+msgstr "fichier trop volumineux"

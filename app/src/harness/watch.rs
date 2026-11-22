@@ -474,19 +474,26 @@ fn probe_filter_drivers_timeout(dir: &Path, timeout: Duration) -> Option<Vec<Str
             // `commondir` must be a regular file before we read it — a FIFO
             // would block this read forever (no deadline on the UI thread)
             let commondir_file = gitdir.join("commondir");
+            // (the read itself is capped and non-blocking too: a FIFO
+            // swapped in after the type check must not hang it either)
             let commondir = match std::fs::symlink_metadata(&commondir_file) {
-                Ok(m) if m.is_file() => match std::fs::read_to_string(&commondir_file) {
-                    Ok(c) => {
-                        let c = c.trim();
-                        let p = Path::new(c);
-                        if p.is_absolute() {
-                            p.to_path_buf()
-                        } else {
-                            gitdir.join(p)
+                Ok(m) if m.is_file() => {
+                    match crate::store::read_regular_capped(&commondir_file, 4096) {
+                        crate::store::CappedRead::Bytes(b) => {
+                            let Ok(c) = String::from_utf8(b) else {
+                                return None;
+                            };
+                            let p = Path::new(c.trim());
+                            if p.is_absolute() {
+                                p.to_path_buf()
+                            } else {
+                                gitdir.join(p)
+                            }
                         }
+                        crate::store::CappedRead::Missing => gitdir.clone(),
+                        _ => return None, // too large, swapped, unreadable
                     }
-                    Err(_) => gitdir.clone(),
-                },
+                }
                 Ok(_) => return None,     // FIFO/symlink/... — fail closed
                 Err(_) => gitdir.clone(), // no commondir: plain repo
             };
