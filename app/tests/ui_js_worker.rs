@@ -91,3 +91,32 @@ fn worker_answer_with_payloads_beyond_the_request_budget_arrives() {
     assert_eq!(resp["nodes"]["text"].as_str().map(str::len), Some(210_000));
     assert_eq!(resp["state"]["a"].as_str().map(str::len), Some(105_000));
 }
+
+/// Audit M9: the prelude's caps are no defence against a hostile script
+/// (typed arrays are not capped at all). The worker caps its own address
+/// space before it evaluates, so a big allocation fails inside the script
+/// instead of taking 800 MB of the user's memory.
+#[test]
+fn worker_memory_is_capped() {
+    let resp = run_worker(json!({
+        "source": "function init(){ const a = new Uint8Array(800000000); return {n: a.length}; }\n\
+                   function render(s){ return {type:'text', text:'n=' + s.n}; }",
+        "state": {},
+        "init": true,
+        "action": null
+    }));
+    assert_eq!(resp["ok"], json!(false), "{resp}");
+    assert!(
+        resp["error"].as_str().unwrap().contains("RangeError"),
+        "{resp}"
+    );
+    // an ordinary script still runs under the cap
+    let resp = run_worker(json!({
+        "source": "function init(){ const a = new Uint8Array(1000000); a.fill(7); return {n: a[999]}; }\n\
+                   function render(s){ return {type:'text', text:'n=' + s.n}; }",
+        "state": {},
+        "init": true,
+        "action": null
+    }));
+    assert_eq!(resp["state"], json!({"n": 7}), "{resp}");
+}

@@ -212,7 +212,7 @@ fn main() -> eframe::Result<()> {
     // internal ui-js evaluation worker (see src/script.rs): one JSON
     // request on stdin, one JSON response on stdout, no GUI
     if argv.get(1).map(String::as_str) == Some(script::WORKER_FLAG) {
-        script::worker_main(std::io::stdin(), std::io::stdout());
+        script::worker_process_main();
         return Ok(());
     }
     let cli = parse_cli(argv.get(1..).unwrap_or(&[]));

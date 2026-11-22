@@ -1817,3 +1817,6 @@ msgstr "{n} Zeilen – alle werden ausgeführt. Scrolle durch die Box, bevor du 
 
 msgid "Vibe found {files} here. Instructions, skills and hooks from the project load only after you allow it. Trust only folders whose content you know."
 msgstr "Vibe hat hier {files} gefunden. Anweisungen, Skills und Hooks aus dem Projekt werden erst nach deiner Freigabe geladen. Vertraue nur Ordnern, deren Inhalt du kennst."
+
+msgid "Script error: the evaluation process could not limit its memory."
+msgstr "Skript-Fehler: Der Auswertungsprozess konnte seinen Speicher nicht begrenzen."

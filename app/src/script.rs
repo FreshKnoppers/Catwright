@@ -246,6 +246,84 @@ fn dispatch(input: &WorkerInput) -> WorkerResponse {
     }
 }
 
+/// Address space one worker process may map. A script evaluates in at
+/// most a few MiB (the worker runs in 64 MiB); the prelude's caps only
+/// catch accidents, a hostile script gets past them (`s += s`, typed
+/// arrays, a redefined `Number`, audit M9). With the limit a runaway
+/// allocation fails inside the worker (a RangeError or an abort) instead
+/// of driving up to four workers into gigabytes and the machine into swap.
+const WORKER_ADDRESS_SPACE: u64 = 512 * 1024 * 1024;
+
+/// Cap this process's address space (`RLIMIT_AS`), soft and hard, so the
+/// script cannot raise it again. False where that is not possible.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc64"
+    )
+))]
+fn limit_address_space(bytes: u64) -> bool {
+    use std::os::raw::{c_int, c_ulong};
+    #[repr(C)]
+    struct RLimit {
+        cur: c_ulong,
+        max: c_ulong,
+    }
+    extern "C" {
+        fn setrlimit(resource: c_int, rlim: *const RLimit) -> c_int;
+    }
+    // RLIMIT_AS on these architectures (asm-generic/resource.h)
+    const RLIMIT_AS: c_int = 9;
+    let Some(bytes) = c_ulong::try_from(bytes).ok() else {
+        return false;
+    };
+    let limit = RLimit {
+        cur: bytes,
+        max: bytes,
+    };
+    // SAFETY: `setrlimit(2)` reads one `struct rlimit` (two `rlim_t`, which
+    // is `unsigned long` in glibc and musl on these targets) through the
+    // pointer, which points to a live, properly laid out value for the
+    // whole call; it has no other effect on memory.
+    unsafe { setrlimit(RLIMIT_AS, &limit) == 0 }
+}
+
+#[cfg(not(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc64"
+    )
+)))]
+fn limit_address_space(_bytes: u64) -> bool {
+    false
+}
+
+/// The worker process: cap its memory, then serve the request. Fails
+/// closed: a worker that cannot cap its memory evaluates nothing.
+pub fn worker_process_main() {
+    if !limit_address_space(WORKER_ADDRESS_SPACE) {
+        let response = error_response(
+            tr("Script error: the evaluation process could not limit its memory.").to_string(),
+            true,
+        );
+        if let Ok(text) = serde_json::to_string(&response) {
+            println!("{text}");
+        }
+        return;
+    }
+    worker_main(std::io::stdin(), std::io::stdout());
+}
+
 /// The `--ui-js-worker` mode: read one JSON request, evaluate it, write
 /// one JSON response, done. Generic over reader/writer so tests can run
 /// it against cursors.

@@ -1817,3 +1817,6 @@ msgstr "{n} righe – vengono eseguite tutte. Scorri il riquadro prima di consen
 
 msgid "Vibe found {files} here. Instructions, skills and hooks from the project load only after you allow it. Trust only folders whose content you know."
 msgstr "Vibe ha trovato qui {files}. Istruzioni, skill e hook del progetto vengono caricati solo dopo la tua autorizzazione. Fidati solo di cartelle di cui conosci il contenuto."
+
+msgid "Script error: the evaluation process could not limit its memory."
+msgstr "Errore script: il processo di valutazione non ha potuto limitare la sua memoria."
