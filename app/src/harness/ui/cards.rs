@@ -11,18 +11,39 @@ use egui::Event;
 use serde_json::Value;
 
 pub(super) fn pinned(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
-    trust_banner(h, ui, sid);
-    question_cards(h, ui, Some(sid));
-    permission_cards(h, ui, sid);
-    loop_guard(h, ui, sid);
-    orphan_cards(h, ui);
-    queue_rows(h, ui, sid);
+    pinned_area(ui, "pinned_cards", |ui| {
+        trust_banner(h, ui, sid);
+        question_cards(h, ui, Some(sid));
+        permission_cards(h, ui, sid);
+        loop_guard(h, ui, sid);
+        orphan_cards(h, ui);
+        queue_rows(h, ui, sid);
+    });
 }
 
 /// Cards that can appear without an open session (start screen).
 pub(super) fn sessionless(h: &mut Harness, ui: &mut egui::Ui) {
-    question_cards(h, ui, None);
-    orphan_cards(h, ui);
+    pinned_area(ui, "sessionless_cards", |ui| {
+        question_cards(h, ui, None);
+        orphan_cards(h, ui);
+    });
+}
+
+/// The pinned cards scroll once they would take more than half the
+/// window: however long a request is (a command with hundreds of lines, a
+/// question with many options), the composer below stays on screen.
+fn pinned_area(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let max = (ui.ctx().screen_rect().height() * 0.5).max(220.0);
+    let out = egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(max)
+        .auto_shrink([false, true])
+        .show(ui, add);
+    // no card: take back the item spacing the empty area added, so the
+    // layout is the same as without the area
+    if out.content_size.y <= 0.0 {
+        ui.add_space(-ui.spacing().item_spacing.y);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +178,16 @@ fn question_cards(h: &mut Harness, ui: &mut egui::Ui, sid: Option<&str>) {
                         }
                     }
                 });
+                if field.hidden_options > 0 {
+                    ui.label(
+                        RichText::new(trf(
+                            "{n} more answers not shown – type your own answer instead.",
+                            &[("n", &field.hidden_options)],
+                        ))
+                        .size(12.0)
+                        .color(theme::DIM),
+                    );
+                }
                 ui.add(
                     egui::TextEdit::singleline(&mut answer.other)
                         .hint_text(tr("Your own answer …"))
@@ -271,7 +302,24 @@ fn digits_ready(frames_shown: u32) -> bool {
 }
 
 fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
-    let keys_free = h.draft.trim().is_empty() && !modal_open(h) && composer_or_no_focus(ui.ctx());
+    // A click into the composer, or text typed while the request is open,
+    // means the user writes a message: the digits stay off for this
+    // request, even once the draft is empty again (audit M1).
+    let first = h
+        .sessions
+        .get(sid)
+        .and_then(|s| s.permissions.first())
+        .map(|p| p.request_id.clone());
+    if let Some(first) = &first {
+        if h.ui.composer_clicked || !h.draft.trim().is_empty() {
+            h.ui.digits_blocked = Some(first.clone());
+        }
+    }
+    h.ui.composer_clicked = false;
+    let keys_free = h.draft.trim().is_empty()
+        && !modal_open(h)
+        && composer_or_no_focus(ui.ctx())
+        && (first.is_none() || h.ui.digits_blocked != first);
     let mut answers: Vec<(Value, String)> = Vec::new();
     // The lockout counts frames the card was really painted in (N14), so
     // the counters live with the session's pending permissions.
@@ -288,6 +336,9 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 ui.set_width(ui.available_width());
                 theme::section_header(ui, tr("Approval required"), true);
                 ui.add_space(2.0);
+                // number keys only answer a request that is on screen in
+                // full: no part of what is approved may be scrolled away
+                let mut all_shown = true;
                 if let Some(t) = s.tool_for_permission(p) {
                     let headline = match t.kind {
                         ToolKind::Execute => tr("Run command"),
@@ -305,22 +356,7 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         .and_then(|v| v.get("command"))
                         .and_then(Value::as_str);
                     let shown = command.map_or_else(|| t.title.clone(), |c| format!("$ {c}"));
-                    egui::Frame::none()
-                        .fill(theme::BG)
-                        .rounding(egui::Rounding::same(3.0))
-                        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(shown)
-                                        .monospace()
-                                        .size(12.5)
-                                        .color(theme::TEXT),
-                                )
-                                .wrap(),
-                            );
-                        });
+                    all_shown &= request_text(ui, ("permission_cmd", idx), &shown);
                     // what the tool will actually be called with: the title
                     // is Vibe's summary ("Reading README.md"), the arguments
                     // are the truth (full paths, URLs, patterns). ALL of
@@ -346,31 +382,7 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                                 .size(12.0)
                                 .color(theme::DIM),
                         );
-                        egui::ScrollArea::vertical()
-                            .id_salt(("permission_args", idx))
-                            .max_height(140.0)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                for (key, value) in &args {
-                                    ui.horizontal_top(|ui| {
-                                        ui.label(
-                                            RichText::new(key)
-                                                .monospace()
-                                                .size(12.0)
-                                                .color(theme::DIM),
-                                        );
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(value)
-                                                    .monospace()
-                                                    .size(12.0)
-                                                    .color(theme::TEXT),
-                                            )
-                                            .wrap(),
-                                        );
-                                    });
-                                }
-                            });
+                        all_shown &= argument_rows(ui, ("permission_args", idx), &args);
                         if cut > 0 {
                             ui.label(
                                 RichText::new(trf(
@@ -413,10 +425,10 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         }
                     }
                 } else {
-                    unknown_call(ui, &p.request.tool_call);
+                    all_shown &= unknown_call(ui, idx, &p.request.tool_call);
                 }
                 ui.add_space(4.0);
-                option_row(ui, p, idx == 0 && digits, &mut answers);
+                option_row(ui, p, idx == 0 && digits && all_shown, &mut answers);
             });
             ui.add_space(6.0);
         }
@@ -431,7 +443,12 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
 /// or just the tool's name (`bash`) when it has none. What the request
 /// itself carries is shown, plus an honest note; once the call arrives the
 /// card shows it in full on the next frame.
-fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) {
+/// Returns whether all of it is on screen (see [`request_text`]).
+fn unknown_call(
+    ui: &mut egui::Ui,
+    idx: usize,
+    call: &crate::acp::protocol::ToolCallUpdate,
+) -> bool {
     ui.label(
         RichText::new(tr("Run action"))
             .size(14.0)
@@ -442,37 +459,13 @@ fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) 
         .clone()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| call.tool_call_id.clone());
+    let mut all_shown = true;
     if !shown.trim().is_empty() {
-        egui::Frame::none()
-            .fill(theme::BG)
-            .rounding(egui::Rounding::same(3.0))
-            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(shown)
-                            .monospace()
-                            .size(12.5)
-                            .color(theme::TEXT),
-                    )
-                    .wrap(),
-                );
-            });
+        all_shown &= request_text(ui, ("permission_unknown", idx), &shown);
     }
-    for (key, value) in permission_arguments(call.raw_input.as_ref(), false).0 {
-        ui.horizontal_top(|ui| {
-            ui.label(RichText::new(key).monospace().size(12.0).color(theme::DIM));
-            ui.add(
-                egui::Label::new(
-                    RichText::new(value)
-                        .monospace()
-                        .size(12.0)
-                        .color(theme::TEXT),
-                )
-                .wrap(),
-            );
-        });
+    let args = permission_arguments(call.raw_input.as_ref(), false).0;
+    if !args.is_empty() {
+        all_shown &= argument_rows(ui, ("permission_unknown_args", idx), &args);
     }
     if call.title.is_none() && call.raw_input.is_none() {
         ui.label(
@@ -483,6 +476,93 @@ fn unknown_call(ui: &mut egui::Ui, call: &crate::acp::protocol::ToolCallUpdate) 
             .color(theme::DIM),
         );
     }
+    all_shown
+}
+
+/// Tallest command box on a permission card; a longer command scrolls.
+const MAX_REQUEST_TEXT_HEIGHT: f32 = 160.0;
+
+/// Whether everything `out` scrolls is in view and its viewport lies
+/// inside the visible part of `ui` (not scrolled away in the pinned area).
+fn fully_shown<R>(ui: &egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<R>) -> bool {
+    out.content_size.y <= out.inner_rect.height() + 1.0
+        && ui.clip_rect().contains_rect(out.inner_rect)
+}
+
+/// The command (or title) a permission card asks about, in a box that
+/// scrolls instead of growing: a command padded with hundreds of blank
+/// lines must not push its dangerous tail, the buttons and the composer
+/// off the window. Hidden characters are made visible, and a command of
+/// more than one line says how many it has. Returns whether all of it is
+/// on screen.
+fn request_text(ui: &mut egui::Ui, id: impl std::hash::Hash, text: &str) -> bool {
+    let text = extras::visible_controls(text);
+    let out = egui::Frame::none()
+        .fill(theme::BG)
+        .rounding(egui::Rounding::same(3.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .id_salt(id)
+                .max_height(MAX_REQUEST_TEXT_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(text.as_ref())
+                                .monospace()
+                                .size(12.5)
+                                .color(theme::TEXT),
+                        )
+                        .wrap(),
+                    );
+                })
+        })
+        .inner;
+    let lines = text.lines().count();
+    if lines > 1 {
+        ui.label(
+            RichText::new(trf(
+                "{n} lines – all of them run. Scroll through the box before you allow it.",
+                &[("n", &lines)],
+            ))
+            .size(12.0)
+            .color(theme::AMBER),
+        );
+    }
+    fully_shown(ui, &out)
+}
+
+/// The (key, value) argument rows of a permission card in a scrolling box,
+/// hidden characters made visible. Returns whether all rows are on screen.
+fn argument_rows(ui: &mut egui::Ui, id: impl std::hash::Hash, args: &[(String, String)]) -> bool {
+    let out = egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(140.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (key, value) in args {
+                ui.horizontal_top(|ui| {
+                    ui.label(
+                        RichText::new(extras::visible_controls(key).as_ref())
+                            .monospace()
+                            .size(12.0)
+                            .color(theme::DIM),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(extras::visible_controls(value).as_ref())
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::TEXT),
+                        )
+                        .wrap(),
+                    );
+                });
+            }
+        });
+    fully_shown(ui, &out)
 }
 
 /// Which number key answers an option: only reversible one-shot decisions
@@ -546,7 +626,9 @@ fn option_row(
     ui.horizontal_wrapped(|ui| {
         let mut eligible = 0;
         for (i, opt) in p.request.options.iter().enumerate() {
-            let label = extras::permission_label(&opt.option_id, &opt.name);
+            let label =
+                extras::visible_controls(&extras::permission_label(&opt.option_id, &opt.name))
+                    .into_owned();
             let digit = option_digit(opt.kind.clone(), eligible);
             if digit.is_some() {
                 eligible += 1;
@@ -561,8 +643,11 @@ fn option_row(
                 (true, Some(n)) => format!("{n}  {label}"),
                 _ => label,
             };
-            let clicked = widgets::button(ui, &text, kind).clicked();
-            if clicked || (digits && digit.is_some_and(|n| take_digit(ui.ctx(), n - 1))) {
+            let button = widgets::button(ui, &text, kind);
+            // a key never answers through a button scrolled out of view
+            let on_screen = ui.clip_rect().contains_rect(button.rect);
+            let keyed = digits && on_screen && digit.is_some_and(|n| take_digit(ui.ctx(), n - 1));
+            if button.clicked() || keyed {
                 answers.push((p.request_id.clone(), opt.option_id.clone()));
             }
         }

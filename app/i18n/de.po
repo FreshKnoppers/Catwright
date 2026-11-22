@@ -1808,3 +1808,9 @@ msgstr "Git wird ausgeblendet, bis der Ordner vertraut ist"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "Die Diff-Vorschau braucht einen vertrauten Ordner."
+
+msgid "{n} more answers not shown – type your own answer instead."
+msgstr "{n} weitere Antworten nicht angezeigt – gib stattdessen eine eigene Antwort ein."
+
+msgid "{n} lines – all of them run. Scroll through the box before you allow it."
+msgstr "{n} Zeilen – alle werden ausgeführt. Scrolle durch die Box, bevor du erlaubst."

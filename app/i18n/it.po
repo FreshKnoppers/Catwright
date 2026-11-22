@@ -1808,3 +1808,9 @@ msgstr "Git nascosto finché la cartella non è attendibile"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "L’anteprima della diff richiede una cartella attendibile."
+
+msgid "{n} more answers not shown – type your own answer instead."
+msgstr "Altre {n} risposte non mostrate – scrivi invece una tua risposta."
+
+msgid "{n} lines – all of them run. Scroll through the box before you allow it."
+msgstr "{n} righe – vengono eseguite tutte. Scorri il riquadro prima di consentire."

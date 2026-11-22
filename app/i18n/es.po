@@ -1808,3 +1808,9 @@ msgstr "Git oculto hasta que se confíe en la carpeta"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "La vista de diff necesita una carpeta de confianza."
+
+msgid "{n} more answers not shown – type your own answer instead."
+msgstr "{n} respuestas más no se muestran: escribe tu propia respuesta."
+
+msgid "{n} lines – all of them run. Scroll through the box before you allow it."
+msgstr "{n} líneas: se ejecutan todas. Desplázate por el recuadro antes de permitirlo."

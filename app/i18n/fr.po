@@ -1808,3 +1808,9 @@ msgstr "Git masqué tant que le dossier n'est pas approuvé"
 
 msgid "Diff preview needs a trusted folder."
 msgstr "L’aperçu de diff nécessite un dossier approuvé."
+
+msgid "{n} more answers not shown – type your own answer instead."
+msgstr "{n} autres réponses non affichées – saisissez plutôt votre propre réponse."
+
+msgid "{n} lines – all of them run. Scroll through the box before you allow it."
+msgstr "{n} lignes – toutes sont exécutées. Faites défiler le cadre avant d’autoriser."

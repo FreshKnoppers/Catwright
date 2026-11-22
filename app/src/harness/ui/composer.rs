@@ -234,6 +234,9 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
                         edit.response.request_focus();
                         h.ui.focus_composer = false;
                     }
+                    if edit.response.clicked() || edit.response.drag_started() {
+                        h.ui.composer_clicked = true;
+                    }
                 });
             ui.add_space(4.0);
             toolbar(h, ui, sid.as_deref(), running, &mut send_now);

@@ -343,7 +343,30 @@ pub struct QuestionField {
     pub text: String,
     /// Offered answers (`const` values, sent back verbatim).
     pub options: Vec<String>,
+    /// Offered answers left out (beyond `MAX_QUESTION_OPTIONS`, or longer
+    /// than `MAX_QUESTION_TEXT`): the free-text answer still takes them.
+    pub hidden_options: usize,
     pub multi: bool,
+}
+
+/// Most questions one form may ask. Vibe's `ask_user_question` sets no
+/// upper bound and runs without approval, and every question is required,
+/// so a larger form is declined rather than cut (an answer without some
+/// questions would not be one).
+pub const MAX_QUESTION_FIELDS: usize = 16;
+/// Most offered answers shown per question (Vibe recommends 2–4).
+pub const MAX_QUESTION_OPTIONS: usize = 32;
+/// Longest question / header / note / answer text kept, in characters.
+pub const MAX_QUESTION_TEXT: usize = 2000;
+
+/// `text` cut to `max` characters with "…".
+fn cut_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut t: String = text.chars().take(max).collect();
+    t.push('…');
+    t
 }
 
 /// What the user picked or typed for one question.
@@ -369,6 +392,9 @@ pub struct PendingQuestion {
 pub fn parse_question(request_id: Value, params: &Value) -> Option<PendingQuestion> {
     let schema = &params["requestedSchema"];
     let props = schema["properties"].as_object()?;
+    if props.len() > MAX_QUESTION_FIELDS {
+        return None;
+    }
     let mut fields = Vec::with_capacity(props.len());
     for (key, prop) in props {
         let multi = prop["type"].as_str() == Some("array");
@@ -377,17 +403,26 @@ pub fn parse_question(request_id: Value, params: &Value) -> Option<PendingQuesti
         } else {
             prop["oneOf"].as_array()
         };
-        let options = list
-            .map(|a| {
-                a.iter()
-                    .filter_map(|o| o["const"].as_str().map(str::to_string))
-                    .collect()
-            })
+        let offered: Vec<&str> = list
+            .map(|a| a.iter().filter_map(|o| o["const"].as_str()).collect())
             .unwrap_or_default();
+        // an option is sent back verbatim, so a long one is left out, not cut
+        let options: Vec<String> = offered
+            .iter()
+            .filter(|o| o.chars().count() <= MAX_QUESTION_TEXT)
+            .take(MAX_QUESTION_OPTIONS)
+            .map(|o| o.to_string())
+            .collect();
         fields.push(QuestionField {
             key: key.clone(),
-            header: prop["title"].as_str().map(str::to_string),
-            text: prop["description"].as_str().unwrap_or_default().to_string(),
+            header: prop["title"]
+                .as_str()
+                .map(|t| cut_chars(t, MAX_QUESTION_TEXT)),
+            text: cut_chars(
+                prop["description"].as_str().unwrap_or_default(),
+                MAX_QUESTION_TEXT,
+            ),
+            hidden_options: offered.len() - options.len(),
             options,
             multi,
         });
@@ -405,7 +440,9 @@ pub fn parse_question(request_id: Value, params: &Value) -> Option<PendingQuesti
     Some(PendingQuestion {
         request_id,
         session_id: params["sessionId"].as_str().map(str::to_string),
-        note: schema["description"].as_str().map(str::to_string),
+        note: schema["description"]
+            .as_str()
+            .map(|t| cut_chars(t, MAX_QUESTION_TEXT)),
         fields,
         answers: HashMap::new(),
     })
@@ -493,18 +530,30 @@ pub fn iso_to_epoch(iso: &str) -> Option<i64> {
     let (date, rest) = iso.trim().split_once('T')?;
     let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
     let (year, month, day) = (d.next()??, d.next()??, d.next()??);
-    if rest.len() < 8 {
-        return None;
-    }
-    let (hms, tail) = rest.split_at(8);
+    // `get`, not `split_at`: the timestamp comes from the agent, and a
+    // multi-byte character across byte 8 must not panic the UI thread
+    let (hms, tail) = (rest.get(..8)?, rest.get(8..)?);
     let mut t = hms.split(':').map(|x| x.parse::<i64>().ok());
     let (h, min, s) = (t.next()??, t.next()??, t.next()??);
+    // plausible ranges only, so the arithmetic below cannot overflow
+    let in_range = (0..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..=23).contains(&h)
+        && (0..=59).contains(&min)
+        && (0..=60).contains(&s);
+    if !in_range {
+        return None;
+    }
     // skip fractional seconds, then read the zone offset
     let zone = tail.trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
     let offset = if let Some(z) = zone.strip_prefix(['+', '-']) {
         let mut z = z.split(':');
         let zh: i64 = z.next()?.parse().ok()?;
         let zm: i64 = z.next().unwrap_or("0").parse().ok()?;
+        if !(0..=23).contains(&zh) || !(0..=59).contains(&zm) {
+            return None;
+        }
         let total = zh * 3600 + zm * 60;
         if zone.starts_with('-') {
             -total
@@ -604,6 +653,39 @@ pub fn permission_label(option_id: &str, name: &str) -> String {
         _ => name,
     }
     .to_string()
+}
+
+/// `text` with every character that could hide or reorder what an
+/// approval shows replaced by a visible `⟨U+XXXX⟩`: control characters
+/// (except line feed and tab), bidirectional overrides and isolates,
+/// zero-width and other invisible characters, and the Unicode line /
+/// paragraph separators. Line feeds stay: the approval card shows every
+/// line and says how many there are.
+pub fn visible_controls(text: &str) -> std::borrow::Cow<'_, str> {
+    fn hidden(c: char) -> bool {
+        (c.is_control() && c != '\n' && c != '\t')
+            || matches!(c,
+                '\u{061C}' | '\u{200E}' | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{200B}'..='\u{200D}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2028}' | '\u{2029}'
+                | '\u{00AD}' | '\u{034F}' | '\u{180E}' | '\u{FEFF}'
+                | '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}')
+    }
+    if !text.chars().any(hidden) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        if hidden(c) {
+            out.push_str(&format!("⟨U+{:04X}⟩", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Vibe's standard thinking levels, weakest first (`THINKING_LEVELS` in
@@ -929,6 +1011,59 @@ mod tests {
         assert_eq!(elapsed_label(8), "8 s");
         assert_eq!(elapsed_label(65), "1:05");
         assert_eq!(elapsed_label(3729), "1:02:09");
+    }
+
+    #[test]
+    fn non_ascii_or_absurd_timestamps_do_not_panic() {
+        // byte 8 inside a multi-byte character (audit H3)
+        assert_eq!(iso_to_epoch("2026-11-07T€€€"), None);
+        assert_eq!(iso_to_epoch("2026-11-07T12:00:0€"), None);
+        assert_eq!(relative_time("2026-11-07T€€€", 0), None);
+        // values whose arithmetic would overflow
+        assert_eq!(iso_to_epoch("9223372036854775807-01-01T00:00:00Z"), None);
+        assert_eq!(iso_to_epoch("2026-11-07T00:00:00+9999999999999:00"), None);
+        assert_eq!(iso_to_epoch("2026-13-07T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn hidden_characters_become_visible() {
+        assert!(matches!(
+            visible_controls("ls -la\n\tpwd"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(visible_controls("rm \u{202E}fdp.exe"), "rm ⟨U+202E⟩fdp.exe");
+        assert_eq!(
+            visible_controls("a\u{200B}b\rc\u{1b}[2J"),
+            "a⟨U+200B⟩b⟨U+000D⟩c⟨U+001B⟩[2J"
+        );
+        assert_eq!(visible_controls("x\u{2028}y\u{FEFF}"), "x⟨U+2028⟩y⟨U+FEFF⟩");
+        assert_eq!(visible_controls("Grüße 🙂"), "Grüße 🙂");
+    }
+
+    #[test]
+    fn oversized_questions_are_declined_or_cut() {
+        let field = |opts: Vec<String>| {
+            json!({"type": "string", "title": "T", "description": "x".repeat(5000),
+                   "oneOf": opts.iter().map(|o| json!({"const": o, "title": o})).collect::<Vec<_>>()})
+        };
+        // too many questions: declined (every question is required)
+        let mut props = serde_json::Map::new();
+        for i in 0..=MAX_QUESTION_FIELDS {
+            props.insert(format!("q{i}"), field(vec!["a".into(), "b".into()]));
+        }
+        let params = json!({"requestedSchema": {"properties": props}});
+        assert!(parse_question(json!(1), &params).is_none());
+        // too many / too long options: shown up to the cap, the rest counted
+        let mut opts: Vec<String> = (0..100).map(|i| format!("o{i}")).collect();
+        opts.insert(0, "y".repeat(MAX_QUESTION_TEXT + 1));
+        let params = json!({"requestedSchema": {"properties": {"q0": field(opts)}}});
+        let q = parse_question(json!(1), &params).unwrap();
+        let f = &q.fields[0];
+        assert_eq!(f.options.len(), MAX_QUESTION_OPTIONS);
+        assert_eq!(f.options[0], "o0", "a long option is left out, not cut");
+        assert_eq!(f.hidden_options, 101 - MAX_QUESTION_OPTIONS);
+        assert_eq!(f.text.chars().count(), MAX_QUESTION_TEXT + 1);
+        assert!(f.text.ends_with('…'));
     }
 
     #[test]

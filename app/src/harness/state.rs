@@ -349,6 +349,13 @@ pub struct UiState {
     pub composer_popup: ComposerPopup,
     /// The composer should take the keyboard focus on the next frame.
     pub focus_composer: bool,
+    /// The composer was clicked this frame (read and cleared by the
+    /// permission cards on the next one).
+    pub composer_clicked: bool,
+    /// The permission request whose number keys are off: the user clicked
+    /// into the composer or typed while it was open, so a digit is meant
+    /// for the message, not for the card (audit M1).
+    pub digits_blocked: Option<serde_json::Value>,
     /// Next frame jumps the transcript to its end.
     pub scroll_to_end: bool,
     /// One-shot jump of a session's transcript to a round top: (sid, y).
@@ -396,6 +403,8 @@ impl Default for UiState {
             loop_form: LoopForm::default(),
             composer_popup: ComposerPopup::default(),
             focus_composer: true,
+            composer_clicked: false,
+            digits_blocked: None,
             scroll_to_end: false,
             scroll_to_round: None,
             toast: Toast::default(),
