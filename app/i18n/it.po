@@ -1820,3 +1820,30 @@ msgstr "Vibe ha trovato qui {files}. Istruzioni, skill e hook del progetto vengo
 
 msgid "Script error: the evaluation process could not limit its memory."
 msgstr "Errore script: il processo di valutazione non ha potuto limitare la sua memoria."
+
+msgid "This file, for this session"
+msgstr "Questo file, per questa sessione"
+
+msgid "These paths, for this session"
+msgstr "Questi percorsi, per questa sessione"
+
+msgid "This folder, for this session"
+msgstr "Questa cartella, per questa sessione"
+
+msgid "These folders, for this session"
+msgstr "Queste cartelle, per questa sessione"
+
+msgid "Always allow this file"
+msgstr "Consenti sempre questo file"
+
+msgid "Always allow these paths"
+msgstr "Consenti sempre questi percorsi"
+
+msgid "Always allow this folder"
+msgstr "Consenti sempre questa cartella"
+
+msgid "Always allow these folders"
+msgstr "Consenti sempre queste cartelle"
+
+msgid "{name} (sends “{id}”)"
+msgstr "{name} (invia «{id}»)"

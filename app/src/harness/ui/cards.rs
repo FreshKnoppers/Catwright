@@ -625,19 +625,28 @@ fn option_row(
 ) {
     ui.horizontal_wrapped(|ui| {
         let mut eligible = 0;
-        for (i, opt) in p.request.options.iter().enumerate() {
-            let label =
-                extras::visible_controls(&extras::permission_label(&opt.option_id, &opt.name))
-                    .into_owned();
-            let digit = option_digit(opt.kind.clone(), eligible);
+        let shown = p
+            .request
+            .options
+            .iter()
+            .take(extras::MAX_PERMISSION_OPTIONS);
+        for (i, opt) in shown.enumerate() {
+            // label, colour and digit all from the one checked view (H1)
+            let view = extras::option_view(&opt.option_id, &opt.kind, &opt.name);
+            let label = extras::visible_controls(&view.label).into_owned();
+            let digit = view
+                .kind
+                .as_ref()
+                .and_then(|k| option_digit(k.clone(), eligible));
             if digit.is_some() {
                 eligible += 1;
             }
-            let kind = match opt.kind {
-                PermissionKind::AllowOnce if i == 0 => ButtonKind::Primary,
-                PermissionKind::AllowOnce | PermissionKind::AllowAlways => ButtonKind::Secondary,
-                PermissionKind::RejectOnce | PermissionKind::RejectAlways => ButtonKind::Danger,
-                PermissionKind::Other => ButtonKind::Secondary,
+            let kind = match view.kind {
+                Some(PermissionKind::AllowOnce) if i == 0 => ButtonKind::Primary,
+                Some(PermissionKind::RejectOnce | PermissionKind::RejectAlways) => {
+                    ButtonKind::Danger
+                }
+                _ => ButtonKind::Secondary,
             };
             let text = match (digits, digit) {
                 (true, Some(n)) => format!("{n}  {label}"),

@@ -7197,7 +7197,16 @@ fn dictate_on_ready_starts_once_the_session_is_loaded() {
 /// key `1` pressed on frame 65 (after the fresh-card grace). `before`
 /// runs ahead of every frame with its index. Returns whether the request
 /// was answered.
-fn press_one_on_card(command: &str, mut before: impl FnMut(&mut Harness, usize)) -> bool {
+fn press_one_on_card(command: &str, before: impl FnMut(&mut Harness, usize)) -> bool {
+    press_one_on(command, permission_request("s1"), before)
+}
+
+/// [`press_one_on_card`] with a request of its own.
+fn press_one_on(
+    command: &str,
+    request: proto::PermissionRequest,
+    mut before: impl FnMut(&mut Harness, usize),
+) -> bool {
     let dir = std::env::temp_dir();
     let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
     create_session(&mut h, &mut agent, &dir, "s1");
@@ -7212,7 +7221,7 @@ fn press_one_on_card(command: &str, mut before: impl FnMut(&mut Harness, usize))
     });
     h.handle_event(AcpEvent::PermissionRequested {
         request_id: json!(0),
-        request: permission_request("s1"),
+        request,
     });
     h.active = Some("s1".to_string());
     let frame = std::cell::Cell::new(0usize);
@@ -7275,4 +7284,20 @@ fn number_key_belongs_to_the_composer_after_a_click_or_typing() {
         63 => h.draft.clear(),
         _ => {}
     }));
+}
+
+/// Audit H1: an option whose id is a lasting grant but whose kind and
+/// name say "Deny" gets neither the digit nor the red colour of a denial;
+/// the only option keys answer is the honest one-shot pair.
+#[test]
+fn a_spoofed_deny_never_gets_a_number_key() {
+    let request = serde_json::from_value(json!({
+        "sessionId": "s1",
+        "toolCall": {"toolCallId": "t1"},
+        "options": [
+            {"optionId": "allow_always_permanent", "name": "Deny", "kind": "reject_once"}
+        ]
+    }))
+    .unwrap();
+    assert!(!press_one_on("git status", request, |_, _| {}));
 }

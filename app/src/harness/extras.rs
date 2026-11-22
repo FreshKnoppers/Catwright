@@ -4,6 +4,7 @@
 //! unknown fields are ignored. Secret-bearing fields (`apiKey`) are never
 //! read.
 
+use crate::acp::protocol::PermissionKind;
 use crate::i18n::{fill, tr, tr_in, trf, Lang};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -643,17 +644,82 @@ pub fn now_epoch() -> i64 {
 }
 
 /// Button label for a permission option; Vibe's own name when the id is
-/// not one of its standard options.
+/// not one of its standard options. The path-scoped options name their
+/// target in a fixed English phrase ("this file only", "these folders",
+/// vibe/utils/tool_presentation.py); "these" in it means several targets.
 pub fn permission_label(option_id: &str, name: &str) -> String {
-    match option_id {
-        "allow_once" => tr("Allow once"),
-        "allow_always" => tr("For this session"),
-        "allow_always_permanent" => tr("Always allow"),
-        "reject_once" => tr("Deny"),
+    let several = name.contains("these");
+    match (option_id, several) {
+        ("allow_once", _) => tr("Allow once"),
+        ("allow_always", _) => tr("For this session"),
+        ("allow_always_permanent", _) => tr("Always allow"),
+        ("reject_once", _) => tr("Deny"),
+        ("allow_session_exact", false) => tr("This file, for this session"),
+        ("allow_session_exact", true) => tr("These paths, for this session"),
+        ("allow_session_directory_recursive", false) => tr("This folder, for this session"),
+        ("allow_session_directory_recursive", true) => tr("These folders, for this session"),
+        ("allow_permanent_exact", false) => tr("Always allow this file"),
+        ("allow_permanent_exact", true) => tr("Always allow these paths"),
+        ("allow_permanent_directory_recursive", false) => tr("Always allow this folder"),
+        ("allow_permanent_directory_recursive", true) => tr("Always allow these folders"),
         _ => name,
     }
     .to_string()
 }
+
+/// The `kind` Vibe gives each of its permission option ids
+/// (`build_permission_options` in vibe/acp/utils.py).
+fn expected_kind(option_id: &str) -> Option<PermissionKind> {
+    Some(match option_id {
+        "allow_once" => PermissionKind::AllowOnce,
+        "reject_once" => PermissionKind::RejectOnce,
+        "allow_always"
+        | "allow_always_permanent"
+        | "allow_session_exact"
+        | "allow_session_directory_recursive"
+        | "allow_permanent_exact"
+        | "allow_permanent_directory_recursive" => PermissionKind::AllowAlways,
+        _ => return None,
+    })
+}
+
+/// How a permission option is shown: the label, and the kind that decides
+/// its colour and number key, or `None` for an option that is not one of
+/// Vibe's known id/kind pairs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptionView {
+    pub label: String,
+    pub kind: Option<PermissionKind>,
+}
+
+/// The ONE place a permission option's label, colour and number key come
+/// from (card and activity feed alike). What is sent is the option id, so
+/// everything shown must follow from the id: a known id whose `kind`
+/// matches it gets the app's label and its kind; any other option (an
+/// unknown id, or a known id with a different kind, e.g. id
+/// `allow_always_permanent` dressed as `reject_once` "Deny") is shown as
+/// what it sends, neutral and without a number key (audit H1).
+pub fn option_view(option_id: &str, kind: &PermissionKind, name: &str) -> OptionView {
+    match expected_kind(option_id) {
+        Some(expected) if &expected == kind => OptionView {
+            label: permission_label(option_id, name),
+            kind: Some(expected),
+        },
+        _ => OptionView {
+            label: trf(
+                "{name} (sends “{id}”)",
+                &[
+                    ("name", &visible_controls(name)),
+                    ("id", &visible_controls(option_id)),
+                ],
+            ),
+            kind: None,
+        },
+    }
+}
+
+/// Most options a permission card shows (Vibe sends at most six).
+pub const MAX_PERMISSION_OPTIONS: usize = 8;
 
 /// `text` with every character that could hide or reorder what an
 /// approval shows replaced by a visible `⟨U+XXXX⟩`: control characters
@@ -1113,6 +1179,40 @@ mod tests {
             Some("01/12/2026")
         );
         assert_eq!(relative_time("kaputt", now), None);
+    }
+
+    #[test]
+    fn option_views_follow_the_id_that_is_sent() {
+        let v = option_view("allow_once", &PermissionKind::AllowOnce, "Allow once");
+        assert_eq!(
+            (v.label.as_str(), v.kind),
+            ("Allow once", Some(PermissionKind::AllowOnce))
+        );
+        let v = option_view(
+            "allow_session_directory_recursive",
+            &PermissionKind::AllowAlways,
+            "Allow these folders for this session",
+        );
+        assert_eq!(v.label, "These folders, for this session");
+        assert_eq!(v.kind, Some(PermissionKind::AllowAlways));
+        // audit H1: a lasting grant dressed as "Deny" stays what it sends
+        let v = option_view(
+            "allow_always_permanent",
+            &PermissionKind::RejectOnce,
+            "Deny",
+        );
+        assert_eq!(v.kind, None, "no colour, no number key");
+        assert_eq!(v.label, "Deny (sends “allow_always_permanent”)");
+        // an unknown id: neutral, and the id is visible
+        let v = option_view(
+            "grant_everything",
+            &PermissionKind::RejectOnce,
+            "Deny\u{202E}",
+        );
+        assert_eq!(v.kind, None);
+        assert_eq!(v.label, "Deny⟨U+202E⟩ (sends “grant_everything”)");
+        let v = option_view("reject_once", &PermissionKind::Other, "Deny");
+        assert_eq!(v.kind, None);
     }
 
     #[test]

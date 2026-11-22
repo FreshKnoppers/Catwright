@@ -175,12 +175,15 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 ui.horizontal(|ui| {
                     if let (Some(rid), Some(v)) = (&e.request_id, h.sessions.get(&e.sid)) {
                         if let Some(p) = v.permissions.iter().find(|p| &p.request_id == rid) {
-                            for opt in &p.request.options {
-                                let label = if opt.name.is_empty() {
-                                    extras::permission_label(&opt.option_id, "")
-                                } else {
-                                    opt.name.clone()
-                                };
+                            let shown = p
+                                .request
+                                .options
+                                .iter()
+                                .take(extras::MAX_PERMISSION_OPTIONS);
+                            for opt in shown {
+                                // the same checked label as the card (H1)
+                                let label =
+                                    extras::option_view(&opt.option_id, &opt.kind, &opt.name).label;
                                 if widgets::button(ui, &label, ButtonKind::Secondary).clicked() {
                                     ops.push(FeedOp::Answer {
                                         sid: e.sid.clone(),
