@@ -902,6 +902,91 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, id: egui::Id, lang: &str, cod
         });
 }
 
+/// The rows `[first, last)` of `total` rows of `pitch` height (content
+/// starting at `content_top`) that touch the visible span
+/// `view_top..view_bottom`, plus one row of margin below.
+pub(crate) fn visible_rows(
+    view_top: f32,
+    view_bottom: f32,
+    content_top: f32,
+    pitch: f32,
+    total: usize,
+) -> (usize, usize) {
+    if pitch <= 0.0 || total == 0 || view_bottom <= view_top {
+        return (0, 0);
+    }
+    let row = |y: f32| ((y - content_top) / pitch).max(0.0);
+    let first = (row(view_top).floor() as usize).min(total);
+    let last = (row(view_bottom).ceil() as usize + 1).clamp(first, total);
+    (first, last)
+}
+
+/// The numbered rows of a code block. Only the rows in view are laid out;
+/// the others are space of the same height, so a file of a million lines
+/// costs what one screen does (audit M6: every row was a widget in every
+/// frame, 1.3 s per frame for 1 M lines, 25 ms already for 20 000).
+fn numbered_rows(ui: &mut egui::Ui, lang: &str, code: &str) {
+    let number_font = egui::FontId::monospace(11.0);
+    let code_font = crate::widgets::mono(12.5);
+    let (row_h, number_w, glyph_w) = ui.fonts(|f| {
+        (
+            f.row_height(&number_font).max(f.row_height(&code_font)),
+            f.glyph_width(&number_font, '0'),
+            f.glyph_width(&code_font, '0'),
+        )
+    });
+    let row_h = row_h.max(ui.spacing().interact_size.y);
+    let pitch = row_h + ui.spacing().item_spacing.y;
+    let (total, widest) = code.lines().fold((0usize, 0usize), |(n, w), l| {
+        (n + 1, w.max(l.chars().count()))
+    });
+    let digits = total.to_string().len().max(4);
+    // the widest line sets the scroll width, also while it is out of view
+    ui.set_min_width(digits as f32 * number_w + 8.0 + widest as f32 * glyph_w);
+    let clip = ui.clip_rect();
+    let (first, last) = visible_rows(clip.top(), clip.bottom(), ui.cursor().min.y, pitch, total);
+    if first > 0 {
+        ui.add_space(first as f32 * pitch);
+    }
+    for (i, line) in code.lines().enumerate().skip(first).take(last - first) {
+        ui.horizontal(|ui| {
+            ui.set_min_height(row_h);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{:>digits$}", i + 1))
+                        .font(number_font.clone())
+                        .color(crate::theme::DIM),
+                )
+                .extend(),
+            );
+            ui.add_space(8.0);
+            let mut job = egui::text::LayoutJob::default();
+            for (tok, text) in crate::syntax::tokenize(lang, line) {
+                let color = match tok {
+                    crate::syntax::Tok::Keyword => crate::theme::BLUE,
+                    crate::syntax::Tok::Str => crate::theme::GREEN,
+                    crate::syntax::Tok::Comment => crate::theme::DIM,
+                    crate::syntax::Tok::Num => crate::theme::AMBER,
+                    crate::syntax::Tok::Plain => TEXT,
+                };
+                job.append(
+                    text.as_str(),
+                    0.0,
+                    egui::TextFormat {
+                        font_id: code_font.clone(),
+                        color,
+                        ..Default::default()
+                    },
+                );
+            }
+            ui.add(egui::Label::new(job).extend());
+        });
+    }
+    if last < total {
+        ui.add_space((total - last) as f32 * pitch - ui.spacing().item_spacing.y);
+    }
+}
+
 /// Code block with line numbers (the preview pane): one row per line,
 /// horizontal scroll instead of truncation.
 pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &str, code: &str) {
@@ -937,42 +1022,7 @@ pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &st
                 .id_salt(id)
                 .auto_shrink([false, true])
                 .max_width(ui.available_width())
-                .show(ui, |ui| {
-                    for (i, line) in code.lines().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("{:>4}", i + 1))
-                                        .monospace()
-                                        .size(11.0)
-                                        .color(crate::theme::DIM),
-                                )
-                                .extend(),
-                            );
-                            ui.add_space(8.0);
-                            let mut job = egui::text::LayoutJob::default();
-                            for (tok, text) in crate::syntax::tokenize(lang, line) {
-                                let color = match tok {
-                                    crate::syntax::Tok::Keyword => crate::theme::BLUE,
-                                    crate::syntax::Tok::Str => crate::theme::GREEN,
-                                    crate::syntax::Tok::Comment => crate::theme::DIM,
-                                    crate::syntax::Tok::Num => crate::theme::AMBER,
-                                    crate::syntax::Tok::Plain => TEXT,
-                                };
-                                job.append(
-                                    text.as_str(),
-                                    0.0,
-                                    egui::TextFormat {
-                                        font_id: crate::widgets::mono(12.5),
-                                        color,
-                                        ..Default::default()
-                                    },
-                                );
-                            }
-                            ui.add(egui::Label::new(job).extend());
-                        });
-                    }
-                });
+                .show(ui, |ui| numbered_rows(ui, lang, code));
         });
 }
 
@@ -2315,6 +2365,24 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_rows_in_view_are_laid_out() {
+        use super::visible_rows;
+        // 27 px per row, view 0..600 at the top of the content
+        assert_eq!(visible_rows(0.0, 600.0, 0.0, 27.0, 1_000_000), (0, 24));
+        // scrolled far down: the rows around the view, nothing before
+        let (first, last) = visible_rows(5_000_000.0, 5_000_600.0, 0.0, 27.0, 1_000_000);
+        assert_eq!(first, 185_185);
+        assert_eq!(last, 185_209);
+        // content starting below the view top, and the end of the file
+        assert_eq!(visible_rows(0.0, 600.0, 100.0, 27.0, 5), (0, 5));
+        assert_eq!(visible_rows(0.0, 600.0, -1e9, 27.0, 10), (10, 10));
+        // degenerate inputs
+        assert_eq!(visible_rows(0.0, 600.0, 0.0, 0.0, 10), (0, 0));
+        assert_eq!(visible_rows(0.0, 600.0, 0.0, 27.0, 0), (0, 0));
+        assert_eq!(visible_rows(600.0, 0.0, 0.0, 27.0, 10), (0, 0));
+    }
+
     /// Paint one agent message through the real renderer for a few frames.
     fn paint_message(
         text: &str,
