@@ -4,6 +4,7 @@
 //! here — the egui code lives in `harness::ui`. UI strings are German;
 //! nothing is logged.
 
+pub mod catalog;
 pub mod context;
 pub mod extras;
 pub mod state;
@@ -135,6 +136,11 @@ pub struct Harness {
     /// level it had (Vibe keeps the level per model). Lets the start screen
     /// offer the right levels for the chosen model (persisted by the app).
     pub thinking_by_model: BTreeMap<String, (Vec<String>, String)>,
+    /// Thinking levels per model from Vibe's cached model catalogue, for
+    /// models not active yet (`catalog.rs`; read after the probe session).
+    pub catalog_levels: BTreeMap<String, Vec<String>>,
+    /// Where that catalogue is read from (None: not read, as in tests).
+    pub vibe_home: Option<PathBuf>,
     /// Vibe's current default model / thinking level (from the probe session).
     pub default_model: Option<String>,
     pub default_thinking: Option<String>,
@@ -356,6 +362,8 @@ impl Harness {
             known_models: Vec::new(),
             known_thinking: Vec::new(),
             thinking_by_model: BTreeMap::new(),
+            catalog_levels: BTreeMap::new(),
+            vibe_home: catalog::vibe_home(),
             default_model: None,
             default_thinking: None,
             start_model: None,
@@ -733,6 +741,11 @@ impl Harness {
                     // order (start race).
                     SessionOrigin::Probe => {
                         self.remember_config(&result.config_options);
+                        // vibe-acp refreshed its catalogue cache for this
+                        // session; it knows the levels of models not active
+                        if let Some(home) = &self.vibe_home {
+                            self.catalog_levels = catalog::load_thinking_levels(home);
+                        }
                         for o in &result.config_options {
                             if let ConfigOption::Select {
                                 id, current_value, ..
@@ -2615,29 +2628,39 @@ impl Harness {
     }
 
     /// Thinking levels to offer for `model` before a session exists: what
-    /// that model offered last, else the levels seen last.
+    /// that model offered when it was last active, else what Vibe's
+    /// catalogue lists for it, else the levels seen last.
     pub fn thinking_levels_for(&self, model: Option<&str>) -> Vec<String> {
         model
-            .and_then(|m| self.thinking_by_model.get(m))
-            .map(|(levels, _)| levels.clone())
+            .and_then(|m| self.exact_levels_for(m))
             .unwrap_or_else(|| self.known_thinking.clone())
     }
 
-    /// The thinking level `model` had when it was last active.
+    /// The levels `model` really offers, if known (seen active or listed in
+    /// the catalogue).
+    fn exact_levels_for(&self, model: &str) -> Option<Vec<String>> {
+        self.thinking_by_model
+            .get(model)
+            .map(|(levels, _)| levels.clone())
+            .or_else(|| self.catalog_levels.get(model).cloned())
+    }
+
+    /// The thinking level `model` had when it was last active, else the
+    /// level Vibe starts a catalogue model on.
     pub fn thinking_of_model(&self, model: Option<&str>) -> Option<String> {
-        model
-            .and_then(|m| self.thinking_by_model.get(m))
+        let model = model?;
+        self.thinking_by_model
+            .get(model)
             .map(|(_, current)| current.clone())
+            .or_else(|| catalog::default_level(self.catalog_levels.get(model)?))
     }
 
     /// Pick the model for the next new session. A chosen start thinking
     /// level the model does not offer is fitted right away (e.g. `max` →
     /// `high`), so the picker never shows a level Vibe would reject.
     pub fn choose_start_model(&mut self, model: String) {
-        if let (Some(want), Some((levels, _))) =
-            (&self.start_thinking, self.thinking_by_model.get(&model))
-        {
-            if let Some(fitted) = extras::fit_thinking(want, levels) {
+        if let (Some(want), Some(levels)) = (&self.start_thinking, self.exact_levels_for(&model)) {
+            if let Some(fitted) = extras::fit_thinking(want, &levels) {
                 self.start_thinking = Some(fitted);
             }
         }

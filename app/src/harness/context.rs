@@ -62,12 +62,8 @@ pub fn sizes_path(session_id: &str) -> Option<PathBuf> {
     if !safe {
         return None;
     }
-    let vibe_home = match std::env::var_os("VIBE_HOME") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => directories::BaseDirs::new()?.home_dir().join(".vibe"),
-    };
     Some(
-        vibe_home
+        super::catalog::vibe_home()?
             .join("logs/session/unified")
             .join(session_id)
             .join("context-breakdown.json"),

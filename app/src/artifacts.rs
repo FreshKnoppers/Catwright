@@ -241,7 +241,7 @@ fn open_nonblock(path: &str) -> std::io::Result<std::fs::File> {
     opts.open(path)
 }
 
-fn load_preview_capped(path: &str, cap: u64) -> Preview {
+pub(crate) fn load_preview_capped(path: &str, cap: u64) -> Preview {
     // Special files never reach the open: a FIFO without a writer
     // blocks the open indefinitely — and this runs on the UI thread —
     // so the path's type decides here, before `File::open`. Only a

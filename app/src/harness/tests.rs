@@ -74,6 +74,8 @@ fn setup(projects: Vec<PathBuf>, start_mode: &str) -> (Harness, Agent) {
         None,
     );
     let mut h = Harness::new(projects, start_mode.to_string());
+    // never read the real ~/.vibe catalogue in tests
+    h.vibe_home = None;
     h.attach(client, rx);
     let agent = Agent {
         reader: BufReader::new(b),
@@ -652,6 +654,53 @@ fn start_thinking_follows_the_chosen_model() {
         Some(&(lmh, "medium".to_string())),
         "the new model's levels are remembered"
     );
+}
+
+/// A model never active before: the start screen offers the levels Vibe's
+/// catalogue lists for it (not those of the model seen last), so `max` can
+/// be picked before the first message.
+#[test]
+fn start_screen_offers_catalogue_levels_of_an_unseen_model() {
+    let (mut h, _agent) = setup(vec![], "ask");
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    // the probe ran on Large 4: low/medium/high seen last
+    h.known_thinking = s(&["low", "medium", "high"]);
+    h.thinking_by_model.insert(
+        "mistral-large-4-0".into(),
+        (s(&["low", "medium", "high"]), "high".into()),
+    );
+    h.catalog_levels.insert(
+        "deepseek-v4-1-flash-1017".into(),
+        s(&["off", "low", "high", "max"]),
+    );
+    let ds = Some("deepseek-v4-1-flash-1017");
+    assert_eq!(h.thinking_levels_for(ds), s(&["off", "low", "high", "max"]));
+    assert_eq!(
+        h.thinking_of_model(ds).as_deref(),
+        Some("high"),
+        "Vibe's start level"
+    );
+    // a level picked for it survives the model choice …
+    h.start_thinking = Some("max".into());
+    h.choose_start_model("deepseek-v4-1-flash-1017".into());
+    assert_eq!(h.start_thinking.as_deref(), Some("max"));
+    // … and one it does not offer is fitted at once
+    h.start_thinking = Some("medium".into());
+    h.choose_start_model("deepseek-v4-1-flash-1017".into());
+    assert_eq!(h.start_thinking.as_deref(), Some("low"));
+    // what the model offered when active beats the catalogue
+    h.thinking_by_model.insert(
+        "deepseek-v4-1-flash-1017".into(),
+        (s(&["low", "max"]), "max".into()),
+    );
+    assert_eq!(h.thinking_levels_for(ds), s(&["low", "max"]));
+    assert_eq!(h.thinking_of_model(ds).as_deref(), Some("max"));
+    // neither seen nor listed: the levels seen last, as before
+    assert_eq!(
+        h.thinking_levels_for(Some("custom")),
+        s(&["low", "medium", "high"])
+    );
+    assert_eq!(h.thinking_of_model(Some("custom")), None);
 }
 
 #[test]
