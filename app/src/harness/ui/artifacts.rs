@@ -690,6 +690,11 @@ const PNG_MAX_ALLOC_BYTES: u64 = 128 * 1024 * 1024;
 /// Upper bound of the preview texture cache: past it the least recently
 /// inserted entry is dropped, so a long session cannot grow it forever.
 const PNG_MAX_CACHE_ENTRIES: usize = 32;
+/// Texture bytes the cache may hold in all (4 bytes per pixel): 32 large
+/// screenshots of up to 8192×8192 would otherwise pin 8 GiB of texture
+/// memory (audit M15). The newest entry always stays, so one big picture
+/// still shows.
+const PNG_MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Why a PNG preview produced no texture.
 #[derive(Debug)]
@@ -745,21 +750,52 @@ fn fit_texture_side(img: image::DynamicImage, max_side: usize) -> image::Dynamic
     }
 }
 
-/// Insert a cache entry, keeping the cache at [`PNG_MAX_CACHE_ENTRIES`]:
-/// the entry inserted least recently is evicted first (the mtime-keyed
-/// cache never shrank on its own, M12).
+/// Insert a cache entry, keeping the cache within [`PNG_MAX_CACHE_ENTRIES`]
+/// and [`PNG_MAX_CACHE_BYTES`]: the entry inserted least recently is
+/// evicted first (the mtime-keyed cache never shrank on its own, M12), but
+/// never the one just inserted.
 fn png_cache_insert(
     cache: &mut std::collections::HashMap<String, PngEntry>,
     path: &str,
     mtime: std::time::SystemTime,
     handle: egui::TextureHandle,
 ) {
+    png_cache_insert_within(
+        cache,
+        path,
+        mtime,
+        handle,
+        PNG_MAX_CACHE_ENTRIES,
+        PNG_MAX_CACHE_BYTES,
+    );
+}
+
+/// [`png_cache_insert`] with explicit bounds (testable without GiB of
+/// textures).
+fn png_cache_insert_within(
+    cache: &mut std::collections::HashMap<String, PngEntry>,
+    path: &str,
+    mtime: std::time::SystemTime,
+    handle: egui::TextureHandle,
+    max_entries: usize,
+    max_bytes: usize,
+) {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     cache.insert(path.to_string(), PngEntry { mtime, seq, handle });
-    while cache.len() > PNG_MAX_CACHE_ENTRIES {
+    let bytes = |cache: &std::collections::HashMap<String, PngEntry>| -> usize {
+        cache
+            .values()
+            .map(|e| {
+                let [w, h] = e.handle.size();
+                w.saturating_mul(h).saturating_mul(4)
+            })
+            .fold(0usize, usize::saturating_add)
+    };
+    while cache.len() > max_entries || (cache.len() > 1 && bytes(cache) > max_bytes) {
         let oldest = cache
             .iter()
+            .filter(|(_, entry)| entry.seq != seq)
             .min_by_key(|(_, entry)| entry.seq)
             .map(|(key, _)| key.clone());
         match oldest {
@@ -1050,10 +1086,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// M12: the PNG texture cache is bounded — past [`PNG_MAX_CACHE_ENTRIES`]
-    /// the entry inserted least recently is dropped, so long sessions stop
-    /// growing it. A fresh map keeps this test independent of the shared
-    /// cache the other png tests run against in parallel.
     #[test]
     fn pictures_beyond_the_gpu_texture_limit_are_scaled_down() {
         let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
@@ -1073,6 +1105,10 @@ mod tests {
         assert!(small.width() >= 1);
     }
 
+    /// M12: the PNG texture cache is bounded — past [`PNG_MAX_CACHE_ENTRIES`]
+    /// the entry inserted least recently is dropped, so long sessions stop
+    /// growing it. A fresh map keeps this test independent of the shared
+    /// cache the other png tests run against in parallel.
     #[test]
     fn png_cache_evicts_the_least_recently_inserted_entry() {
         let ctx = egui::Context::default();
@@ -1092,6 +1128,43 @@ mod tests {
         assert!(!cache.contains_key("p0.png"));
         let last = format!("p{}.png", PNG_MAX_CACHE_ENTRIES + 4);
         assert!(cache.contains_key(&last));
+    }
+
+    /// Audit M15: the cache also has a byte budget. Big textures push out
+    /// the oldest ones long before the entry count is reached; the newest
+    /// one stays even when it alone is over the budget.
+    #[test]
+    fn png_cache_keeps_to_its_byte_budget() {
+        let ctx = egui::Context::default();
+        let mut cache = std::collections::HashMap::new();
+        let now = std::time::SystemTime::now();
+        let tex = |name: &str, side: usize| {
+            ctx.load_texture(
+                name,
+                egui::ColorImage::new([side, side], egui::Color32::RED),
+                egui::TextureOptions::default(),
+            )
+        };
+        // 100×100 RGBA = 40 000 bytes: four fit into 160 000
+        for i in 0..6 {
+            let name = format!("b{i}.png");
+            png_cache_insert_within(&mut cache, &name, now, tex(&name, 100), 32, 160_000);
+        }
+        assert_eq!(cache.len(), 4, "only what fits the budget stays");
+        assert!(!cache.contains_key("b0.png") && !cache.contains_key("b1.png"));
+        assert!(cache.contains_key("b5.png"));
+        // one texture over the whole budget: it stays, everything else goes
+        png_cache_insert_within(&mut cache, "huge.png", now, tex("huge", 300), 32, 160_000);
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains_key("huge.png"));
+        // the real budget: 32 screenshots of 2048×2048 (16 MiB each) would
+        // be 512 MiB; the cache keeps 16 of them
+        let mut cache = std::collections::HashMap::new();
+        for i in 0..32 {
+            let name = format!("s{i}.png");
+            png_cache_insert(&mut cache, &name, now, tex(&name, 2048));
+        }
+        assert_eq!(cache.len(), PNG_MAX_CACHE_BYTES / (2048 * 2048 * 4));
     }
 
     /// M10: the preview is read once per file version and shared — the
