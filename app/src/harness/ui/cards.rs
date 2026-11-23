@@ -344,7 +344,26 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
             && s.permissions
                 .first()
                 .is_some_and(|p| digits_ready(s.frames_shown(&p.request_id)));
-        for (idx, p) in s.permissions.iter().enumerate() {
+        // above the cards, so it is seen without scrolling the pinned area
+        if s.permissions.len() > MAX_SHOWN_PERMISSIONS {
+            ui.label(
+                RichText::new(trf(
+                    "{shown} of {total} approvals shown – the others follow once these are answered.",
+                    &[
+                        ("shown", &MAX_SHOWN_PERMISSIONS),
+                        ("total", &s.permissions.len()),
+                    ],
+                ))
+                .size(12.5)
+                .color(theme::AMBER),
+            );
+            ui.add_space(4.0);
+        }
+        // the first few requests as full cards; the rest wait (see above)
+        // (they are answered in order, and the activity feed lists them):
+        // 64 cards with hundreds of argument rows each, laid out every
+        // frame, took 70 ms per frame (audit M4, measured in release)
+        for (idx, p) in s.permissions.iter().enumerate().take(MAX_SHOWN_PERMISSIONS) {
             widgets::attention_card(ui, theme::YELLOW, |ui| {
                 ui.set_width(ui.available_width());
                 theme::section_header(ui, tr("Approval required"), true);
@@ -478,6 +497,9 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         h.answer_permission(sid, &request_id, &option_id);
     }
 }
+
+/// Most pending approvals of a session shown as full cards at once.
+const MAX_SHOWN_PERMISSIONS: usize = 3;
 
 /// The body of a permission card whose tool call this session has not seen
 /// (yet): vibe-acp sends only an id with the request — the call's entry id,

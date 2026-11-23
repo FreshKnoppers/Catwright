@@ -5403,19 +5403,28 @@ fn failed_worktree_is_cleaned_up_and_explained() {
 /// (no window) and the painted text shapes are read back, so the test proves
 /// the new widgets are really laid out, not just that the code runs.
 fn render_texts(h: &mut Harness, frames: usize) -> Vec<String> {
+    render_texts_sized(h, frames, egui::vec2(1440.0, 900.0))
+}
+
+/// [`render_texts`] in a window of `size` (a tall one shows what a normal
+/// window would scroll away).
+fn render_texts_sized(h: &mut Harness, frames: usize, size: egui::Vec2) -> Vec<String> {
+    render_frames_sized(h, frames, size).concat()
+}
+
+/// The texts of each frame on its own.
+fn render_frames_sized(h: &mut Harness, frames: usize, size: egui::Vec2) -> Vec<Vec<String>> {
     let ctx = egui::Context::default();
     // the app installs its fonts on creation (main.rs); a bare Context
     // cannot draw the UI without them
     crate::fonts::install_fallback_fonts(&ctx);
     let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(
-            egui::pos2(0.0, 0.0),
-            egui::vec2(1440.0, 900.0),
-        )),
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size)),
         ..Default::default()
     };
-    let mut texts = Vec::new();
+    let mut all = Vec::new();
     for _ in 0..frames {
+        let mut texts = Vec::new();
         let out = ctx.run(input.clone(), |ctx| {
             let _ = crate::harness::ui::show(h, ctx);
         });
@@ -5426,8 +5435,9 @@ fn render_texts(h: &mut Harness, frames: usize) -> Vec<String> {
             };
             texts.push(galley.text().to_string());
         }
+        all.push(texts);
     }
-    texts
+    all
 }
 
 #[test]
@@ -5986,6 +5996,16 @@ fn safety_ui_screenshots() {
     h.ui.activity_open = true;
     shot(&mut h, "28-activity-contradiction");
     h.ui.activity_open = false;
+
+    // 9) a flood of approvals: three cards, a line counts the rest (M4)
+    h.answer_permission("s1", &json!(1), "reject_once");
+    for n in 2..8 {
+        h.handle_event(AcpEvent::PermissionRequested {
+            request_id: json!(n),
+            request: permission_request("s1"),
+        });
+    }
+    shot(&mut h, "29-approvals-waiting");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -7456,6 +7476,40 @@ fn number_key_never_approves_a_scrolled_command() {
         "\n".repeat(120)
     );
     assert!(!press_one_on_card(&padded, |_, _| {}));
+}
+
+/// Audit M4: a flood of pending approvals is not laid out card by card
+/// every frame — the first three show, a line counts the rest, and each
+/// moves up once the ones above are answered.
+#[test]
+fn only_the_first_approvals_show_as_cards() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    for n in 0..5 {
+        h.handle_event(AcpEvent::PermissionRequested {
+            request_id: json!(n),
+            request: permission_request("s1"),
+        });
+    }
+    // tall enough that the pinned cards do not scroll
+    let tall = egui::vec2(1440.0, 4000.0);
+    let texts = render_frames_sized(&mut h, 8, tall).pop().unwrap();
+    let cards = |t: &[String]| t.iter().filter(|x| x.contains("APPROVAL REQUIRED")).count();
+    assert_eq!(cards(&texts), 3, "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("3 of 5 approvals shown")),
+        "{texts:?}"
+    );
+    h.answer_permission("s1", &json!(0), "reject_once");
+    h.answer_permission("s1", &json!(1), "reject_once");
+    let texts = render_frames_sized(&mut h, 8, tall).pop().unwrap();
+    assert_eq!(cards(&texts), 3, "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.contains("approvals shown")),
+        "{texts:?}"
+    );
 }
 
 /// A request for call `t1` that carries its own `toolCall` fields.

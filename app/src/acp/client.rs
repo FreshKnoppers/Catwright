@@ -1073,12 +1073,25 @@ fn handle_line(line: &str, shared: &Shared) -> Option<AcpEvent> {
                 None // unknown notifications are ignored
             }
         }
+        Ok(Incoming::Request { id, .. }) if !rpc::valid_request_id(&id) => {
+            // an object/array id, or a huge string, is never kept: the
+            // answer goes out with a null id, as JSON-RPC asks for an id
+            // that cannot be used (audit M4)
+            send_raw(
+                shared,
+                &rpc::encode_error(&Value::Null, rpc::INVALID_REQUEST, "Invalid request id"),
+            );
+            Some(AcpEvent::ProtocolError(
+                tr("A request from Vibe had an unusable id and was refused.").to_string(),
+            ))
+        }
         Ok(Incoming::Request { id, method, params }) => {
             if method == "session/request_permission" {
                 match serde_json::from_value::<proto::PermissionRequest>(params) {
+                    // within byte bounds before it is kept and painted
                     Ok(request) => Some(AcpEvent::PermissionRequested {
                         request_id: id,
-                        request,
+                        request: request.bounded(),
                     }),
                     Err(_) => {
                         send_raw(
@@ -1648,6 +1661,79 @@ mod tests {
                 assert!(r.agent_capabilities.load_session);
             }
             other => panic!("expected Initialized, got {other:?}"),
+        }
+    }
+
+    /// Audit M4: a permission request is kept until answered and painted
+    /// every frame, so it arrives within byte bounds: a 4 MiB argument
+    /// becomes the trimmed marker, at most eight options stay, an option
+    /// whose id is too long to be real is dropped (ids are never cut).
+    #[test]
+    fn a_huge_permission_request_arrives_bounded() {
+        let (_client, rx, mut agent) = setup();
+        let mut options: Vec<Value> = (0..20)
+            .map(|i| json!({"optionId": format!("o{i}"), "name": "x".repeat(10_000), "kind": "allow_once"}))
+            .collect();
+        options.insert(
+            0,
+            json!({"optionId": "i".repeat(10_000), "name": "Deny", "kind": "reject_once"}),
+        );
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "s1",
+                "toolCall": {"toolCallId": "t1", "title": "t".repeat(100_000),
+                             "rawInput": {"command": "c".repeat(4 << 20)}},
+                "options": options
+            }
+        }));
+        let request = match rx.recv_timeout(RECV).expect("PermissionRequested") {
+            AcpEvent::PermissionRequested { request, .. } => request,
+            other => panic!("expected PermissionRequested, got {other:?}"),
+        };
+        assert_eq!(
+            request.tool_call.raw_input.as_ref().unwrap()["trimmed"],
+            json!(true)
+        );
+        assert!(request.tool_call.title.as_ref().unwrap().len() < 5_000);
+        assert_eq!(request.options.len(), 8);
+        assert_eq!(
+            request.options[0].option_id, "o0",
+            "the over-long id is dropped"
+        );
+        assert!(request.options.iter().all(|o| o.name.len() < 300));
+    }
+
+    /// Audit M4: an agent request's id is kept and written out again, so
+    /// an object id or a huge string is refused with a null-id error.
+    #[test]
+    fn a_request_with_an_unusable_id_is_refused() {
+        let (_client, rx, mut agent) = setup();
+        for id in [json!({"a": 1}), json!("x".repeat(1000))] {
+            agent.send(json!({
+                "jsonrpc": "2.0", "id": id, "method": "session/request_permission",
+                "params": {"sessionId": "s1", "toolCall": {"toolCallId": "t1"}, "options": []}
+            }));
+            let reply = agent.read_msg();
+            assert_eq!(reply["id"], Value::Null);
+            assert_eq!(reply["error"]["code"], json!(rpc::INVALID_REQUEST));
+            match rx.recv_timeout(RECV).expect("event") {
+                AcpEvent::ProtocolError(_) => {}
+                other => panic!("expected ProtocolError, got {other:?}"),
+            }
+        }
+        // a string id within the bound still works
+        agent.send(json!({
+            "jsonrpc": "2.0", "id": "req-7", "method": "session/request_permission",
+            "params": {"sessionId": "s1", "toolCall": {"toolCallId": "t1"}, "options": []}
+        }));
+        match rx.recv_timeout(RECV).expect("event") {
+            AcpEvent::PermissionRequested { request_id, .. } => {
+                assert_eq!(request_id, json!("req-7"))
+            }
+            other => panic!("expected PermissionRequested, got {other:?}"),
         }
     }
 

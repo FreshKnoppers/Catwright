@@ -1871,3 +1871,9 @@ msgstr "La demande elle-même indique :"
 
 msgid "This request contradicts its tool call – open the session to decide."
 msgstr "Cette demande contredit son appel d’outil – ouvre la session pour décider."
+
+msgid "A request from Vibe had an unusable id and was refused."
+msgstr "Une demande de Vibe avait un identifiant inutilisable et a été refusée."
+
+msgid "{shown} of {total} approvals shown – the others follow once these are answered."
+msgstr "{shown} autorisations sur {total} affichées – les autres suivent dès que celles-ci ont une réponse."

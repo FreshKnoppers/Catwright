@@ -281,7 +281,8 @@ fn plan_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         return;
     }
     let (done, total) = plan_progress(&s.plan);
-    let plan = s.plan.clone();
+    // borrowed, not cloned per frame (audit M4)
+    let plan = &s.plan;
     card(
         &mut h.ui.panel_sections,
         ui,
@@ -290,7 +291,7 @@ fn plan_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         &format!("{done}/{total}"),
         true,
         |ui| {
-            plan_rows(ui, &plan, 13.0);
+            plan_rows(ui, plan, 13.0);
         },
     );
 }

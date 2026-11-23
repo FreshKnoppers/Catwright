@@ -885,7 +885,8 @@ impl Harness {
                 // the probe session reports the commands, too: remember them
                 // for the start screen's slash list
                 if let SessionUpdate::AvailableCommandsUpdate(c) = &update {
-                    self.known_commands = c.available_commands.clone();
+                    self.known_commands =
+                        crate::acp::protocol::bounded_commands(&c.available_commands);
                 }
                 // output is flowing again: the retry note is over
                 if matches!(

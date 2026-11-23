@@ -718,8 +718,9 @@ pub fn option_view(option_id: &str, kind: &PermissionKind, name: &str) -> Option
     }
 }
 
-/// Most options a permission card shows (Vibe sends at most six).
-pub const MAX_PERMISSION_OPTIONS: usize = 8;
+/// Most options a permission card shows (Vibe sends at most six; the
+/// request keeps no more, see `PermissionRequest::bounded`).
+pub const MAX_PERMISSION_OPTIONS: usize = crate::acp::protocol::MAX_PERMISSION_OPTIONS;
 
 /// `text` with every character that could hide or reorder what an
 /// approval shows replaced by a visible `⟨U+XXXX⟩`: control characters

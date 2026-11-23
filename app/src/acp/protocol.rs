@@ -598,6 +598,100 @@ fn bounded_content(content: &[ToolCallContent]) -> Vec<ToolCallContent> {
         .collect()
 }
 
+/// Most options a permission request keeps (Vibe sends at most six; the
+/// card shows this many).
+pub const MAX_PERMISSION_OPTIONS: usize = 8;
+/// Longest option id kept: the id is sent back verbatim, so it is never
+/// cut — an option with a longer id is dropped (Vibe's ids are a few
+/// words).
+const MAX_OPTION_ID_BYTES: usize = 256;
+/// Longest option label kept.
+const MAX_OPTION_NAME_BYTES: usize = 256;
+
+impl PermissionRequest {
+    /// The request within byte bounds (audit M4): it is kept until the
+    /// user answers and its card is laid out every frame, while a wire line
+    /// may be 64 MiB. The tool call gets the retention bounds of a
+    /// `tool_call` (Vibe sends only its id), at most
+    /// [`MAX_PERMISSION_OPTIONS`] options are kept, labels are cut, and an
+    /// option whose id is too long to be real is dropped (an id is never
+    /// cut: it is what the answer sends).
+    pub fn bounded(self) -> PermissionRequest {
+        let tc = self.tool_call;
+        PermissionRequest {
+            session_id: bounded_text(&self.session_id, MAX_TOOL_PATH_BYTES),
+            tool_call: ToolCallUpdate {
+                tool_call_id: bounded_text(&tc.tool_call_id, MAX_TOOL_PATH_BYTES),
+                title: tc.title.map(|t| bounded_text(&t, MAX_TOOL_TITLE_BYTES)),
+                kind: tc.kind,
+                status: tc.status,
+                content: tc.content.map(|c| bounded_content(&c)),
+                locations: tc.locations.map(|l| bounded_locations(&l)),
+                raw_input: tc.raw_input.as_ref().map(bounded_raw),
+                raw_output: tc.raw_output.as_ref().map(bounded_raw),
+                meta: tc.meta.as_ref().map(bounded_raw),
+            },
+            options: self
+                .options
+                .into_iter()
+                .filter(|o| o.option_id.len() <= MAX_OPTION_ID_BYTES)
+                .take(MAX_PERMISSION_OPTIONS)
+                .map(|o| PermissionOption {
+                    name: bounded_text(&o.name, MAX_OPTION_NAME_BYTES),
+                    ..o
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Most entries a plan keeps (the agent drives the list; the latest stay).
+pub const MAX_PLAN_ENTRIES: usize = 256;
+/// Longest plan entry kept: a plan is shown in the transcript and the
+/// panel every frame (audit M4).
+const MAX_PLAN_ENTRY_BYTES: usize = 4 * 1024;
+
+/// The latest [`MAX_PLAN_ENTRIES`] entries of `entries`, each cut to
+/// [`MAX_PLAN_ENTRY_BYTES`].
+pub fn bounded_plan(entries: &[PlanEntry]) -> Vec<PlanEntry> {
+    let skip = entries.len().saturating_sub(MAX_PLAN_ENTRIES);
+    entries[skip..]
+        .iter()
+        .map(|e| PlanEntry {
+            content: bounded_text(&e.content, MAX_PLAN_ENTRY_BYTES),
+            ..e.clone()
+        })
+        .collect()
+}
+
+/// Most slash commands kept (Vibe sends its built-ins plus one per skill).
+const MAX_COMMANDS: usize = 256;
+/// Longest command name kept: the name goes into the message when picked,
+/// so a longer one is dropped, not cut.
+const MAX_COMMAND_NAME_BYTES: usize = 128;
+/// Longest command description and input hint kept.
+const MAX_COMMAND_TEXT_BYTES: usize = 1024;
+
+/// The slash commands within bounds (audit M4): the list is copied for the
+/// `/` popup and the palette while they are open.
+pub fn bounded_commands(commands: &[AvailableCommand]) -> Vec<AvailableCommand> {
+    commands
+        .iter()
+        .filter(|c| c.name.len() <= MAX_COMMAND_NAME_BYTES)
+        .take(MAX_COMMANDS)
+        .map(|c| AvailableCommand {
+            name: c.name.clone(),
+            description: bounded_text(&c.description, MAX_COMMAND_TEXT_BYTES),
+            input: c.input.as_ref().map(|i| CommandInput {
+                hint: i
+                    .hint
+                    .as_deref()
+                    .map(|h| bounded_text(h, MAX_COMMAND_TEXT_BYTES)),
+            }),
+        })
+        .collect()
+}
+
 fn bounded_locations(locations: &[Location]) -> Vec<Location> {
     locations
         .iter()
@@ -978,6 +1072,54 @@ pub fn permission_outcome(option_id: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit M4: plan entries and slash commands are cut at intake; a
+    /// command whose name is too long is dropped (its name would be sent).
+    #[test]
+    fn plans_and_commands_are_byte_bounded() {
+        let entries: Vec<PlanEntry> = (0..300)
+            .map(|i| PlanEntry {
+                content: format!("{i}:{}", "p".repeat(10_000)),
+                priority: PlanPriority::Medium,
+                status: PlanStatus::Pending,
+            })
+            .collect();
+        let plan = bounded_plan(&entries);
+        assert_eq!(plan.len(), MAX_PLAN_ENTRIES);
+        assert!(plan[0].content.starts_with("44:"), "the latest stay");
+        assert!(plan
+            .iter()
+            .all(|e| e.content.len() <= MAX_PLAN_ENTRY_BYTES + 20));
+
+        let mut commands: Vec<AvailableCommand> = (0..300)
+            .map(|i| AvailableCommand {
+                name: format!("c{i}"),
+                description: "d".repeat(100_000),
+                input: Some(CommandInput {
+                    hint: Some("h".repeat(100_000)),
+                }),
+            })
+            .collect();
+        commands.insert(
+            0,
+            AvailableCommand {
+                name: "n".repeat(10_000),
+                description: String::new(),
+                input: None,
+            },
+        );
+        let kept = bounded_commands(&commands);
+        assert_eq!(kept.len(), MAX_COMMANDS);
+        assert_eq!(kept[0].name, "c0", "the over-long name is dropped");
+        assert!(kept
+            .iter()
+            .all(|c| c.description.len() <= MAX_COMMAND_TEXT_BYTES + 20));
+        assert!(kept.iter().all(|c| c
+            .input
+            .as_ref()
+            .and_then(|i| i.hint.as_ref())
+            .is_none_or(|h| h.len() <= MAX_COMMAND_TEXT_BYTES + 20)));
+    }
 
     #[test]
     fn fork_params_use_session_id_and_optional_fork_point() {

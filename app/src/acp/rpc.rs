@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
+pub const INVALID_REQUEST: i64 = -32600;
 pub const AUTH_REQUIRED: i64 = -32000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +31,21 @@ pub enum Incoming {
     },
     /// Notification (no id).
     Notification { method: String, params: Value },
+}
+
+/// Longest string id an agent request may carry. The id is kept with the
+/// pending request and written out again (the answer, the per-frame card
+/// bookkeeping), so a megabyte id would be copied every frame (audit M4).
+pub const MAX_REQUEST_ID_BYTES: usize = 256;
+
+/// Whether an agent request's id is one JSON-RPC allows (a number, or a
+/// string) and small enough to keep (see [`MAX_REQUEST_ID_BYTES`]).
+pub fn valid_request_id(id: &Value) -> bool {
+    match id {
+        Value::Number(_) => true,
+        Value::String(s) => s.len() <= MAX_REQUEST_ID_BYTES,
+        _ => false,
+    }
 }
 
 /// Parse one line into a typed message. Missing `params` becomes
