@@ -114,10 +114,12 @@ The screenshots show demo projects with prepared sessions
   (one of your projects, the chat workspace, or a folder you trusted on
   the trust card; a folder you declined stays off whatever Vibe answers),
   and neutralizes any `filter.*` drivers a shipped `.git/config`
-  (zip/tarball) or a user-global
-  one (git-lfs) might define — `git status` would otherwise execute them,
-  and a repo can weaponize a global driver via `.gitattributes` plus
-  repo-local `lfs.*` keys. Fetching is disabled outright
+  (zip/tarball) or a user-global one (git-lfs) might define — `git status`
+  would otherwise execute them, and a repo can weaponize a global driver
+  via `.gitattributes` plus repo-local `lfs.*` keys. `git status` reads a
+  private copy of the repository config, the same bytes the driver check
+  read, so rewriting `.git/config` between the check and the scan has no
+  effect; its work tree is the folder that holds `.git`. Fetching is disabled outright
   (`protocol.allow=never` plus `GIT_ALLOW_PROTOCOL=none`, no lazy fetch, so
   a partial-clone config cannot trigger `core.sshCommand`), repo-scope
   `include.*`/`includeIf.*` and `hook.*` keys (config-defined hooks run even
