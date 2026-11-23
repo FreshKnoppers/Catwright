@@ -1810,13 +1810,13 @@ msgid "Diff preview needs a trusted folder."
 msgstr "L’aperçu de diff nécessite un dossier approuvé."
 
 msgid "{n} more answers not shown – type your own answer instead."
-msgstr "{n} autres réponses non affichées – saisissez plutôt votre propre réponse."
+msgstr "{n} autres réponses non affichées – saisis plutôt ta propre réponse."
 
 msgid "{n} lines – all of them run. Scroll through the box before you allow it."
 msgstr "{n} lignes – toutes sont exécutées. Faites défiler le cadre avant d’autoriser."
 
 msgid "Vibe found {files} here. Instructions, skills and hooks from the project load only after you allow it. Trust only folders whose content you know."
-msgstr "Vibe a trouvé ici {files}. Les instructions, skills et hooks du projet ne sont chargés qu’après votre autorisation. Ne faites confiance qu’aux dossiers dont vous connaissez le contenu."
+msgstr "Vibe a trouvé ici {files}. Les instructions, skills et hooks du projet ne sont chargés qu’après ton autorisation. Ne fais confiance qu’aux dossiers dont tu connais le contenu."
 
 msgid "Script error: the evaluation process could not limit its memory."
 msgstr "Erreur de script : le processus d’évaluation n’a pas pu limiter sa mémoire."
@@ -1856,3 +1856,9 @@ msgstr "fichier trop volumineux"
 
 msgid "{n} more entries of this view not shown."
 msgstr "{n} autres entrées de cette vue non affichées."
+
+msgid "Not opened: the session's folder “{path}” is not one of your projects."
+msgstr "Non ouverte : le dossier de la session « {path} » ne fait pas partie de tes projets."
+
+msgid "“{path}” cannot be a project: it holds your home folder or the whole system."
+msgstr "« {path} » ne peut pas être un projet : il contient ton dossier personnel ou tout le système."

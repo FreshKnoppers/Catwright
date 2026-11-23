@@ -1383,6 +1383,18 @@ pub(crate) fn normalize_lexically(p: &Path) -> PathBuf {
     out
 }
 
+/// A folder small enough to be a workspace: absolute, not the filesystem
+/// root, and not a folder the home folder lies below (`/home`). The home
+/// folder itself is allowed. Canonical paths expected.
+pub(crate) fn bounded_folder(dir: &Path) -> bool {
+    if !dir.is_absolute() || dir.parent().is_none() {
+        return false;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = home.map(|h| h.canonicalize().unwrap_or(h));
+    !home.is_some_and(|h| h != dir && h.starts_with(dir))
+}
+
 /// True when the absolute `path` resolves to a file outside the workspace
 /// `cwd` — an absolute path elsewhere, a symlink, or a `..` that a linked
 /// folder turns into another target. The candidate is canonicalized when it
@@ -1390,8 +1402,16 @@ pub(crate) fn normalize_lexically(p: &Path) -> PathBuf {
 /// not free, so callers that run per frame cache the result (see
 /// [`outside_workspace_cached`]); click-triggered callers may use this
 /// directly.
+///
+/// A workspace that would hold every path — the filesystem root, a folder
+/// above the home folder, or no folder at all — has no inside: every path
+/// counts as outside, so the confirm before opening it always asks
+/// (audit M12/M13).
 pub(crate) fn is_outside_workspace(cwd: &Path, path: &Path) -> bool {
     let root = canonical_cwd(cwd);
+    if !bounded_folder(&root) {
+        return true;
+    }
     let canon = path
         .canonicalize()
         .unwrap_or_else(|_| normalize_lexically(path));
@@ -3301,6 +3321,45 @@ mod tests {
         let _ = std::fs::remove_file(&link);
         assert!(super::resolve_workspace_file(&cwd, "2.5").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Audit M12/M13: a workspace at `/` (a `projects: ["/"]` entry, a
+    /// listed session's `cwd`) held every path, so the outside-workspace
+    /// confirm never asked. Such a root has no inside now.
+    #[test]
+    fn a_workspace_holding_every_path_has_no_inside() {
+        use std::path::Path;
+        assert!(!super::bounded_folder(Path::new("/")));
+        assert!(!super::bounded_folder(Path::new("")));
+        assert!(!super::bounded_folder(Path::new("relative/dir")));
+        assert!(super::bounded_folder(Path::new("/tmp/project")));
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            let home = home.canonicalize().unwrap_or(home);
+            assert!(
+                super::bounded_folder(&home),
+                "the home folder itself is allowed"
+            );
+            if let Some(above) = home.parent().filter(|p| p.parent().is_some()) {
+                assert!(
+                    !super::bounded_folder(above),
+                    "{above:?} holds the home folder"
+                );
+            }
+        }
+        for cwd in ["/", ""] {
+            assert!(super::is_outside_workspace(
+                Path::new(cwd),
+                Path::new("/etc/passwd")
+            ));
+            assert!(super::outside_workspace_cached(
+                Path::new(cwd),
+                Path::new("/tmp/x")
+            ));
+        }
+        assert!(!super::is_outside_workspace(
+            Path::new("/tmp/project"),
+            Path::new("/tmp/project/a.txt")
+        ));
     }
 
     /// A symlink inside the workspace that points outside must not become a

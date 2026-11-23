@@ -1856,3 +1856,9 @@ msgstr "Datei zu groß"
 
 msgid "{n} more entries of this view not shown."
 msgstr "{n} weitere Einträge dieser Ansicht nicht angezeigt."
+
+msgid "Not opened: the session's folder “{path}” is not one of your projects."
+msgstr "Nicht geöffnet: Der Ordner der Session „{path}“ ist keines deiner Projekte."
+
+msgid "“{path}” cannot be a project: it holds your home folder or the whole system."
+msgstr "„{path}“ kann kein Projekt sein: Der Ordner enthält deinen Home-Ordner oder das ganze System."

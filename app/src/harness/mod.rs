@@ -362,6 +362,16 @@ pub enum SessionState {
 
 impl Harness {
     pub fn new(projects: Vec<PathBuf>, start_mode: String) -> Self {
+        // `settings.json` is data on disk: a project holding every path
+        // (`/`, `/home`) would turn the outside-workspace confirm off, so it
+        // is dropped here like `add_project` refuses it (audit M12)
+        let (projects, too_wide): (Vec<PathBuf>, Vec<PathBuf>) = projects
+            .into_iter()
+            .partition(|p| crate::render::bounded_folder(p));
+        let status = too_wide
+            .first()
+            .map(|p| project_too_wide(p))
+            .unwrap_or_default();
         let current_project = projects.first().cloned();
         Self {
             chat_dir: None,
@@ -419,7 +429,7 @@ impl Harness {
             starting_since: None,
             draft: String::new(),
             attachments: Vec::new(),
-            status: String::new(),
+            status,
             // set by the app from store::vibe_skill_installed(); keeping the
             // constructor free of file access keeps tests independent of ~/.vibe
             ui_hint: false,
@@ -1680,6 +1690,12 @@ impl Harness {
         out
     }
 
+    /// Is `dir` one of the user's workspaces: a project or the chat
+    /// workspace?
+    pub fn is_workspace(&self, dir: &Path) -> bool {
+        self.is_chat_dir(dir) || self.projects.iter().any(|p| p == dir)
+    }
+
     /// Is `dir` the chat workspace ("Allgemein")?
     pub fn is_chat_dir(&self, dir: &Path) -> bool {
         self.chat_dir.as_deref() == Some(dir)
@@ -1907,7 +1923,21 @@ impl Harness {
     /// reopened — and `Initialized` opens it once the agent is ready. Until
     /// then its row is selected and the start screen shows the connection
     /// state.
+    ///
+    /// `cwd` must be one of the user's workspaces (or the folder the
+    /// session's view already has): it becomes the session root that
+    /// decides which paths count as inside the workspace, so a folder only
+    /// the agent named (a listed session's `cwd: "/"`) is refused (audit
+    /// M13).
     pub fn open_session(&mut self, cwd: PathBuf, session_id: &str) {
+        let known_view = self.sessions.get(session_id).is_some_and(|v| v.cwd == cwd);
+        if !known_view && !self.is_workspace(&cwd) {
+            self.status = trf(
+                "Not opened: the session's folder “{path}” is not one of your projects.",
+                &[("path", &cwd.display().to_string())],
+            );
+            return;
+        }
         self.artifacts_open = false;
         self.ui.activity_open = false;
         self.unseen.remove(session_id);
@@ -2282,14 +2312,19 @@ impl Harness {
         request_id: Option<Value>,
     ) {
         const MAX: usize = 100;
+        // the folder of a session without a view is the workspace whose
+        // list holds it — not the entry's own `cwd`, which is agent data
+        // and would become the session root on "Open" (audit M13)
         let (cwd, title) = match self.sessions.get(sid) {
             Some(v) => (v.cwd.clone(), v.title.clone().unwrap_or_default()),
             None => self
                 .listed
-                .values()
-                .flatten()
-                .find(|s| s.session_id == sid)
-                .map(|s| (PathBuf::from(&s.cwd), s.title.clone().unwrap_or_default()))
+                .iter()
+                .find_map(|(dir, list)| {
+                    list.iter()
+                        .find(|s| s.session_id == sid)
+                        .map(|s| (dir.clone(), s.title.clone().unwrap_or_default()))
+                })
                 .unwrap_or_default(),
         };
         self.activity.push(ActivityEvent {
@@ -2862,6 +2897,12 @@ impl Harness {
             return false;
         }
         let canon = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+        // a project holding every path would turn the outside-workspace
+        // confirm off (audit M12)
+        if !crate::render::bounded_folder(&canon) {
+            self.status = project_too_wide(&canon);
+            return false;
+        }
         // the chat workspace is pinned already: picking it selects it
         if !self.projects.contains(&canon) && !self.is_chat_dir(&canon) {
             self.projects.push(canon.clone());
@@ -3899,6 +3940,14 @@ pub const DEFAULT_MODE_NAMES: [(&str, &str); 4] = [
 /// are covered. Hiding is display-only: ids are sent unchanged on the
 /// wire, and a session already running in such a mode keeps showing it.
 const HIDDEN_MODE_PREFIX: &str = "claude-delegate";
+
+/// The status line for a project folder refused as too wide.
+fn project_too_wide(dir: &Path) -> String {
+    trf(
+        "“{path}” cannot be a project: it holds your home folder or the whole system.",
+        &[("path", &dir.display().to_string())],
+    )
+}
 
 /// True when a mode may be offered in the app's selection lists
 /// (see `HIDDEN_MODE_PREFIX`).

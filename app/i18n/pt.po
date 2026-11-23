@@ -1856,3 +1856,9 @@ msgstr "ficheiro demasiado grande"
 
 msgid "{n} more entries of this view not shown."
 msgstr "Mais {n} entradas desta vista não exibidas."
+
+msgid "Not opened: the session's folder “{path}” is not one of your projects."
+msgstr "Não aberta: a pasta da sessão “{path}” não é um dos teus projetos."
+
+msgid "“{path}” cannot be a project: it holds your home folder or the whole system."
+msgstr "“{path}” não pode ser um projeto: contém a tua pasta pessoal ou todo o sistema."

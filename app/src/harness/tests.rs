@@ -4914,6 +4914,60 @@ fn trust_answer(h: &mut Harness, dir: &Path, decision: &str, status: &str) {
     });
 }
 
+/// Audit M12: `settings.json` (data on disk) lists `/` as a project. It is
+/// dropped with a note, and picking it is refused like any folder that
+/// holds every path.
+#[test]
+fn a_project_holding_every_path_is_refused() {
+    let (mut h, _agent) = setup(vec![PathBuf::from("/"), PathBuf::from("/w")], "ask");
+    assert_eq!(h.projects, vec![PathBuf::from("/w")]);
+    assert_eq!(h.current_project.as_deref(), Some(Path::new("/w")));
+    assert!(h.status.contains("cannot be a project"), "{}", h.status);
+    h.status.clear();
+    assert!(!h.add_project("/"));
+    assert!(!h.projects.contains(&PathBuf::from("/")));
+    assert!(h.status.contains("cannot be a project"), "{}", h.status);
+    assert!(!h.is_workspace(Path::new("/")));
+}
+
+/// Audit M13: a listed session names `cwd: "/"`. Its feed entry opens it
+/// in the workspace whose list holds it, and a folder that is no
+/// workspace never becomes a session root (where every path would count
+/// as inside the workspace).
+#[test]
+fn a_listed_sessions_own_cwd_never_becomes_the_session_root() {
+    let dir = PathBuf::from("/w");
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    h.handle_event(AcpEvent::SessionsListed {
+        cursor: None,
+        cwd: Some(dir.clone()),
+        result: sessions_listed(json!([{"sessionId": "s9", "cwd": "/", "title": "x"}])),
+    });
+    h.push_activity(ActivityKind::Waiting, "s9", "approve?".to_string(), None);
+    let entry = h.activity.last().unwrap().clone();
+    assert_eq!(entry.cwd, dir);
+
+    // the agent's folder itself: refused, nothing opens or changes
+    h.current_project = Some(dir.clone());
+    h.open_session(PathBuf::from("/"), "s9");
+    assert!(!h.sessions.contains_key("s9"));
+    assert_eq!(h.active, None);
+    assert_eq!(h.current_project.as_deref(), Some(dir.as_path()));
+    assert!(
+        h.status.contains("not one of your projects"),
+        "{}",
+        h.status
+    );
+    // an entry without a known folder (empty path) is refused too
+    h.open_session(PathBuf::new(), "s9");
+    assert!(!h.sessions.contains_key("s9"));
+
+    // the feed's folder is the workspace: it opens there
+    h.open_session(entry.cwd.clone(), "s9");
+    assert_eq!(h.sessions["s9"].cwd, dir);
+    assert_eq!(h.active.as_deref(), Some("s9"));
+}
+
 /// Audit H2: the user clicks "Don't trust", the agent answers "trusted".
 /// The app must neither say so nor run git there — not on the answer and
 /// not on a later session's `_meta` either.
