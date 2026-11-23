@@ -1862,3 +1862,12 @@ msgstr "Não aberta: a pasta da sessão “{path}” não é um dos teus projeto
 
 msgid "“{path}” cannot be a project: it holds your home folder or the whole system."
 msgstr "“{path}” não pode ser um projeto: contém a tua pasta pessoal ou todo o sistema."
+
+msgid "This request contradicts the tool call it names ({fields}). It is unclear which of the two would run: deny it unless you know why."
+msgstr "Este pedido contradiz a chamada de ferramenta que indica ({fields}). Não é claro qual das duas seria executada: recusa-o se não souberes porquê."
+
+msgid "The request itself says:"
+msgstr "O próprio pedido diz:"
+
+msgid "This request contradicts its tool call – open the session to decide."
+msgstr "Este pedido contradiz a sua chamada de ferramenta – abre a sessão para decidir."

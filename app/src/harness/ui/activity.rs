@@ -175,6 +175,23 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 ui.horizontal(|ui| {
                     if let (Some(rid), Some(v)) = (&e.request_id, h.sessions.get(&e.sid)) {
                         if let Some(p) = v.permissions.iter().find(|p| &p.request_id == rid) {
+                            // a request that contradicts its tool call is
+                            // decided on its card, where both are shown
+                            // (audit M2), not from a one-line feed entry
+                            let contradicts = v.tool_for_permission(p).is_some_and(|t| {
+                                !super::cards::request_contradictions(&p.request.tool_call, t)
+                                    .is_empty()
+                            });
+                            if contradicts {
+                                ui.label(
+                                    RichText::new(tr(
+                                        "This request contradicts its tool call – open the session to decide.",
+                                    ))
+                                    .size(12.0)
+                                    .color(theme::RED),
+                                );
+                                return;
+                            }
                             let shown = p
                                 .request
                                 .options

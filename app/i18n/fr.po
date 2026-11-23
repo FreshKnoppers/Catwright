@@ -1862,3 +1862,12 @@ msgstr "Non ouverte : le dossier de la session « {path} » ne fait pas partie d
 
 msgid "“{path}” cannot be a project: it holds your home folder or the whole system."
 msgstr "« {path} » ne peut pas être un projet : il contient ton dossier personnel ou tout le système."
+
+msgid "This request contradicts the tool call it names ({fields}). It is unclear which of the two would run: deny it unless you know why."
+msgstr "Cette demande contredit l’appel d’outil qu’elle désigne ({fields}). On ne sait pas lequel des deux s’exécuterait : refuse-la si tu n’en connais pas la raison."
+
+msgid "The request itself says:"
+msgstr "La demande elle-même indique :"
+
+msgid "This request contradicts its tool call – open the session to decide."
+msgstr "Cette demande contredit son appel d’outil – ouvre la session pour décider."
