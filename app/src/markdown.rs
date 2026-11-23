@@ -1002,25 +1002,39 @@ mod inline_reference {
         }
     }
 
-    /// Worst cases of the old parser stay fast: 256 KiB lines of a single
-    /// marker, or of unmatched backtick runs of growing length.
+    /// Worst cases of the old parser stay linear: lines of a single marker,
+    /// or of unmatched backtick runs of growing length. Machine speed does
+    /// not matter (a fixed time limit failed on the slower CI runner): four
+    /// times the input may take at most eight times as long — linear work
+    /// takes four, the old quadratic parser sixteen. Each size counts its
+    /// fastest of three parses, so load from other tests does not decide.
     #[test]
     fn marker_floods_parse_in_linear_time() {
-        let runs: String = (1..700).map(|n| "`".repeat(n) + " ").collect();
-        for flood in [
-            "[".repeat(1 << 18),
-            "*a".repeat(1 << 17),
-            "**x".repeat(1 << 16),
-            runs,
-        ] {
-            let t = std::time::Instant::now();
-            let parsed = super::parse_inline(&flood);
-            assert!(!parsed.is_empty());
-            // generous for debug builds; the old parser took minutes here
+        fn fastest(input: &str) -> std::time::Duration {
+            (0..3)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    assert!(!super::parse_inline(input).is_empty());
+                    t.elapsed()
+                })
+                .min()
+                .unwrap()
+        }
+        let runs = |k: usize| -> String { (1..k).map(|n| "`".repeat(n) + " ").collect() };
+        let floods: [(String, String); 4] = [
+            ("[".repeat(1 << 14), "[".repeat(1 << 16)),
+            ("*a".repeat(1 << 13), "*a".repeat(1 << 15)),
+            ("**x".repeat(1 << 12), "**x".repeat(1 << 14)),
+            // backtick runs: twice the runs is four times the text
+            (runs(350), runs(700)),
+        ];
+        for (small, big) in &floods {
+            let (t_small, t_big) = (fastest(small), fastest(big));
             assert!(
-                t.elapsed() < std::time::Duration::from_secs(2),
-                "{:?}",
-                t.elapsed()
+                t_big <= t_small * 8 + std::time::Duration::from_millis(20),
+                "{} bytes: {t_small:?}, {} bytes: {t_big:?}",
+                small.len(),
+                big.len()
             );
         }
     }
