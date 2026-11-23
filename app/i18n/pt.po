@@ -1980,3 +1980,6 @@ msgstr "Além disso, a saída de cada ferramenta aberta enquanto o Vibe trabalha
 
 msgid "Waiting behind other approvals of this session – they come first."
 msgstr "À espera atrás de outras aprovações desta sessão – essas vêm primeiro."
+
+msgid "{error} – nothing is read from or saved to it in this run."
+msgstr "{error} – nesta execução nada é lido nem guardado aí."

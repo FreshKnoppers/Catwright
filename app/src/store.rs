@@ -12,9 +12,27 @@ pub fn config_dir() -> Option<PathBuf> {
         .map(|d| d.config_dir().to_path_buf())
 }
 
+/// The config folder, only while it is ours and private (audit M11): the
+/// startup check ([`ensure_config_dir_private`]) passed, and the folder is
+/// still a real directory with no group/other access — not a symlink
+/// planted since. Everything the app reads from or writes into the folder
+/// (settings, the chat workspace, worktree checkouts, the instance lock)
+/// goes through this; when it says `None`, nothing is read or saved there.
+pub fn private_config_dir() -> Option<PathBuf> {
+    let dir = config_dir()?;
+    (ensure_config_dir_private().is_ok() && still_private(&dir)).then_some(dir)
+}
+
+/// Whether `dir` is (still) a real directory without group/other access.
+/// `symlink_metadata`: a symlink is never followed.
+fn still_private(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && m.mode() & 0o077 == 0)
+}
+
 /// The folder of the sessions without a project ("General").
 pub fn chat_workspace_dir() -> Option<PathBuf> {
-    Some(config_dir()?.join("chat-workspace"))
+    Some(private_config_dir()?.join("chat-workspace"))
 }
 
 /// Write a file atomically: the contents go to a temporary file in the
@@ -114,11 +132,19 @@ fn open_fresh_temp(dir: &Path, name: &str, mode: u32) -> std::io::Result<(std::f
 /// 0700 from the start, and a pre-existing one with loose group/other
 /// access bits is tightened once. Idempotent, and parents keep their
 /// own modes — `~/.config` is not ours.
+///
+/// Checked once per run; the result is kept, so a failure stays a failure
+/// (see [`private_config_dir`]).
 pub fn ensure_config_dir_private() -> Result<(), String> {
-    let Some(dir) = config_dir() else {
-        return Err(tr("no config folder").to_string());
-    };
-    ensure_private_dir(&dir)
+    static CHECKED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    CHECKED
+        .get_or_init(|| {
+            let Some(dir) = config_dir() else {
+                return Err(tr("no config folder").to_string());
+            };
+            ensure_private_dir(&dir)
+        })
+        .clone()
 }
 
 fn ensure_private_dir(dir: &Path) -> Result<(), String> {
@@ -315,7 +341,7 @@ impl Default for Settings {
 }
 
 pub fn settings_path() -> Option<PathBuf> {
-    Some(config_dir()?.join("settings.json"))
+    Some(private_config_dir()?.join("settings.json"))
 }
 
 /// What [`read_regular_capped`] found.
@@ -465,7 +491,8 @@ pub fn claim_settings() -> bool {
     if LOCK.get().is_some() {
         return true;
     }
-    let Some(dir) = config_dir() else {
+    // no private config folder: nothing is saved there anyway
+    let Some(dir) = private_config_dir() else {
         return true;
     };
     match try_claim_at(&dir.join(".instance.lock")) {
@@ -1038,6 +1065,30 @@ mod tests {
         );
         // the planted symlink was left alone (its name was not taken over)
         assert!(planted.is_symlink());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Audit M11: a config folder loosened or swapped for a symlink after
+    /// the startup check is not used any more.
+    #[test]
+    fn a_config_folder_that_is_no_longer_private_is_not_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("cw-still-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("cfg");
+        super::ensure_private_dir(&dir).unwrap();
+        assert!(super::still_private(&dir));
+        // loosened after the startup check
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!super::still_private(&dir));
+        // swapped for a symlink to a private folder
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let other = base.join("other");
+        super::ensure_private_dir(&other).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(!super::still_private(&link));
+        assert!(!super::still_private(&base.join("missing")));
         let _ = std::fs::remove_dir_all(&base);
     }
 

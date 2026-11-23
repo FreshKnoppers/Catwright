@@ -1446,7 +1446,8 @@ impl Harness {
             self.status = tr("No project open.").to_string();
             return;
         };
-        let Some(base) = crate::store::config_dir() else {
+        // checkouts land under the config folder: only while it is private
+        let Some(base) = crate::store::private_config_dir() else {
             self.status = tr("No config folder found.").to_string();
             return;
         };

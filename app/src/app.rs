@@ -94,7 +94,11 @@ impl App {
         if let Some(msg) = settings_error {
             harness.status = msg;
         } else if let Some(msg) = privacy_error {
-            harness.status = msg;
+            // the folder is not used at all then (store::private_config_dir)
+            harness.status = crate::i18n::trf(
+                "{error} – nothing is read from or saved to it in this run.",
+                &[("error", &msg)],
+            );
         } else if !owns_settings && screenshot_path.is_none() {
             // two windows would overwrite each other's settings.json
             harness.status = crate::i18n::tr(
