@@ -194,7 +194,7 @@ pub(crate) fn apply(h: &mut Harness, action: Action, out: &mut HarnessAction) {
             h.folder_picker = Some(dialogs::FolderPicker::new(picker_start(h)));
         }
         Action::Command(name) => {
-            h.draft = format!("/{name} ");
+            h.draft = with_command(&h.draft, &name);
             h.ui.focus_composer = true;
         }
     }
@@ -359,6 +359,17 @@ pub(super) fn show(h: &mut Harness, ctx: &egui::Context, out: &mut HarnessAction
     h.ui.palette = Some(state);
 }
 
+/// The draft with `/{name} ` in front: a half-written message stays as the
+/// command's text instead of being replaced (audit M14), and a command the
+/// draft already starts with is swapped for the new one.
+fn with_command(draft: &str, name: &str) -> String {
+    let rest = match draft.strip_prefix('/') {
+        Some(r) => r.split_once(char::is_whitespace).map_or("", |(_, t)| t),
+        None => draft,
+    };
+    format!("/{name} {}", rest.trim_start())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +409,21 @@ mod tests {
         frame(&mut h, &ctx, Vec::new());
         let state = h.ui.palette.as_ref().expect("still open");
         assert!(!state.scroll_to_selected, "no new request without a key");
+    }
+
+    /// Audit M14: picking a command from the palette keeps a half-written
+    /// message as the command's text instead of replacing it.
+    #[test]
+    fn a_picked_command_keeps_the_draft() {
+        assert_eq!(with_command("", "compact"), "/compact ");
+        assert_eq!(
+            with_command("fix the tests", "compact"),
+            "/compact fix the tests"
+        );
+        assert_eq!(
+            with_command("/review src/a.rs", "compact"),
+            "/compact src/a.rs"
+        );
+        assert_eq!(with_command("/rev", "review"), "/review ");
     }
 }
