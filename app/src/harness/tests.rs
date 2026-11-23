@@ -2553,6 +2553,52 @@ fn cancel_answers_questions_without_a_live_view() {
     assert_eq!(msg["params"]["sessionId"], json!("s1"));
 }
 
+/// An approval for a session without a view (a subagent) shows what the
+/// request names — there is no tool call to join — or says that Vibe sent
+/// no details; it never offers a blind "allow". At most three show at once.
+#[test]
+fn an_orphan_approval_shows_what_it_would_allow() {
+    let dir = std::env::temp_dir();
+    let (mut h, mut agent) = setup(vec![dir.clone()], "ask");
+    create_session(&mut h, &mut agent, &dir, "s1");
+    h.active = Some("s1".to_string());
+    let mut req = permission_request_saying(json!({"title": "Run command",
+        "rawInput": {"command": "rm -rf build", "cwd": "/w"}}));
+    req.session_id = "child-1".to_string();
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(7),
+        request: req,
+    });
+    let tall = egui::vec2(1440.0, 4000.0);
+    let all = render_frames_sized(&mut h, 8, tall)
+        .pop()
+        .unwrap()
+        .join("\n");
+    assert!(all.contains("child-1"), "{all}");
+    assert!(
+        all.contains("rm -rf build"),
+        "the request's arguments:\n{all}"
+    );
+    assert!(all.contains("cwd"), "{all}");
+    for n in 0..4 {
+        h.handle_event(AcpEvent::PermissionRequested {
+            request_id: json!(10 + n),
+            request: permission_request("child-2"),
+        });
+    }
+    let texts = render_frames_sized(&mut h, 8, tall).pop().unwrap();
+    let all = texts.join("\n");
+    assert!(all.contains("Vibe sent no details"), "{all}");
+    assert!(all.contains("3 of 5 approvals shown"), "{all}");
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|t| t.contains("APPROVAL REQUIRED"))
+            .count(),
+        3
+    );
+}
+
 /// Handoff 2.2: a permission request for a session the harness does
 /// not know (a subagent `child-…` id, or a race right after a
 /// reconnect) must never be silently dropped: the turn blocks until
@@ -6006,6 +6052,20 @@ fn safety_ui_screenshots() {
         });
     }
     shot(&mut h, "29-approvals-waiting");
+    for n in 2..8 {
+        h.answer_permission("s1", &json!(n), "reject_once");
+    }
+
+    // 10) an approval of a session without a view (a subagent): what the
+    //     request names, never a blind allow
+    let mut req = permission_request_saying(json!({"title": "Run command",
+        "rawInput": {"command": "cargo test", "cwd": "/w"}}));
+    req.session_id = "child-4f2c".to_string();
+    h.handle_event(AcpEvent::PermissionRequested {
+        request_id: json!(40),
+        request: req,
+    });
+    shot(&mut h, "30-orphan-approval");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

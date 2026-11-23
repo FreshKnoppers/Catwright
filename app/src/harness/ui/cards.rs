@@ -836,7 +836,20 @@ fn orphan_cards(h: &mut Harness, ui: &mut egui::Ui) {
     }
     let mut answers: Vec<(Value, String)> = Vec::new();
     let mut cancels: Vec<Value> = Vec::new();
-    for p in &h.orphan_permissions {
+    // the same few-at-a-time rule as a session's cards (audit M4)
+    let total = h.orphan_permissions.len();
+    if total > MAX_SHOWN_PERMISSIONS {
+        ui.label(
+            RichText::new(trf(
+                "{shown} of {total} approvals shown – the others follow once these are answered.",
+                &[("shown", &MAX_SHOWN_PERMISSIONS), ("total", &total)],
+            ))
+            .size(12.5)
+            .color(theme::AMBER),
+        );
+        ui.add_space(4.0);
+    }
+    for p in h.orphan_permissions.iter().take(MAX_SHOWN_PERMISSIONS) {
         widgets::attention_card(ui, theme::YELLOW, |ui| {
             ui.set_width(ui.available_width());
             theme::section_header(ui, tr("Approval required"), true);
@@ -848,10 +861,18 @@ fn orphan_cards(h: &mut Harness, ui: &mut egui::Ui) {
                 .color(theme::MUTED),
             );
             ui.label(
-                RichText::new(&p.request.session_id)
+                RichText::new(extras::visible_controls(&p.request.session_id).as_ref())
                     .monospace()
                     .size(12.0)
                     .color(theme::DIM),
+            );
+            // what the request itself names: no session means no tool call
+            // to join, but the card must not offer a blind approval
+            ui.add_space(2.0);
+            unknown_call(
+                ui,
+                egui::Id::new(("orphan_permission", p.request_id.to_string())),
+                &p.request.tool_call,
             );
             ui.add_space(4.0);
             option_row(ui, p, false, &mut answers);
