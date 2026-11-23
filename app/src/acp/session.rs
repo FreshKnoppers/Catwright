@@ -8,6 +8,7 @@
 use crate::acp::protocol::*;
 use crate::i18n::{fill, tr};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -97,12 +98,18 @@ pub enum SubagentState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentInfo {
     pub tool_call_id: String,
+    /// The subagent's own name (`subagent_name`), not Vibe's tool title.
     pub name: String,
-    pub agent: String,
+    /// The agent type Vibe started it as (`agent` in `_meta` or `rawInput`,
+    /// e.g. "generic"); `None` when Vibe sent none.
+    pub agent: Option<String>,
     pub task: String,
     pub state: SubagentState,
     pub child_session_id: Option<String>,
     pub turns: Option<u64>,
+    /// Client-side arrival of the spawn (epoch seconds, 0 = unknown, e.g.
+    /// loaded from history): the basis of a running subagent's elapsed time.
+    pub started: u64,
 }
 
 /// True for the tool call that starts a subagent (`agents.spawn`).
@@ -144,6 +151,18 @@ fn is_wait_call(tc: &ToolCall) -> bool {
     tool_name(tc) == Some("self.wait")
 }
 
+/// The title to show for a tool call. Vibe titles the parent's wait
+/// (`self.wait`) "Waiting for input", which reads as if the user had to act;
+/// in a session with subagents it waits for them, so it says so. Without
+/// subagents the wait keeps Vibe's title (it may wait for other input).
+pub fn tool_title(tc: &ToolCall, has_subagents: bool) -> Cow<'_, str> {
+    if has_subagents && is_wait_call(tc) {
+        Cow::Borrowed(tr("Waiting for subagents"))
+    } else {
+        Cow::Borrowed(tc.title.as_str())
+    }
+}
+
 /// A `self.wait` that ended because its timeout ran out: nobody delivered.
 fn wait_timed_out(tc: &ToolCall) -> bool {
     tc.raw_output
@@ -162,6 +181,23 @@ fn spawn_agent_name(tc: &ToolCall) -> Option<&str> {
         .get("mistral.vibe.subagent")?
         .get("agentName")?
         .as_str()
+}
+
+/// The name to show for a subagent: the name Vibe gave it
+/// (`spawn_agent_name`, once the spawn completed) or else the name inside
+/// the spawn's title. Vibe titles the spawn "Starting <name>" (docs/acp.md,
+/// "Subagents") and keeps that title after the child finished, so a card
+/// would say "Starting reader" next to "Done". A title in another shape is
+/// shown as it is.
+pub fn subagent_name(tc: &ToolCall) -> String {
+    if let Some(name) = spawn_agent_name(tc).filter(|n| !n.trim().is_empty()) {
+        return name.to_string();
+    }
+    tc.title
+        .strip_prefix("Starting ")
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or(&tc.title)
+        .to_string()
 }
 
 /// `(name, status)` of every subagent a completed `agents.list` call
@@ -835,6 +871,11 @@ impl SessionView {
     /// were still unfinished when a turn ended cancelled — frozen in
     /// `cancelled_tools` at that moment, so it survives the next
     /// `begin_turn` (N5).
+    /// True once the session started a subagent (`agents.spawn`).
+    pub fn has_subagents(&self) -> bool {
+        self.tool_calls.values().any(is_subagent)
+    }
+
     pub fn subagents(&self) -> Vec<SubagentInfo> {
         let reported = self.reported_subagent_states();
         let mut out = Vec::new();
@@ -872,8 +913,8 @@ impl SessionView {
             };
             out.push(SubagentInfo {
                 tool_call_id: tc.tool_call_id.clone(),
-                name: tc.title.clone(),
-                agent: meta_or_input_str(tc, "agent").unwrap_or_else(|| "generic".to_string()),
+                name: subagent_name(tc),
+                agent: meta_or_input_str(tc, "agent"),
                 task: meta_or_input_str(tc, "task").unwrap_or_default(),
                 state,
                 child_session_id: meta_or_input_str(tc, "child_session_id"),
@@ -882,6 +923,7 @@ impl SessionView {
                     .as_ref()
                     .and_then(|m| m.get("turn_count"))
                     .and_then(Value::as_u64),
+                started: tc.first_seen,
             });
         }
         out
@@ -2360,8 +2402,9 @@ mod tests {
         let subs = view.subagents();
         assert_eq!(subs.len(), 1, "exactly one subagent");
         let s = &subs[0];
-        assert_eq!(s.name, "Starting reader");
-        assert_eq!(s.agent, "generic");
+        // Vibe's title is "Starting reader"; the card names the subagent
+        assert_eq!(s.name, "reader");
+        assert_eq!(s.agent.as_deref(), Some("generic"));
         assert!(s.task.starts_with("Lies README.md"), "task = {}", s.task);
         assert!(s
             .child_session_id
@@ -2590,6 +2633,67 @@ mod tests {
 
     fn states(view: &SessionView) -> Vec<SubagentState> {
         view.subagents().into_iter().map(|a| a.state).collect()
+    }
+
+    /// The card names a subagent by the name Vibe gave it, not by the
+    /// spawn's "Starting <name>" title, which stays after the child is done.
+    #[test]
+    fn subagent_name_prefers_the_agent_name_over_the_title() {
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&named_spawn("sp-a", "i18n-fr"));
+        assert_eq!(view.subagents()[0].name, "i18n-fr");
+
+        // without the name in rawOutput (Vibe 3.1.0, still running): the
+        // name inside the title; a title in another shape stays as it is
+        let tc = |title: &str| -> ToolCall {
+            serde_json::from_value(json!({"toolCallId": "x", "title": title})).unwrap()
+        };
+        assert_eq!(subagent_name(&tc("Starting reader")), "reader");
+        assert_eq!(subagent_name(&tc("Starting ")), "Starting ");
+        assert_eq!(subagent_name(&tc("Lies die README")), "Lies die README");
+    }
+
+    /// Without an agent type from Vibe the subagent has none: the card
+    /// must not claim "generic" on its own.
+    #[test]
+    fn subagent_without_agent_type_has_none() {
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(
+            &serde_json::from_value(json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "sp-x",
+                "title": "Starting reader",
+                "kind": "think",
+                "status": "in_progress",
+                "rawInput": {"task": "read"},
+                "_meta": {"tool_name": "agents.spawn", "effect_kind": "subagent"},
+            }))
+            .unwrap(),
+        );
+        assert_eq!(view.subagents()[0].agent, None);
+    }
+
+    /// Vibe's "Waiting for input" reads as a call to the user; with
+    /// subagents in the session the wait is shown as waiting for them.
+    #[test]
+    fn wait_call_is_titled_after_the_subagents() {
+        let mut view = SessionView::new("s", "/tmp");
+        view.begin_turn();
+        view.apply_update(&wait_update("in_progress"));
+        let wait = view.tool_calls.get("wait-1").unwrap().clone();
+        assert!(!view.has_subagents());
+        assert_eq!(tool_title(&wait, view.has_subagents()), "Waiting for input");
+        view.apply_update(&named_spawn("sp-a", "reader"));
+        assert!(view.has_subagents());
+        assert_eq!(
+            tool_title(&wait, view.has_subagents()),
+            "Waiting for subagents"
+        );
+        // any other call keeps its title
+        let spawn = view.tool_calls.get("sp-a").unwrap();
+        assert_eq!(tool_title(spawn, true), "Starting reader");
     }
 
     /// Seen in a real session (2026-11-19): four subagents, the parent's

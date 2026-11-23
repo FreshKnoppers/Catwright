@@ -3,14 +3,228 @@
 Release notes per version. The release workflow publishes the section of a
 tag (`## v0.2.0`) as that release's description.
 
-## Unreleased
+## v0.7.1
 
-- Security hardening: the preview pane and the artifacts view resolve the
-  opened path canonically and show an "Outside the workspace" badge when it
-  lies outside the session's workspace (an absolute path elsewhere, a
-  symlink or a `..`); file chips in answers no longer resolve through
-  symlinks that point outside the workspace. The containment check is
-  cached per path, so rendering stays cheap.
+**Download:** `catwright-v0.7.1-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.7.1-x86_64-linux.tar.gz
+cd catwright-v0.7.1-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.7.1-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.7.1-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
+- Answers with charts and calculators: the bars of a bar chart start at
+  the same place (before, each bar began right after its label), its
+  values no longer show float noise or run out of the card, a pie sits on
+  the middle of its legend, sliders have a square handle, and a button
+  inside columns keeps its size instead of stretching across.
+- Charts in answers are calmer: pie slices use the same hues a step darker
+  (amber, yellow, green and teal glared as large areas), in an order checked
+  for colour-blind and normal vision. Vibe can now mark what an element
+  means with `tone` (good, bad, warning, neutral) instead of costs landing
+  in alarm red by position. The catwright-ui skill describes it: reinstall
+  it under Settings → Vibe, the installed copy counts as outdated.
+
+## v0.7.0
+
+**Download:** `catwright-v0.7.0-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.7.0-x86_64-linux.tar.gz
+cd catwright-v0.7.0-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.7.0-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.7.0-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
+- Catwright now checks the Vibe version it connects to. With a Vibe older
+  or newer than the tested range (3.1.0 to 3.1.3) it says so once, shows
+  the version in yellow in the sidebar (the tooltip explains it) and on the
+  Vibe settings page, instead of letting a feature fail silently.
+- A repository git is kept out of (its own config has `include`,
+  `includeIf` or `hook` entries, or could not be checked safely) is named
+  in the header ("Git off for this repository") and in the environment
+  card, instead of the git info just disappearing. Its diff preview says
+  so instead of showing the whole file as new.
+- Calmer accent: the composer no longer wears a permanent orange ring
+  (the send button carries the orange once there is text), the Code/Diff
+  switch of the preview is a segmented control instead of an orange
+  button, selected text gets a translucent orange, and inline code in
+  answers uses a calm tint on a quiet box instead of peach (the box shows
+  where a command ends). While an approval or a
+  question waits, "Send to Vibe" steps back to a secondary button, so the
+  approval is the one orange button on screen.
+- The header calls git's count "N uncommitted" and the side panel's card
+  "Session changes" (Vibe's edits in this session), so "4 changed" next to
+  "Changes · 2 files" no longer looks like a contradiction.
+- Subagent cards show the subagent's name instead of Vibe's "Starting
+  <name>" title, which stayed after the subagent was done, and how long a
+  running subagent has been at it. The agent type is shown only when it is
+  not Vibe's usual "generic", and no longer made up when Vibe sends none.
+- In a session with subagents, Vibe's wait call shows as "Waiting for
+  subagents" instead of "Waiting for input", which read as if Catwright
+  waited for you.
+- The activity feed shows what a waiting approval would allow (command,
+  all arguments, the diff of an edit) above its buttons, like the pinned
+  card; the buttons look like the card's.
+- The diff preview shows line numbers, keeps long lines whole (scroll
+  sideways) and draws added and removed lines as continuous bands; the file
+  name is no longer repeated as its path when the file sits in the
+  workspace root.
+- Columns of numbers in tables align right.
+- Routines read "Mondays at 09:00" or "daily at 08:30" instead of a cron
+  expression (unusual expressions stay as they are); "Delete all" is a red
+  button now.
+- Error notes read "Vibe error: rate limited (-31001). Open approvals were
+  discarded …" instead of running Vibe's message into the next sentence.
+- The quota meter in the sidebar is labelled ("Quota 12.0 %"), the input
+  field of a started session says "Reply to Vibe …", an unfolded round's
+  row says "Fold round" instead of repeating the message right below it,
+  and the activity feed has a proper title.
+- The start screen shows what the sidebar does not: sessions that wait
+  for you (with the command of their approval), new results of this run
+  with their first line, the session to continue and the project's git
+  state. The recent list follows only while nothing waits and nothing is
+  new. Heading and project picker share one size and line; the input
+  field's placeholder names `@` and `/`.
+- The side panel has flat sections with hairlines instead of boxes in a
+  box; folded sections show a summary. The context meter no longer
+  overstates a small fill (4 % lit three blocks), and "Compact context"
+  appears from 50 % on.
+- Charts get round axis values (0 / 50 / 100 instead of 0 / 167), lines
+  with many points no longer look beaded, and cards and charts share one
+  title style; computed values are no longer orange.
+- Diff comments line up with the code, with even gaps in the comment
+  editor.
+- The fork button has its own icon instead of one that looked like the git
+  branch mark.
+- Settings → General shows the transcript detail levels as four cards that
+  say what each level shows while Vibe works, with a small picture of how
+  much is open, instead of a list of four names.
+- Performance: the preview pane and the Artefakte view lay out only the
+  visible code rows per frame and cache the syntax highlighting per file
+  version, so a large file no longer costs 50–150 ms per frame; the CSV
+  preview caches its parsed table instead of re-parsing every cell each
+  frame, and a running subagent's bar animates at 40 fps instead of the
+  full refresh rate.
+- The sidebar builds its session rows from references instead of cloning
+  the whole session list per project on every frame (microseconds up to
+  about 0.5 ms per frame with very many sessions).
+- Better contrast: Primary buttons and the send button use dark text on
+  orange (5.6:1 instead of 3.4:1), tertiary text and the orange numbers are
+  a little lighter (now at least 4.5:1).
+- Fixed: the worktree delete dialog's warning that changes could not be
+  checked showed in English in every language.
+- Fixed: the "L12:" line label of review comments had no translation
+  entry.
+
+## v0.6.0
+
+**Security release.** All earlier releases (v0.2.0 to v0.5.1) run git in
+the background in every open project folder, also untrusted ones, without
+protection against the folder's own git configuration: a folder with a
+crafted `.git` directory (for example from a zip or tarball, a shared
+folder, or written by a manipulated agent) could run any command as you
+as soon as it was open in Catwright. A plain `git clone` does not bring a
+repository's config or hooks along. Please update.
+
+**Download:** `catwright-v0.6.0-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.6.0-x86_64-linux.tar.gz
+cd catwright-v0.6.0-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.6.0-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.6.0-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**Security fixes** (seven review rounds against a malicious repository or a
+hostile agent, the git findings verified with proofs of concept against
+git 2.56):
+
+- Git (branch chip, status, worktrees, diff preview) runs only in folders
+  Vibe reports as trusted. In a trusted folder no code from the
+  repository's own git config runs through the app's git calls: filter
+  drivers from every scope are switched off (git-lfs included), the
+  repository's hooks never run, the diff preview reads the old version
+  without textconv, and git never fetches or starts ssh. A repository
+  whose own config has `include`, `includeIf` or `hook` entries, or whose
+  config files are not plain files, gets no git calls at all.
+- Permission cards show every argument of a tool call, not only the
+  command.
+- Buttons and forms in `ui` blocks show what they send and need a second
+  click within 5 seconds.
+- Opening a file outside the session's workspace from a tool row, a diff
+  or an artifact asks first and names the absolute path. The preview pane
+  and the artifacts view show an "Outside the workspace" badge for such
+  files, and file chips in answers no longer resolve through symlinks
+  that point outside the workspace.
+- Limits against floods: a session keeps at most 64 MiB of transcript in
+  memory (the oldest items leave first; Vibe keeps the full history),
+  single texts and tool calls are capped, tables show at most 32 columns
+  and 200 rows, at most 64 live ui-js tools run at once and never block
+  the window, too many open approvals or questions are cancelled instead
+  of piling up, and preview reads are capped and never hang on a FIFO.
+- The config folder is refused if it is a symlink, instead of being
+  followed.
+- Deleting a worktree warns when its changes could not be checked,
+  instead of treating it as clean.
+
+**What you will notice:** in a folder you have not trusted in Vibe the
+header says "Git hidden until the folder is trusted", and there is no
+branch chip, worktree list or diff preview until you trust it. `ui`
+buttons turn amber on the first click ("Click again to send …").
+
+**Known limitations:** worktrees that Catwright creates in a Git LFS
+repository contain LFS pointer files instead of the real content (`git lfs
+pull` inside the worktree fetches it), LFS-tracked files may show as
+modified in the app's git status, and changes inside submodules are not
+shown.
 
 ## v0.5.1
 

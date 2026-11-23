@@ -6,7 +6,8 @@ use crate::acp::protocol::{
     PlanEntry, PlanStatus, ToolCall, ToolCallContent, ToolKind, ToolStatus,
 };
 use crate::acp::session::{
-    diff_stat_cached, round_key, tool_group_summary, tool_groups, Item, Round, SessionView,
+    diff_stat_cached, round_key, tool_group_summary, tool_groups, tool_title, Item, Round,
+    SessionView,
 };
 use crate::diff::{self, LineKind, Segment};
 use crate::harness::state::{CommentEdit, DiffComment, Narration, TurnDiffView, TurnDiffs};
@@ -266,6 +267,7 @@ fn render_items(
     let comments = &mut Comments {
         map: &mut h_ui.diff_comments,
         edit: &mut h_ui.comment_edit,
+        decision_open: has_question || !s.permissions.is_empty(),
     };
     let mut turn_ops: Vec<MessageOp> = Vec::new();
     let mut turn_changes = TurnChanges {
@@ -315,7 +317,7 @@ fn render_items(
                     _ => None,
                 })
                 .find(|c| matches!(c.status, ToolStatus::InProgress | ToolStatus::Pending))
-                .map(|c| c.title.clone())
+                .map(|c| tool_title(c, s.has_subagents()).into_owned())
                 .unwrap_or_default();
             let mut label = tr("Working").to_string();
             if round.tool_calls > 0 {
@@ -517,6 +519,7 @@ fn render_range(
                 ctx.diff_open,
                 ctx.comments,
                 ctx.ops,
+                s.has_subagents(),
             );
             i = g.end;
             continue;
@@ -647,14 +650,22 @@ pub(crate) fn send_comments(h: &mut Harness, key: &str, path: &str) {
 pub(crate) struct Comments<'a> {
     map: &'a mut HashMap<String, Vec<DiffComment>>,
     edit: &'a mut Option<CommentEdit>,
+    /// The session waits for an approval or an answer: that card holds the
+    /// one Primary action on screen, so "Send to Vibe" steps back.
+    decision_open: bool,
 }
 
 impl<'a> Comments<'a> {
     pub(crate) fn new(
         map: &'a mut HashMap<String, Vec<DiffComment>>,
         edit: &'a mut Option<CommentEdit>,
+        decision_open: bool,
     ) -> Self {
-        Self { map, edit }
+        Self {
+            map,
+            edit,
+            decision_open,
+        }
     }
 }
 
@@ -689,6 +700,7 @@ pub(crate) fn thought_key(sid: &str, message_id: Option<&str>, index: usize) -> 
 /// last_update).
 fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
     let now = extras::now_epoch().max(0) as u64;
+    let has_subagents = s.has_subagents();
     indented(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         for it in &s.items[round.range.clone()] {
@@ -726,7 +738,8 @@ fn round_detail(ui: &mut egui::Ui, s: &SessionView, round: &Round) {
                     .duration_secs(now)
                     .map(extras::human_duration)
                     .unwrap_or_else(|| "–".to_string());
-                let g = line_galley(ui, &call.title, mono(12.0), theme::MUTED, r.width() - 200.0);
+                let title = tool_title(call, has_subagents);
+                let g = line_galley(ui, &title, mono(12.0), theme::MUTED, r.width() - 200.0);
                 paint_line(ui, r.left() + 30.0, r.center().y, g);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(dur).monospace().size(10.5).color(theme::DIM));
@@ -783,7 +796,11 @@ fn round_summary(
             _ => None,
         })
         .unwrap_or_default();
-    let label = if title.is_empty() {
+    // unfolded, the user message itself follows right below this row:
+    // the row then names its action instead of repeating the message
+    let label = if expanded {
+        tr("Fold round").to_string()
+    } else if title.is_empty() {
         tr("Round").to_string()
     } else {
         trf("“{title}”", &[("title", &shorten(&title, 90))])
@@ -1345,6 +1362,7 @@ fn tool_group(
     diff_open: &mut HashSet<String>,
     comments: &mut Comments,
     ops: &mut Vec<MessageOp>,
+    has_subagents: bool,
 ) {
     let active = calls
         .iter()
@@ -1367,7 +1385,7 @@ fn tool_group(
             .rect_filled(Rect::from_min_size(marker, vec2(8.0, 8.0)), 0.0, color);
     }
     let summary = match active.filter(|_| busy) {
-        Some(c) => c.title.clone(),
+        Some(c) => tool_title(c, has_subagents).into_owned(),
         None => tool_group_summary(calls),
     };
     let color = if resp.hovered() {
@@ -1409,6 +1427,7 @@ fn tool_group(
                     closed_groups,
                     auto_output,
                     ops,
+                    has_subagents,
                 );
             }
         });
@@ -1428,6 +1447,7 @@ fn tool_row(
     closed_groups: &mut HashSet<String>,
     auto_output: bool,
     ops: &mut Vec<MessageOp>,
+    has_subagents: bool,
 ) {
     let output: Vec<&str> = call
         .content
@@ -1474,9 +1494,10 @@ fn tool_row(
         .first()
         .map(|l| l.path.clone())
         .filter(|_| call.kind != ToolKind::Fetch);
+    let title = tool_title(call, has_subagents);
     let g = line_galley(
         ui,
-        &call.title,
+        &title,
         mono(12.5),
         theme::MUTED,
         rect.width() - if file.is_some() { 78.0 } else { 54.0 },
@@ -1686,29 +1707,38 @@ pub(crate) fn comment_section(
     if n == 0 {
         return;
     }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(26.0);
-        let label = if n == 1 {
-            tr("1 comment on this file").to_string()
-        } else {
-            trf("{n} comments on this file", &[("n", &n.to_string())])
-        };
-        ui.label(RichText::new(label).color(theme::DIM).size(12.0));
-        // while the editor is open the primary action is the editor's own
-        // send; this one stays Secondary so a card never shows two primaries
-        let kind = if comments.edit.is_some() {
-            ButtonKind::Secondary
-        } else {
-            ButtonKind::Primary
-        };
-        if widgets::button(ui, tr("Send to Vibe"), kind).clicked() {
-            ops.push(MessageOp::SendComments {
-                key: key.to_string(),
-                path: path.to_string(),
-            });
-        }
-    });
+    ui.add_space(6.0);
+    let indent = ui
+        .data(|d| d.get_temp::<f32>(egui::Id::new(("diff_text_x", key))))
+        .unwrap_or(26.0);
+    // as tall as the button, so the label sits on its middle
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), 28.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add_space(indent);
+            let label = if n == 1 {
+                tr("1 comment on this file").to_string()
+            } else {
+                trf("{n} comments on this file", &[("n", &n.to_string())])
+            };
+            ui.label(RichText::new(label).color(theme::DIM).size(12.0));
+            // while the editor is open the primary action is the editor's own
+            // send, and while an approval or a question waits that card's; this
+            // one stays Secondary then, so the screen never shows two primaries
+            let kind = if comments.edit.is_some() || comments.decision_open {
+                ButtonKind::Secondary
+            } else {
+                ButtonKind::Primary
+            };
+            if widgets::button(ui, tr("Send to Vibe"), kind).clicked() {
+                ops.push(MessageOp::SendComments {
+                    key: key.to_string(),
+                    path: path.to_string(),
+                });
+            }
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1949,66 +1979,194 @@ pub(crate) fn line_numbers(segments: &[Segment]) -> Vec<Option<usize>> {
         .collect()
 }
 
+/// How `diff_rows` lays out its lines: the transcript wraps long lines in
+/// its narrow column; the preview pane shows line numbers and scrolls
+/// sideways instead, so code keeps its shape.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct DiffLayout {
+    /// Old-side numbers on removed lines, new-side numbers on all others.
+    pub numbers: bool,
+    /// Wrap long lines; without, a row is as wide as the widest line.
+    pub wrap: bool,
+}
+
+impl DiffLayout {
+    pub(crate) const TRANSCRIPT: DiffLayout = DiffLayout {
+        numbers: false,
+        wrap: true,
+    };
+    pub(crate) const PREVIEW: DiffLayout = DiffLayout {
+        numbers: true,
+        wrap: false,
+    };
+}
+
+/// The number shown in front of each segment: the old-side number for a
+/// removed line, the new-side one for every other line, `None` for a folded
+/// block (which advances both sides).
+pub(crate) fn display_numbers(segments: &[Segment]) -> Vec<Option<usize>> {
+    let (mut old, mut new) = (0usize, 0usize);
+    segments
+        .iter()
+        .map(|seg| match seg {
+            Segment::Skipped(n) => {
+                old += n;
+                new += n;
+                None
+            }
+            Segment::Line(l) => match l.kind {
+                LineKind::Removed => {
+                    old += 1;
+                    Some(old)
+                }
+                LineKind::Added => {
+                    new += 1;
+                    Some(new)
+                }
+                LineKind::Same => {
+                    old += 1;
+                    new += 1;
+                    Some(new)
+                }
+            },
+        })
+        .collect()
+}
+
+/// The diff in the transcript's layout (wrapped, no line numbers).
 pub(crate) fn diff_body(
     ui: &mut egui::Ui,
     old: Option<&str>,
     new: &str,
     max_rows: usize,
+    comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+) {
+    diff_rows(ui, old, new, max_rows, comment, DiffLayout::TRANSCRIPT);
+}
+
+/// Where the parts of a diff row start, shared by all rows of one diff.
+#[derive(Clone, Copy)]
+struct DiffGeometry {
+    /// Width of the line-number column (0 without numbers).
+    numbers_w: f32,
+    sign_x: f32,
+    text_x: f32,
+    /// The rows' width when lines do not wrap (the widest line), else
+    /// `None`: as wide as the column.
+    row_w: Option<f32>,
+}
+
+pub(crate) fn diff_rows(
+    ui: &mut egui::Ui,
+    old: Option<&str>,
+    new: &str,
+    max_rows: usize,
     mut comment: Option<(&str, &mut Comments, &mut Vec<MessageOp>)>,
+    layout: DiffLayout,
 ) {
     let segments = diff::folded_cached(old, new);
     let total = segments.len();
     let numbers = line_numbers(&segments);
-    for (seg, line_no) in segments.iter().zip(numbers.iter()).take(max_rows) {
-        match seg {
-            Segment::Skipped(n) => {
-                let n = *n;
-                let (rect, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-                let text = if n == 1 {
-                    tr("··· 1 unchanged line").to_string()
-                } else {
-                    trf("··· {n} unchanged lines", &[("n", &n)])
-                };
-                let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
-                paint_line(ui, rect.left() + 26.0, rect.center().y, g);
-            }
-            Segment::Line(line) => {
-                let line_no = line_no.expect("line_numbers pairs with every segment");
-                // the "+" gutter only on lines that exist on the new side
-                // (never on removed ones)
-                let commented = comment.as_ref().is_some_and(|(key, state, _)| {
-                    state
-                        .map
-                        .get(*key)
-                        .is_some_and(|l| l.iter().any(|c| c.line == line_no))
-                });
-                let gutter = if line.kind == LineKind::Removed {
-                    None
-                } else {
-                    comment
-                        .as_mut()
-                        .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
-                };
-                diff_line(ui, line.kind, &line.text, gutter, commented);
-                // comments and the editor hang directly under their line
-                if let Some((key, state, _ops)) = comment.as_mut() {
-                    line_comments(ui, key, line_no, state);
+    let shown_numbers = display_numbers(&segments);
+    ui.scope(|ui| {
+        // rows touch: an added block is one band, not stripes
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let gutter = if comment.is_some() { 22.0 } else { 0.0 };
+        let numbers_w = if layout.numbers {
+            let widest = shown_numbers.iter().flatten().max().copied().unwrap_or(1);
+            let digits = widest.to_string().len().max(2);
+            let g = line_galley(ui, &"0".repeat(digits), mono(11.0), theme::DIM, 200.0);
+            g.size().x + 10.0
+        } else {
+            0.0
+        };
+        let sign_x = gutter + numbers_w + if layout.numbers { 4.0 } else { 12.0 };
+        let text_x = sign_x + 14.0;
+        let row_w = (!layout.wrap).then(|| {
+            let widest = segments
+                .iter()
+                .take(max_rows)
+                .filter_map(|seg| match seg {
+                    Segment::Line(l) => Some(
+                        ui.fonts(|f| f.layout_no_wrap(l.text.clone(), mono(12.0), theme::TEXT))
+                            .size()
+                            .x,
+                    ),
+                    Segment::Skipped(_) => None,
+                })
+                .fold(0.0_f32, f32::max);
+            (text_x + widest + 12.0).max(ui.available_width())
+        });
+        let geo = DiffGeometry {
+            numbers_w,
+            sign_x,
+            text_x,
+            row_w,
+        };
+        // the comment footer under the diff (comment_section) starts where
+        // the code does
+        if let Some((key, _, _)) = comment.as_ref() {
+            let id = egui::Id::new(("diff_text_x", *key));
+            ui.data_mut(|d| d.insert_temp(id, text_x));
+        }
+        let row_width = |ui: &egui::Ui| geo.row_w.unwrap_or_else(|| ui.available_width());
+        for ((seg, line_no), shown) in segments
+            .iter()
+            .zip(numbers.iter())
+            .zip(shown_numbers.iter())
+            .take(max_rows)
+        {
+            match seg {
+                Segment::Skipped(n) => {
+                    let n = *n;
+                    let (rect, _) =
+                        ui.allocate_exact_size(vec2(row_width(ui), 18.0), Sense::hover());
+                    let text = if n == 1 {
+                        tr("··· 1 unchanged line").to_string()
+                    } else {
+                        trf("··· {n} unchanged lines", &[("n", &n)])
+                    };
+                    let g = line_galley(ui, &text, mono(11.0), theme::DIM, rect.width());
+                    paint_line(ui, rect.left() + geo.sign_x + 14.0, rect.center().y, g);
+                }
+                Segment::Line(line) => {
+                    let line_no = line_no.expect("line_numbers pairs with every segment");
+                    // the "+" gutter only on lines that exist on the new side
+                    // (never on removed ones)
+                    let commented = comment.as_ref().is_some_and(|(key, state, _)| {
+                        state
+                            .map
+                            .get(*key)
+                            .is_some_and(|l| l.iter().any(|c| c.line == line_no))
+                    });
+                    let gutter = if line.kind == LineKind::Removed {
+                        None
+                    } else {
+                        comment
+                            .as_mut()
+                            .map(|(key, _state, ops)| (*key, line_no, &mut **ops))
+                    };
+                    let number = (*shown).filter(|_| layout.numbers);
+                    diff_line(ui, line.kind, &line.text, gutter, commented, number, geo);
+                    // comments and the editor hang directly under their line
+                    if let Some((key, state, _ops)) = comment.as_mut() {
+                        line_comments(ui, key, line_no, state, geo);
+                    }
                 }
             }
         }
-    }
-    if total > max_rows {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-        let g = line_galley(
-            ui,
-            &trf("… {n} more lines", &[("n", &(total - max_rows))]),
-            mono(11.0),
-            theme::DIM,
-            rect.width(),
-        );
-        paint_line(ui, rect.left() + 26.0, rect.center().y, g);
-    }
+        if total > max_rows {
+            let (rect, _) = ui.allocate_exact_size(vec2(row_width(ui), 18.0), Sense::hover());
+            let g = line_galley(
+                ui,
+                &trf("… {n} more lines", &[("n", &(total - max_rows))]),
+                mono(11.0),
+                theme::DIM,
+                rect.width(),
+            );
+            paint_line(ui, rect.left() + geo.sign_x + 14.0, rect.center().y, g);
+        }
+    });
 }
 
 fn diff_line(
@@ -2017,27 +2175,23 @@ fn diff_line(
     text: &str,
     gutter: Option<(&str, usize, &mut Vec<MessageOp>)>,
     commented: bool,
+    number: Option<usize>,
+    geo: DiffGeometry,
 ) {
     let (bg, sign, color) = match kind {
         LineKind::Added => (Some(theme::DIFF_ADD_BG), "+", theme::TEXT),
         LineKind::Removed => (Some(theme::DIFF_DEL_BG), "−", theme::TEXT),
         LineKind::Same => (None, " ", theme::DIM),
     };
-    let commentable = gutter.is_some();
-    // with a comment gutter the sign and text shift right
-    let (sign_x, text_x, text_w) = if commentable {
-        (24.0, 38.0, 48.0)
-    } else {
-        (12.0, 26.0, 34.0)
-    };
-    let width = ui.available_width();
-    let galley = ui.fonts(|f| {
-        f.layout(
+    let width = geo.row_w.unwrap_or_else(|| ui.available_width());
+    let galley = ui.fonts(|f| match geo.row_w {
+        Some(_) => f.layout_no_wrap(text.to_string(), mono(12.0), color),
+        None => f.layout(
             text.to_string(),
             mono(12.0),
             color,
-            (width - text_w).max(40.0),
-        )
+            (width - geo.text_x - 8.0).max(40.0),
+        ),
     });
     let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y.max(17.0)), Sense::hover());
     if let Some(bg) = bg {
@@ -2051,6 +2205,12 @@ fn diff_line(
             theme::YELLOW,
         );
     }
+    if let Some(n) = number {
+        let g = line_galley(ui, &n.to_string(), mono(11.0), theme::DIM, geo.numbers_w);
+        let x = rect.left() + geo.sign_x - 6.0 - g.size().x;
+        ui.painter()
+            .galley(pos2(x, rect.top() + 1.0), g, theme::DIM);
+    }
     let sign_color = match kind {
         LineKind::Added => theme::GREEN,
         LineKind::Removed => theme::RED_TEXT,
@@ -2058,9 +2218,9 @@ fn diff_line(
     };
     let g = line_galley(ui, sign, mono(12.0), sign_color, 12.0);
     ui.painter()
-        .galley(rect.left_top() + vec2(sign_x, 0.0), g, sign_color);
+        .galley(rect.left_top() + vec2(geo.sign_x, 0.0), g, sign_color);
     ui.painter()
-        .galley(rect.left_top() + vec2(text_x, 0.0), galley, color);
+        .galley(rect.left_top() + vec2(geo.text_x, 0.0), galley, color);
     if let Some((key, line, ops)) = gutter {
         let btn = Rect::from_min_size(
             rect.left_top() + vec2(2.0, 1.0),
@@ -2088,51 +2248,90 @@ fn diff_line(
 }
 
 /// The comments of one diff line, hanging directly under it, plus the editor
-/// when this line is being commented.
-fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Comments) {
+/// when this line is being commented. Both line up with the diff: the yellow
+/// edge continues the commented line's edge, text and editor start where
+/// the code does.
+fn line_comments(
+    ui: &mut egui::Ui,
+    key: &str,
+    line_no: usize,
+    comments: &mut Comments,
+    geo: DiffGeometry,
+) {
+    let decision_open = comments.decision_open;
+    // what is visible of the row: a non-wrapping diff can be wider than
+    // the pane, and the editor and the delete button belong in view
+    let visible_w = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left());
+    let row_w = geo.row_w.unwrap_or(visible_w);
     // the editor for this line
     let mut save = false;
     let mut cancel = false;
     if let Some(e) = comments.edit.as_ref() {
         if e.key == key && e.line == line_no {
             let text = comments.edit.as_mut().unwrap();
-            ui.add_space(2.0);
+            ui.add_space(4.0);
+            // the frame's inner margin brings its content to the code; an
+            // outer margin instead of a horizontal row keeps it top-down
+            let indent = (geo.text_x - 8.0).max(0.0);
+            let inner_w = (visible_w - indent - 8.0 - 16.0).max(120.0);
             egui::Frame::none()
+                .outer_margin(egui::Margin {
+                    left: indent,
+                    right: 8.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                })
                 .fill(theme::RAISED)
                 .rounding(egui::Rounding::same(4.0))
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(trf("Comment on line {n}", &[("n", &line_no.to_string())]))
+                    ui.set_width(inner_w);
+                    {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.label(
+                            RichText::new(trf(
+                                "Comment on line {n}",
+                                &[("n", &line_no.to_string())],
+                            ))
                             .color(theme::DIM)
                             .size(12.0),
-                    );
-                    // the input field gets its own visible frame
-                    egui::Frame::none()
-                        .fill(theme::BG)
-                        .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                        .rounding(egui::Rounding::same(2.0))
-                        .inner_margin(egui::Margin::symmetric(6.0, 4.0))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut text.text)
-                                    .frame(false)
-                                    .desired_rows(2)
-                                    .desired_width(f32::INFINITY)
-                                    .hint_text(tr("Your comment …")),
-                            );
+                        );
+                        // the input field gets its own visible frame
+                        egui::Frame::none()
+                            .fill(theme::BG)
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                            .rounding(egui::Rounding::same(2.0))
+                            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut text.text)
+                                        .frame(false)
+                                        .desired_rows(2)
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text(tr("Your comment …")),
+                                );
+                            });
+                        // an open approval or question keeps the one Primary
+                        let kind = if decision_open {
+                            ButtonKind::Secondary
+                        } else {
+                            ButtonKind::Primary
+                        };
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if widgets::button(ui, tr("Comment"), kind).clicked() {
+                                save = true;
+                            }
+                            if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
+                                cancel = true;
+                            }
                         });
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Comment"), ButtonKind::Primary).clicked() {
-                            save = true;
-                        }
-                        if widgets::button(ui, tr("Cancel"), ButtonKind::Secondary).clicked() {
-                            cancel = true;
-                        }
-                    });
+                    }
                 });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
         }
     }
     if save {
@@ -2158,31 +2357,46 @@ fn line_comments(ui: &mut egui::Ui, key: &str, line_no: usize, comments: &mut Co
         .map(|l| l.iter().filter(|c| c.line == line_no).cloned().collect())
         .unwrap_or_default();
     for c in &list {
-        ui.horizontal(|ui| {
-            ui.add_space(26.0);
-            // yellow edge like the commented line above
-            let (rect, _) = ui.allocate_exact_size(vec2(3.0, 18.0), Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, theme::YELLOW);
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(trf(
+        // one row per comment: a quiet inset under its line, the text
+        // wrapped to what is visible, the delete button at its right end
+        let text_w = (visible_w - geo.text_x - 34.0).max(60.0);
+        let galley = ui.fonts(|f| {
+            f.layout(
+                trf(
                     "L{line}: {text}",
                     &[("line", &c.line.to_string()), ("text", &c.text)],
-                ))
-                .color(theme::TEXT)
-                .size(12.5),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0))
-                    .clicked()
-                {
-                    if let Some(v) = comments.map.get_mut(key) {
-                        v.retain(|x| x != c);
-                    }
-                }
-            });
+                ),
+                widgets::font(12.5),
+                theme::TEXT,
+                text_w,
+            )
         });
+        let height = (galley.size().y + 10.0).max(24.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(row_w, height), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, theme::HOVER);
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+            0.0,
+            theme::YELLOW,
+        );
+        let text_pos = pos2(
+            rect.left() + geo.text_x,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(text_pos, galley, theme::TEXT);
+        let right = rect.left() + visible_w;
+        let btn = Rect::from_min_size(pos2(right - 26.0, rect.center().y - 10.0), vec2(20.0, 20.0));
+        if widgets::place(
+            ui,
+            btn,
+            IconButton::new(Icon::Trash, tr("Delete comment")).side(20.0),
+        )
+        .clicked()
+        {
+            if let Some(v) = comments.map.get_mut(key) {
+                v.retain(|x| x != c);
+            }
+        }
     }
 }
 
@@ -2327,6 +2541,38 @@ mod tests {
             .map(|(_, n)| *n)
             .expect("there is an added line");
         assert_eq!(added, Some(40), "the line after the fold keeps its number");
+    }
+
+    #[test]
+    fn display_numbers_use_the_old_side_for_removed_lines() {
+        let old = "a\nb\nc\n";
+        let new = "a\nB\nc\nd\n";
+        let segments = super::diff::folded_cached(Some(old), new);
+        let shown: Vec<(super::LineKind, usize)> = segments
+            .iter()
+            .zip(super::display_numbers(&segments))
+            .filter_map(|(seg, n)| match seg {
+                super::Segment::Line(l) => Some((l.kind, n.unwrap())),
+                super::Segment::Skipped(_) => None,
+            })
+            .collect();
+        use super::LineKind::*;
+        assert_eq!(
+            shown,
+            [(Same, 1), (Removed, 2), (Added, 2), (Same, 3), (Added, 4)],
+            "{shown:?}"
+        );
+        // after a folded block both sides go on with their real numbers
+        let old: String = (0..40).map(|i| format!("l{i}\n")).collect();
+        let new = old.replace("l39\n", "changed\n");
+        let segments = super::diff::folded_cached(Some(&old), &new);
+        let numbers = super::display_numbers(&segments);
+        let last_two: Vec<Option<usize>> = numbers.iter().rev().take(2).rev().copied().collect();
+        assert_eq!(
+            last_two,
+            [Some(40), Some(40)],
+            "removed old 40, added new 40"
+        );
     }
 
     #[test]

@@ -310,6 +310,23 @@ pub fn file_name(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh folder per test run: a fixed name in the shared temp folder
+    /// is left behind owned by whoever ran first, and a later run as
+    /// another user (root in a container, then a normal user) cannot write
+    /// into it.
+    fn test_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "vibe-artifacts-test-{tag}-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
     use crate::acp::protocol::{ToolCall, ToolCallContent, ToolStatus};
     use crate::acp::session::{Item, SessionView};
     use serde_json::json;
@@ -364,8 +381,7 @@ mod tests {
 
     #[test]
     fn collect_dedupes_groups_and_skips_unfinished() {
-        let tmp = std::env::temp_dir().join("vibe-artifacts-test-a");
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = test_dir("a");
         let existing = tmp.join("gibt_es.md");
         std::fs::write(&existing, "# Hallo\n").unwrap();
         let existing_str = existing.to_string_lossy().into_owned();
@@ -418,12 +434,12 @@ mod tests {
         let mut again = again;
         again.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(got, again);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn preview_caps_and_missing() {
-        let tmp = std::env::temp_dir().join("vibe-artifacts-test-b");
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = test_dir("b");
         let small = tmp.join("small.txt");
         std::fs::write(&small, "inhalt").unwrap();
         assert_eq!(
@@ -452,12 +468,12 @@ mod tests {
             load_preview(&small.to_string_lossy(), ArtifactKind::Image),
             Preview::Image(b"inhalt".to_vec())
         );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn preview_cap_is_enforced_during_the_read() {
-        let tmp = std::env::temp_dir().join("vibe-artifacts-test-c");
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = test_dir("c");
         let big = tmp.join("big.bin");
         std::fs::write(&big, [b'x'; 100]).unwrap();
         // a file bigger than the cap: rejected naming the on-disk size,

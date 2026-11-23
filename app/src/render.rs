@@ -19,8 +19,14 @@ pub const CODE_BG: Color32 = crate::theme::CARD;
 pub const TEXT: Color32 = crate::theme::TEXT;
 pub const DIM: Color32 = crate::theme::DIM;
 pub const LINK: Color32 = crate::theme::AMBER;
-/// Inline code spans.
-const CODE_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
+/// Inline code spans: a calm warm tint on a quiet box. The box shows where
+/// the code starts and ends (a trailing dot is not part of a command), so
+/// the colour can stay calm and a function name is never the loudest word
+/// of a sentence.
+const CODE_TEXT: Color32 = Color32::from_rgb(0xe3, 0xd4, 0xc2);
+const CODE_SPAN_BG: Color32 = Color32::from_rgb(0x26, 0x26, 0x2b);
+/// File chips keep the warmer tint: they are the clickable ones.
+const CHIP_TEXT: Color32 = Color32::from_rgb(0xff, 0xd9, 0xa0);
 
 /// True only for link schemes we are willing to open from a model answer:
 /// http://, https:// and mailto: (case-insensitive, after trim). Everything
@@ -703,6 +709,39 @@ fn series_color(i: usize) -> Color32 {
     crate::theme::CHART_SERIES[i % crate::theme::CHART_SERIES.len()]
 }
 
+/// Area colour of slice `i`: `theme::CHART_FILLS`, the calmer steps for
+/// large areas.
+fn fill_color(i: usize) -> Color32 {
+    crate::theme::CHART_FILLS[i % crate::theme::CHART_FILLS.len()]
+}
+
+fn tone_color(tone: crate::model::Tone) -> Color32 {
+    use crate::model::Tone;
+    match tone {
+        Tone::Good => crate::theme::TONE_GOOD,
+        Tone::Bad => crate::theme::TONE_BAD,
+        Tone::Warning => crate::theme::TONE_WARNING,
+        Tone::Neutral => crate::theme::TONE_NEUTRAL,
+    }
+}
+
+/// The colours of a chart's elements: by meaning as soon as one element
+/// has a tone (the others are neutral then: meaning and position never mix
+/// in one chart, or "series 1" would look like "good"), else by position.
+fn element_colors(
+    tones: &[Option<crate::model::Tone>],
+    by_position: impl Fn(usize) -> Color32,
+) -> Vec<Color32> {
+    if tones.iter().any(Option::is_some) {
+        tones
+            .iter()
+            .map(|t| tone_color(t.unwrap_or(crate::model::Tone::Neutral)))
+            .collect()
+    } else {
+        (0..tones.len()).map(by_position).collect()
+    }
+}
+
 /// The parsed nodes of a ```ui fence, cached by its content: the same memo
 /// pattern as `markdown::parse_cached` — the frame asks for the same block
 /// again and again, and parsing its json again is per-frame work for
@@ -887,116 +926,46 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, id: egui::Id, lang: &str, cod
                 .show(ui, |ui| {
                     let mut job = egui::text::LayoutJob::default();
                     for (tok, text) in crate::syntax::tokenize(lang, code) {
-                        let color = match tok {
-                            crate::syntax::Tok::Keyword => crate::theme::BLUE,
-                            crate::syntax::Tok::Str => crate::theme::GREEN,
-                            crate::syntax::Tok::Comment => crate::theme::DIM,
-                            crate::syntax::Tok::Num => crate::theme::AMBER,
-                            crate::syntax::Tok::Plain => TEXT,
-                        };
-                        job.append(
-                            text.as_str(),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: crate::widgets::mono(12.5),
-                                color,
-                                ..Default::default()
-                            },
-                        );
+                        append_code_run(&mut job, tok, &text);
                     }
                     ui.add(egui::Label::new(job).extend());
                 });
         });
 }
 
-/// The rows `[first, last)` of `total` rows of `pitch` height (content
-/// starting at `content_top`) that touch the visible span
-/// `view_top..view_bottom`, plus one row of margin below.
-pub(crate) fn visible_rows(
-    view_top: f32,
-    view_bottom: f32,
-    content_top: f32,
-    pitch: f32,
-    total: usize,
-) -> (usize, usize) {
-    if pitch <= 0.0 || total == 0 || view_bottom <= view_top {
-        return (0, 0);
-    }
-    let row = |y: f32| ((y - content_top) / pitch).max(0.0);
-    let first = (row(view_top).floor() as usize).min(total);
-    let last = (row(view_bottom).ceil() as usize + 1).clamp(first, total);
-    (first, last)
+/// One highlighted run of a code block, in the token's colour.
+fn append_code_run(job: &mut egui::text::LayoutJob, tok: crate::syntax::Tok, text: &str) {
+    let color = match tok {
+        crate::syntax::Tok::Keyword => crate::theme::BLUE,
+        crate::syntax::Tok::Str => crate::theme::GREEN,
+        crate::syntax::Tok::Comment => crate::theme::DIM,
+        crate::syntax::Tok::Num => crate::theme::AMBER,
+        crate::syntax::Tok::Plain => TEXT,
+    };
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: crate::widgets::mono(12.5),
+            color,
+            ..Default::default()
+        },
+    );
 }
 
-/// The numbered rows of a code block. Only the rows in view are laid out;
-/// the others are space of the same height, so a file of a million lines
-/// costs what one screen does (audit M6: every row was a widget in every
-/// frame, 1.3 s per frame for 1 M lines, 25 ms already for 20 000).
-fn numbered_rows(ui: &mut egui::Ui, lang: &str, code: &str) {
-    let number_font = egui::FontId::monospace(11.0);
-    let code_font = crate::widgets::mono(12.5);
-    let (row_h, number_w, glyph_w) = ui.fonts(|f| {
-        (
-            f.row_height(&number_font).max(f.row_height(&code_font)),
-            f.glyph_width(&number_font, '0'),
-            f.glyph_width(&code_font, '0'),
-        )
-    });
-    let row_h = row_h.max(ui.spacing().interact_size.y);
-    let pitch = row_h + ui.spacing().item_spacing.y;
-    let (total, widest) = code.lines().fold((0usize, 0usize), |(n, w), l| {
-        (n + 1, w.max(l.chars().count()))
-    });
-    let digits = total.to_string().len().max(4);
-    // the widest line sets the scroll width, also while it is out of view
-    ui.set_min_width(digits as f32 * number_w + 8.0 + widest as f32 * glyph_w);
-    let clip = ui.clip_rect();
-    let (first, last) = visible_rows(clip.top(), clip.bottom(), ui.cursor().min.y, pitch, total);
-    if first > 0 {
-        ui.add_space(first as f32 * pitch);
-    }
-    for (i, line) in code.lines().enumerate().skip(first).take(last - first) {
-        ui.horizontal(|ui| {
-            ui.set_min_height(row_h);
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{:>digits$}", i + 1))
-                        .font(number_font.clone())
-                        .color(crate::theme::DIM),
-                )
-                .extend(),
-            );
-            ui.add_space(8.0);
-            let mut job = egui::text::LayoutJob::default();
-            for (tok, text) in crate::syntax::tokenize(lang, line) {
-                let color = match tok {
-                    crate::syntax::Tok::Keyword => crate::theme::BLUE,
-                    crate::syntax::Tok::Str => crate::theme::GREEN,
-                    crate::syntax::Tok::Comment => crate::theme::DIM,
-                    crate::syntax::Tok::Num => crate::theme::AMBER,
-                    crate::syntax::Tok::Plain => TEXT,
-                };
-                job.append(
-                    text.as_str(),
-                    0.0,
-                    egui::TextFormat {
-                        font_id: code_font.clone(),
-                        color,
-                        ..Default::default()
-                    },
-                );
-            }
-            ui.add(egui::Label::new(job).extend());
-        });
-    }
-    if last < total {
-        ui.add_space((total - last) as f32 * pitch - ui.spacing().item_spacing.y);
-    }
-}
-
-/// Code block with line numbers (the preview pane): one row per line,
-/// horizontal scroll instead of truncation.
-pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &str, code: &str) {
+/// Code block for whole files (the preview pane, the Artefakte view): one
+/// row per line, laid out only for the rows in view, with the highlighting
+/// cached per file content, so a large file costs no more per frame than a
+/// small one. `numbers`: a line-number column; without it the rows sit
+/// flush like the lines of [`render_code_block`]. Horizontal scroll instead
+/// of truncation.
+pub(crate) fn render_code_block_lines(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    lang: &str,
+    code: &str,
+    numbers: bool,
+) {
     egui::Frame::default()
         .fill(CODE_BG)
         .rounding(egui::Rounding::same(4.0))
@@ -1025,12 +994,78 @@ pub(crate) fn render_code_block_lines(ui: &mut egui::Ui, id: egui::Id, lang: &st
                 });
             });
             ui.add_space(2.0);
-            egui::ScrollArea::horizontal()
+            let lines = crate::syntax::tokenize_lines_cached(lang, code);
+            let row_h = code_rows_setup(ui, numbers);
+            egui::ScrollArea::both()
                 .id_salt(id)
+                // a short file ends under its last line; a long one takes the
+                // height that is left and scrolls inside
                 .auto_shrink([false, true])
                 .max_width(ui.available_width())
-                .show(ui, |ui| numbered_rows(ui, lang, code));
+                .show_rows(ui, row_h, lines.len(), |ui, range| {
+                    for i in range {
+                        code_row(ui, &lines, code, i, numbers, row_h);
+                    }
+                });
         });
+}
+
+/// Spacing for the rows of [`render_code_block_lines`]; returns the row
+/// height. `show_rows` places row `i` at `i × (height + item spacing)`,
+/// so every row must come out exactly this tall: a taller row (a
+/// horizontal layout is at least `interact_size.y` high) would shift the
+/// rows against the scroll offset — a page down skipped lines and the
+/// scrollbar misjudged the length. With numbers the rows keep the
+/// interactive height (the airy look of the line-number view); without,
+/// they sit flush at the font's row height like one text block.
+fn code_rows_setup(ui: &mut egui::Ui, numbers: bool) -> f32 {
+    // what a laid-out code line really allocates (the galley's height is
+    // rounded, the font's bare row height is not)
+    let font_h = ui
+        .fonts(|f| f.layout_no_wrap("0".into(), crate::widgets::mono(12.5), TEXT))
+        .size()
+        .y;
+    let row_h = if numbers {
+        font_h.max(ui.spacing().interact_size.y)
+    } else {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        font_h
+    };
+    ui.spacing_mut().interact_size.y = row_h;
+    row_h
+}
+
+/// One line of [`render_code_block_lines`]: optional number, then the
+/// highlighted runs.
+fn code_row(
+    ui: &mut egui::Ui,
+    lines: &crate::syntax::LineRuns,
+    code: &str,
+    i: usize,
+    numbers: bool,
+    row_h: f32,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.set_min_height(row_h);
+        if numbers {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{:>4}", i + 1))
+                        .monospace()
+                        .size(11.0)
+                        .color(crate::theme::DIM),
+                )
+                .extend(),
+            );
+            ui.add_space(8.0);
+        }
+        let mut job = egui::text::LayoutJob::default();
+        for (tok, text) in lines.line(code, i) {
+            append_code_run(&mut job, tok, text);
+        }
+        ui.add(egui::Label::new(job).extend());
+    })
+    .response
 }
 
 /// Inner column widths for a table of the given natural widths. Everything
@@ -1134,6 +1169,10 @@ pub(crate) fn render_table_grid(
     }
     let widths = table_widths(&natural, ui.available_width() - 2.0, PADDING, MINIMUM);
     let total: f32 = widths.iter().map(|w| w + PADDING).sum();
+    // columns of numbers align right, so digits of the same place line up
+    let numeric: Vec<bool> = (0..cols)
+        .map(|c| numeric_column(rows.iter().take(shown_rows).map(|r| r.get(c))))
+        .collect();
 
     egui::Frame::none()
         .rounding(egui::Rounding::same(4.0))
@@ -1155,7 +1194,17 @@ pub(crate) fn render_table_grid(
                                     ui.set_min_width(width + PADDING);
                                     frame.show(ui, |ui| {
                                         ui.set_width(*width);
-                                        if let Some(cell) = cells.get(col) {
+                                        let Some(cell) = cells.get(col) else {
+                                            return;
+                                        };
+                                        if numeric.get(col).copied().unwrap_or(false) {
+                                            let mut job = egui::text::LayoutJob::default();
+                                            append_inline(&mut job, cell, st);
+                                            ui.with_layout(
+                                                egui::Layout::top_down(egui::Align::RIGHT),
+                                                |ui| ui.add(egui::Label::new(job)),
+                                            );
+                                        } else {
                                             render_table_cell(ui, cell, st, chips.as_deref_mut());
                                         }
                                     });
@@ -1199,6 +1248,49 @@ pub(crate) fn render_table_grid(
 
 /// One grid cell: a horizontal run of inline markdown, with zero item
 /// spacing so several snippets look like one line of text.
+/// A table cell that holds a number: "12", "-1.5", "1,234.5", "48.3 °C",
+/// "57.4 %", "€3465.80". Dates ("2026-10-01") and versions ("1.2.3-rc")
+/// are not numbers here.
+fn is_numeric_cell(cell: &[MdInline]) -> bool {
+    let [MdInline::Text(text)] = cell else {
+        return false;
+    };
+    let mut t = text.trim();
+    for prefix in ["+", "-", "−", "$", "€", "£"] {
+        t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
+    }
+    for suffix in ["%", "°C", "°F", "°", "€", "$", "£"] {
+        t = t.strip_suffix(suffix).unwrap_or(t).trim_end();
+    }
+    let starts = t.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let ends = t.chars().next_back().is_some_and(|c| c.is_ascii_digit());
+    starts
+        && ends
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '\'' | '\u{2009}'))
+}
+
+/// True when a column holds numbers: at least one, and every other body
+/// cell empty or a dash.
+fn numeric_column<'a>(cells: impl Iterator<Item = Option<&'a Vec<MdInline>>>) -> bool {
+    let mut any = false;
+    for cell in cells.flatten() {
+        let blank = match cell.as_slice() {
+            [] => true,
+            [MdInline::Text(t)] => matches!(t.trim(), "" | "-" | "–" | "—"),
+            _ => false,
+        };
+        if blank {
+            continue;
+        }
+        if !is_numeric_cell(cell) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn render_table_cell(
     ui: &mut egui::Ui,
     cell: &[MdInline],
@@ -1282,6 +1374,7 @@ fn append_inline(job: &mut egui::text::LayoutJob, inl: &[MdInline], st: InlineSt
                 egui::TextFormat {
                     font_id: egui::FontId::monospace(st.size - 1.5),
                     color: CODE_TEXT,
+                    background: CODE_SPAN_BG,
                     line_height: Some(st.size * 1.42),
                     ..Default::default()
                 },
@@ -1499,7 +1592,7 @@ fn file_chip(ui: &mut egui::Ui, token: &str, path: &Path, size: f32, open: &mut 
         ui,
         token,
         egui::FontId::monospace(size - 2.0),
-        CODE_TEXT,
+        CHIP_TEXT,
         220.0,
     );
     let h = size + 6.0;
@@ -1649,7 +1742,8 @@ fn render_inline_styled(
                     RichText::new(c)
                         .monospace()
                         .size(st.size - 2.0)
-                        .color(CODE_TEXT),
+                        .color(CODE_TEXT)
+                        .background_color(CODE_SPAN_BG),
                 );
             }
             MdInline::Link { text, url } => {
@@ -1696,12 +1790,7 @@ pub fn render_ui_node(
                 .inner_margin(egui::Margin::same(12.0))
                 .show(ui, |ui| {
                     if let Some(t) = title {
-                        ui.label(
-                            RichText::new(t)
-                                .color(ACCENT)
-                                .size(15.0)
-                                .family(crate::fonts::bold()),
-                        );
+                        block_title(ui, t);
                         ui.add_space(4.0);
                     }
                     for c in children {
@@ -1763,14 +1852,19 @@ pub fn render_ui_node(
                 label.clone()
             };
             let fill = if armed { crate::theme::AMBER } else { ACCENT };
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(text).color(Color32::WHITE))
-                        .fill(fill)
-                        .rounding(egui::Rounding::same(3.0)),
-                )
-                .clicked()
-            {
+            // its own width, also inside columns (egui lays those out
+            // justified, which stretched the button into a banner)
+            let clicked = ui
+                .horizontal(|ui| {
+                    ui.add(
+                        egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
+                            .fill(fill)
+                            .rounding(egui::Rounding::same(3.0)),
+                    )
+                    .clicked()
+                })
+                .inner;
+            if clicked {
                 if armed {
                     disarm_button(id);
                     ctx.ui_events.push(UiEvent::Button {
@@ -1851,7 +1945,7 @@ pub fn render_ui_node(
                     let fill = if armed { crate::theme::AMBER } else { ACCENT };
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                            egui::Button::new(RichText::new(text).color(crate::theme::ON_ACCENT))
                                 .fill(fill)
                                 .rounding(egui::Rounding::same(3.0)),
                         )
@@ -1899,7 +1993,7 @@ pub fn render_ui_node(
                 .inner_margin(egui::Margin::same(10.0))
                 .show(ui, |ui| {
                     if let Some(t) = title {
-                        ui.label(RichText::new(t).color(DIM).small().strong());
+                        block_title(ui, t);
                         ui.add_space(4.0);
                     }
                     let max = bars
@@ -1907,31 +2001,68 @@ pub fn render_ui_node(
                         .map(|b| b.value)
                         .fold(0.0_f64, f64::max)
                         .max(1.0);
-                    let bar_area_w = (ui.available_width() - 140.0).max(40.0);
-                    for b in bars {
-                        ui.horizontal(|ui| {
-                            ui.set_min_width(120.0);
-                            ui.label(RichText::new(&b.label).color(TEXT).size(13.0));
-                            let frac = (b.value / max) as f32;
-                            let h = 14.0;
-                            let rect = egui::Rect::from_min_size(
-                                ui.cursor().min + egui::vec2(0.0, 2.0),
-                                egui::vec2(bar_area_w, h),
-                            );
-                            ui.allocate_rect(rect, egui::Sense::hover());
-                            ui.painter().rect_filled(
-                                rect,
-                                egui::Rounding::same(0.0),
-                                crate::theme::RAISED,
-                            );
-                            let fill = egui::Rect::from_min_size(
-                                rect.min,
-                                egui::vec2((bar_area_w * frac).max(2.0), h),
-                            );
-                            ui.painter()
-                                .rect_filled(fill, egui::Rounding::same(0.0), ACCENT);
-                            ui.label(RichText::new(format!("{}", b.value)).color(DIM).small());
+                    // one column for the labels, so every bar starts at the
+                    // same x and the lengths compare; one for the values;
+                    // the bars share what is left and never widen the card
+                    let width = ui.available_width();
+                    let measure = |ui: &egui::Ui, text: &str, font: egui::FontId| {
+                        ui.fonts(|f| f.layout_no_wrap(text.to_string(), font, TEXT))
+                            .size()
+                            .x
+                    };
+                    let values: Vec<String> = bars
+                        .iter()
+                        .map(|b| i18n::decimal(tick_label(b.value)))
+                        .collect();
+                    let label_w = bars
+                        .iter()
+                        .map(|b| measure(ui, &b.label, egui::FontId::proportional(13.0)))
+                        .fold(0.0_f32, f32::max)
+                        .min(width * 0.4)
+                        + 8.0;
+                    let value_w = values
+                        .iter()
+                        .map(|v| measure(ui, v, egui::FontId::monospace(11.5)))
+                        .fold(0.0_f32, f32::max)
+                        .min(width * 0.25)
+                        + 8.0;
+                    let bar_area_w = (width - label_w - value_w).max(24.0);
+                    // one series: one colour, unless bars carry meaning
+                    let colors =
+                        element_colors(&bars.iter().map(|b| b.tone).collect::<Vec<_>>(), |_| {
+                            crate::theme::ORANGE_DIM
                         });
+                    for ((b, value), color) in bars.iter().zip(&values).zip(&colors) {
+                        let (row, _) =
+                            ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+                        let painter = ui.painter();
+                        let label = crate::widgets::line_galley(
+                            ui,
+                            &b.label,
+                            egui::FontId::proportional(13.0),
+                            TEXT,
+                            label_w - 8.0,
+                        );
+                        crate::widgets::paint_line(ui, row.left(), row.center().y, label);
+                        let track = egui::Rect::from_min_size(
+                            egui::pos2(row.left() + label_w, row.center().y - 7.0),
+                            egui::vec2(bar_area_w, 14.0),
+                        );
+                        painter.rect_filled(track, egui::Rounding::same(0.0), crate::theme::RAISED);
+                        let frac = (b.value / max).clamp(0.0, 1.0) as f32;
+                        let fill = egui::Rect::from_min_size(
+                            track.min,
+                            egui::vec2((bar_area_w * frac).max(2.0), 14.0),
+                        );
+                        painter.rect_filled(fill, egui::Rounding::same(0.0), *color);
+                        let v = crate::widgets::line_galley(
+                            ui,
+                            value,
+                            egui::FontId::monospace(11.5),
+                            DIM,
+                            value_w - 8.0,
+                        );
+                        crate::widgets::paint_line(ui, track.right() + 8.0, row.center().y, v);
                     }
                 });
             ui.add_space(6.0);
@@ -2104,7 +2235,7 @@ pub fn render_ui_node(
                 match result {
                     Ok(v) => ui.label(
                         RichText::new(format_computed(i18n::lang(), v, *decimals, unit.as_deref()))
-                            .color(ACCENT)
+                            .color(crate::theme::ORANGE_DIM)
                             .monospace()
                             .size(14.0)
                             .strong(),
@@ -2192,6 +2323,59 @@ pub fn render_ui_node(
 }
 
 /// Line chart: axes, up to 6 series in gradient colours, legend.
+/// The title of a card or chart: one style for all of them, so siblings
+/// on a dashboard read as equals (no orange: the accent is for actions).
+fn block_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(
+        RichText::new(title)
+            .color(TEXT)
+            .size(13.5)
+            .family(crate::fonts::bold()),
+    );
+}
+
+/// Round axis ticks for `[min, max]`: a step of 1, 2 or 5 times a power
+/// of ten that gives about `target` ticks, the first at or below `min`, the
+/// last at or above `max` (a chart from -1.1 to 21.2 gets 0 / 10 / 20 …
+/// instead of -1.1 / 10.05 / 21.2).
+fn nice_ticks(min: f64, max: f64, target: usize) -> Vec<f64> {
+    if !(min.is_finite() && max.is_finite()) || max <= min || target < 2 {
+        return vec![min, max];
+    }
+    let raw = (max - min) / (target - 1) as f64;
+    let mag = 10f64.powf(raw.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .map(|m| m * mag)
+        .find(|s| *s >= raw)
+        .unwrap_or(10.0 * mag);
+    // round to the step's decimals: 3 × 0.2 is 0.6000000000000001 in floats
+    let scale = 10f64.powi((-step.log10().floor()).max(0.0) as i32 + 1);
+    let snap = |v: f64| (v * scale).round() / scale;
+    let first = (min / step).floor();
+    let mut out = Vec::new();
+    // bounded: at most target + 3 ticks for any input
+    for k in 0..(target as u32 + 3) {
+        let v = snap((first + k as f64) * step);
+        out.push(v);
+        if v >= max - step * 1e-9 {
+            break;
+        }
+    }
+    out
+}
+
+/// An axis value without float noise or trailing zeros.
+fn tick_label(v: f64) -> String {
+    let s = format!("{v:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 fn render_line_chart(
     ui: &mut egui::Ui,
     title: Option<&str>,
@@ -2206,7 +2390,7 @@ fn render_line_chart(
         .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             if let Some(t) = title {
-                ui.label(RichText::new(t).color(DIM).small().strong());
+                block_title(ui, t);
                 ui.add_space(4.0);
             }
             let series = &series[..series.len().min(6)];
@@ -2229,6 +2413,19 @@ fn render_line_chart(
             if y_max <= y_min {
                 y_max = y_min + 1.0;
             }
+            // the y range grows to round ticks; x keeps the data's range
+            // and labels the round values inside it
+            let y_ticks = nice_ticks(y_min, y_max, 6);
+            y_min = y_ticks.first().copied().unwrap_or(y_min);
+            y_max = y_ticks
+                .last()
+                .copied()
+                .unwrap_or(y_max)
+                .max(y_min + f64::EPSILON);
+            let x_ticks: Vec<f64> = nice_ticks(x_min, x_max, 6)
+                .into_iter()
+                .filter(|x| *x >= x_min - 1e-9 && *x <= x_max + 1e-9)
+                .collect();
             let w = ui.available_width().max(120.0);
             let h = 140.0;
             let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
@@ -2246,8 +2443,9 @@ fn render_line_chart(
                 [plot.left_bottom(), plot.left_top()],
                 egui::Stroke::new(1.0_f32, crate::theme::BORDER),
             );
-            // grid lines + y labels (min / mid / max)
-            for (i, frac) in [0.0_f32, 0.5, 1.0].iter().enumerate() {
+            // grid lines + y labels at the round ticks
+            for (i, value) in y_ticks.iter().enumerate() {
+                let frac = ((value - y_min) / (y_max - y_min)) as f32;
                 let y = plot.bottom() - plot.height() * frac;
                 if i > 0 {
                     painter.line_segment(
@@ -2255,36 +2453,33 @@ fn render_line_chart(
                         egui::Stroke::new(1.0_f32, crate::theme::RAISED),
                     );
                 }
-                let value = y_min + (y_max - y_min) * *frac as f64;
                 painter.text(
                     egui::pos2(plot.left() - 4.0, y),
                     egui::Align2::RIGHT_CENTER,
-                    format!("{value:.4}")
-                        .trim_end_matches('0')
-                        .trim_end_matches('.'),
-                    egui::FontId::monospace(10.0),
+                    tick_label(*value),
+                    egui::FontId::monospace(10.5),
                     DIM,
                 );
             }
-            // x labels (min / max)
-            painter.text(
-                plot.left_bottom() + egui::vec2(0.0, 3.0),
-                egui::Align2::LEFT_TOP,
-                format!("{x_min:.4}")
-                    .trim_end_matches('0')
-                    .trim_end_matches('.'),
-                egui::FontId::monospace(10.0),
-                DIM,
-            );
-            painter.text(
-                plot.right_bottom() + egui::vec2(0.0, 3.0),
-                egui::Align2::RIGHT_TOP,
-                format!("{x_max:.4}")
-                    .trim_end_matches('0')
-                    .trim_end_matches('.'),
-                egui::FontId::monospace(10.0),
-                DIM,
-            );
+            // x labels at the round values inside the data's range
+            for (i, value) in x_ticks.iter().enumerate() {
+                let frac = ((value - x_min) / (x_max - x_min)) as f32;
+                let x = plot.left() + plot.width() * frac;
+                let align = if i == 0 && frac < 0.05 {
+                    egui::Align2::LEFT_TOP
+                } else if frac > 0.95 {
+                    egui::Align2::RIGHT_TOP
+                } else {
+                    egui::Align2::CENTER_TOP
+                };
+                painter.text(
+                    egui::pos2(x, plot.bottom() + 3.0),
+                    align,
+                    tick_label(*value),
+                    egui::FontId::monospace(10.5),
+                    DIM,
+                );
+            }
             let to_screen = |p: &[f64; 2]| {
                 let fx = ((p[0] - x_min) / (x_max - x_min)) as f32;
                 let fy = ((p[1] - y_min) / (y_max - y_min)) as f32;
@@ -2293,13 +2488,21 @@ fn render_line_chart(
                     plot.bottom() - plot.height() * fy,
                 )
             };
+            let colors = element_colors(
+                &series.iter().map(|s| s.tone).collect::<Vec<_>>(),
+                series_color,
+            );
             for (i, s) in series.iter().enumerate() {
-                let color = series_color(i);
+                let color = colors[i];
                 let pts: Vec<egui::Pos2> = s.points.iter().map(to_screen).collect();
                 for pair in pts.windows(2) {
                     painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.8_f32, color));
                 }
-                for p in &pts {
+                // point marks only while they stand apart: on a dense line
+                // they merge into a beaded, fuzzy stroke
+                let spacing = plot.width() / pts.len().max(1) as f32;
+                let marks = if spacing >= 8.0 { pts.as_slice() } else { &[] };
+                for p in marks {
                     painter.rect_filled(
                         egui::Rect::from_center_size(*p, egui::vec2(3.0, 3.0)),
                         egui::Rounding::same(0.0),
@@ -2313,7 +2516,7 @@ fn render_line_chart(
                 for (i, s) in series.iter().enumerate() {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter()
-                        .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
+                        .rect_filled(r, egui::Rounding::same(0.0), colors[i]);
                     ui.label(RichText::new(&s.name).color(DIM).small());
                     ui.add_space(6.0);
                 }
@@ -2343,7 +2546,7 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
         .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             if let Some(t) = title {
-                ui.label(RichText::new(t).color(DIM).small().strong());
+                block_title(ui, t);
                 ui.add_space(4.0);
             }
             let total: f64 = slices.iter().map(|s| s.value.max(0.0)).sum();
@@ -2351,13 +2554,49 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                 ui.label(RichText::new(tr("No data.")).color(DIM).small());
                 return;
             }
-            ui.horizontal(|ui| {
+            // areas take the calmer fills, or the colours of their meaning
+            let colors = element_colors(
+                &slices.iter().map(|s| s.tone).collect::<Vec<_>>(),
+                fill_color,
+            );
+            ui.horizontal_top(|ui| {
                 let size = 120.0;
+                // painted after the legend is laid out: next to a taller
+                // legend the pie sits on its middle, not at its top
+                let slot = ui.painter().add(egui::Shape::Noop);
                 let (rect, _resp) =
                     ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-                let center = rect.center();
+                ui.add_space(10.0);
+                let legend = ui
+                    .vertical(|ui| {
+                        for (i, s) in slices.iter().enumerate() {
+                            let pct = s.value.max(0.0) / total * 100.0;
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(8.0, 8.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter()
+                                    .rect_filled(r, egui::Rounding::same(0.0), colors[i]);
+                                ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
+                                ui.label(
+                                    RichText::new(i18n::decimal(format!("{pct:.1} %")))
+                                        .color(DIM)
+                                        .monospace()
+                                        .size(11.5),
+                                );
+                            });
+                        }
+                    })
+                    .response
+                    .rect;
+                let center = if legend.height() > size {
+                    egui::pos2(rect.center().x, legend.center().y)
+                } else {
+                    rect.center()
+                };
                 let radius = size / 2.0 - 2.0;
-                let painter = ui.painter();
+                let mut shapes: Vec<egui::Shape> = Vec::new();
                 let fracs: Vec<f32> = slices
                     .iter()
                     .map(|s| (s.value.max(0.0) / total) as f32)
@@ -2373,7 +2612,7 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                 let mut fill = egui::Mesh::default();
                 let mut rims = Vec::new();
                 for (i, start, sweep) in pie_slices(&fracs) {
-                    let color = series_color(i);
+                    let color = colors[i];
                     let steps = ((sweep / 0.05).ceil() as usize).max(2);
                     let rim: Vec<egui::Pos2> = (0..=steps)
                         .map(|k| point(start + sweep * (k as f32 / steps as f32)))
@@ -2388,32 +2627,17 @@ fn render_pie_chart(ui: &mut egui::Ui, title: Option<&str>, slices: &[crate::mod
                     }
                     rims.push(egui::Shape::line(rim, egui::Stroke::new(1.0_f32, color)));
                 }
-                painter.add(fill);
-                painter.extend(rims);
+                shapes.push(egui::Shape::mesh(fill));
+                shapes.extend(rims);
                 // the gaps between slices: straight radial lines, which
                 // meet cleanly in the centre
                 for a in pie_boundaries(&fracs) {
-                    painter.line_segment([center, point(a)], egui::Stroke::new(1.5_f32, CODE_BG));
+                    shapes.push(egui::Shape::line_segment(
+                        [center, point(a)],
+                        egui::Stroke::new(1.5_f32, CODE_BG),
+                    ));
                 }
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    for (i, s) in slices.iter().enumerate() {
-                        let pct = s.value.max(0.0) / total * 100.0;
-                        ui.horizontal(|ui| {
-                            let (r, _) =
-                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter()
-                                .rect_filled(r, egui::Rounding::same(0.0), series_color(i));
-                            ui.label(RichText::new(&s.label).color(TEXT).size(13.0));
-                            ui.label(
-                                RichText::new(i18n::decimal(format!("{pct:.1} %")))
-                                    .color(DIM)
-                                    .monospace()
-                                    .size(11.5),
-                            );
-                        });
-                    }
-                });
+                ui.painter().set(slot, egui::Shape::Vec(shapes));
             });
         });
 }
@@ -2459,22 +2683,44 @@ mod tests {
         assert!(out.shapes.len() < 100, "{} shapes", out.shapes.len());
     }
 
+    /// `show_rows` places code rows at `i × (row height + item spacing)`:
+    /// the rows `code_row` paints must have exactly that pitch, with the
+    /// app's theme (its `interact_size.y` is taller than a code line), with
+    /// and without line numbers, for text and empty lines alike.
     #[test]
-    fn only_rows_in_view_are_laid_out() {
-        use super::visible_rows;
-        // 27 px per row, view 0..600 at the top of the content
-        assert_eq!(visible_rows(0.0, 600.0, 0.0, 27.0, 1_000_000), (0, 24));
-        // scrolled far down: the rows around the view, nothing before
-        let (first, last) = visible_rows(5_000_000.0, 5_000_600.0, 0.0, 27.0, 1_000_000);
-        assert_eq!(first, 185_185);
-        assert_eq!(last, 185_209);
-        // content starting below the view top, and the end of the file
-        assert_eq!(visible_rows(0.0, 600.0, 100.0, 27.0, 5), (0, 5));
-        assert_eq!(visible_rows(0.0, 600.0, -1e9, 27.0, 10), (10, 10));
-        // degenerate inputs
-        assert_eq!(visible_rows(0.0, 600.0, 0.0, 0.0, 10), (0, 0));
-        assert_eq!(visible_rows(0.0, 600.0, 0.0, 27.0, 0), (0, 0));
-        assert_eq!(visible_rows(600.0, 0.0, 0.0, 27.0, 10), (0, 0));
+    fn code_rows_have_the_pitch_show_rows_assumes() {
+        let ctx = egui::Context::default();
+        crate::fonts::install_fallback_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let code = "fn main() {\n\n    let x = \"ä\"; // c\n}";
+        let lines = crate::syntax::LineRuns::new("rust", code);
+        for numbers in [true, false] {
+            let mut rects = Vec::new();
+            let mut expected = (0.0, 0.0);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let row_h = super::code_rows_setup(ui, numbers);
+                    expected = (row_h, row_h + ui.spacing().item_spacing.y);
+                    for i in 0..lines.len() {
+                        rects.push(super::code_row(ui, &lines, code, i, numbers, row_h).rect);
+                    }
+                });
+            });
+            let (row_h, pitch) = expected;
+            for (i, r) in rects.iter().enumerate() {
+                assert_eq!(r.height(), row_h, "numbers={numbers}: row {i} height");
+            }
+            for pair in rects.windows(2) {
+                assert_eq!(
+                    pair[1].top() - pair[0].top(),
+                    pitch,
+                    "numbers={numbers}: pitch"
+                );
+            }
+            if !numbers {
+                assert_eq!(pitch, row_h, "rows without numbers sit flush");
+            }
+        }
     }
 
     /// Paint one agent message through the real renderer for a few frames.
@@ -2495,6 +2741,56 @@ mod tests {
                     super::render_blocks(ui, &blocks, 0, &mut rctx);
                 });
             });
+        }
+    }
+
+    /// Every ui node type through the real renderer, as one picture:
+    /// paints without panicking and, with CATWRIGHT_SHOT_DIR set, saves
+    /// `ui-gallery.png` to look at (not committed).
+    #[test]
+    fn ui_node_gallery_renders() {
+        let msg = concat!(
+            "```ui\n",
+            r#"[{"type":"heading","level":2,"text":"Gallery"},"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"bar_chart","title":"Revenue by quarter","bars":[{"label":"Q1","value":12.5},{"label":"Second quarter","value":18},{"label":"Q3","value":0.30000000000000004},{"label":"Q4 (forecast)","value":9}]},"#,
+            r#"{"type":"pie_chart","title":"Energy costs","slices":[{"label":"Heating","value":57.4},{"label":"Hot water","value":15},{"label":"Kitchen","value":8.8},{"label":"Lighting","value":3.7},{"label":"Home office","value":6.8},{"label":"Laundry","value":4.8},{"label":"Other","value":3.5}]}]},"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"card","title":"Calculator","children":["#,
+            r#"{"type":"slider","name":"a","label":"Amount","min":0,"max":100,"step":1,"value":40},"#,
+            r#"{"type":"number","name":"y","label":"Years","value":10},"#,
+            r#"{"type":"select","name":"k","label":"Kind","options":["1","2"],"value":"1"},"#,
+            r#"{"type":"toggle","name":"m","label":"Monthly","value":true},"#,
+            r#"{"type":"computed","label":"Result","expr":"a*y","decimals":0,"unit":"€"}]},"#,
+            r#"{"type":"card","title":"Status","children":["#,
+            r#"{"type":"progress","label":"Migration","value":0.42},"#,
+            r#"{"type":"checklist","items":[{"text":"Write tests","done":true},{"text":"Update docs"}]},"#,
+            r#"{"type":"kv","rows":[["Region","eu-central"],["Latency","12 ms"]]},"#,
+            r#"{"type":"button","label":"Show details","action":"details"}]}]},"#,
+            r#"{"type":"columns","children":["#,
+            r#"{"type":"pie_chart","title":"Two slices","slices":[{"label":"A","value":3},{"label":"B","value":1}]},"#,
+            r#"{"type":"bar_chart","title":"Budget (tones)","bars":[{"label":"Saved","value":252,"tone":"good"},{"label":"Spent","value":1737,"tone":"bad"},{"label":"Open","value":400,"tone":"warning"},{"label":"Other","value":90}]}]},"#,
+            r#"{"type":"pie_chart","title":"Tests (tones)","slices":[{"label":"Passed","value":182,"tone":"Good"},{"label":"Failed","value":3,"tone":"bad"},{"label":"Skipped","value":2,"tone":"pink"}]}]"#,
+            "\n```\n"
+        );
+        let blocks = crate::markdown::parse(msg);
+        let mut events = Vec::new();
+        let mut forms = std::collections::HashMap::new();
+        let img = crate::softrender::render_ui([900, 1150], 3, |ctx| {
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(crate::theme::BG)
+                        .inner_margin(16.0),
+                )
+                .show(ctx, |ui| {
+                    let mut rctx = super::RenderCtx::new(&mut events, &mut forms, "s1");
+                    super::render_blocks(ui, &blocks, 0, &mut rctx);
+                });
+        });
+        if let Ok(out) = std::env::var("CATWRIGHT_SHOT_DIR") {
+            img.save(std::path::Path::new(&out).join("ui-gallery.png"))
+                .unwrap();
         }
     }
 
@@ -2582,6 +2878,61 @@ mod tests {
         assert_eq!(columns_per_row(300, 800.0), 6);
         assert_eq!(columns_per_row(4, 100.0), 1);
         assert_eq!(columns_per_row(0, 800.0), 1);
+    }
+
+    #[test]
+    fn nice_ticks_are_round_and_cover_the_range() {
+        use super::{nice_ticks, tick_label};
+        // the dashboard's outdoor temperatures
+        assert_eq!(
+            nice_ticks(-1.1, 21.2, 6),
+            [-5.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0]
+        );
+        // hours of a week
+        assert_eq!(nice_ticks(0.0, 167.0, 6), [0.0, 50.0, 100.0, 150.0, 200.0]);
+        // small values without float noise
+        assert_eq!(nice_ticks(0.0, 1.0, 6), [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
+        assert_eq!(tick_label(0.30000000000000004), "0.3");
+        assert_eq!(tick_label(-0.0), "0");
+        assert_eq!(tick_label(150.0), "150");
+        // degenerate input stays bounded
+        assert_eq!(nice_ticks(3.0, 3.0, 6), [3.0, 3.0]);
+        assert!(nice_ticks(0.0, 1e12, 6).len() <= 9);
+    }
+
+    #[test]
+    fn numeric_cells_and_columns() {
+        use super::{is_numeric_cell, numeric_column};
+        use crate::markdown::MdInline;
+        let cell = |t: &str| vec![MdInline::Text(t.to_string())];
+        for n in [
+            "12",
+            "-1.5",
+            "1,234.5",
+            "48.3 °C",
+            "57.4 %",
+            "€3465.80",
+            "−2",
+            "0.000",
+        ] {
+            assert!(is_numeric_cell(&cell(n)), "{n} is a number");
+        }
+        for t in [
+            "2026-10-01",
+            "1.2.3-rc",
+            "Setup",
+            "12 items",
+            "",
+            "v2",
+            "1/2",
+        ] {
+            assert!(!is_numeric_cell(&cell(t)), "{t} is not a number");
+        }
+        assert!(!is_numeric_cell(&[MdInline::Code("12".to_string())]));
+        let col = |cells: Vec<Vec<MdInline>>| numeric_column(cells.iter().map(Some));
+        assert!(col(vec![cell("2.5"), cell("–"), cell("16.9")]));
+        assert!(!col(vec![cell("2.5"), cell("n/a")]));
+        assert!(!col(vec![cell("–"), cell("")]), "no number at all");
     }
 
     #[test]
@@ -2872,6 +3223,31 @@ mod tests {
         assert!(values.contains_key(&super::field_key("b", 1, 0, "x")));
         assert!(values.contains_key("ab#1#0#x"));
         assert_eq!(values.len(), 2);
+    }
+
+    /// Meaning wins over position for the whole chart: once one element
+    /// has a tone, the others are neutral, never a positional colour.
+    #[test]
+    fn element_colors_follow_meaning_or_position() {
+        use crate::model::Tone;
+        let positional = super::element_colors(&[None, None, None], super::fill_color);
+        assert_eq!(
+            positional,
+            crate::theme::CHART_FILLS[..3].to_vec(),
+            "without tones: by position"
+        );
+        let toned = super::element_colors(
+            &[Some(Tone::Good), None, Some(Tone::Bad)],
+            super::fill_color,
+        );
+        assert_eq!(
+            toned,
+            vec![
+                crate::theme::TONE_GOOD,
+                crate::theme::TONE_NEUTRAL,
+                crate::theme::TONE_BAD
+            ]
+        );
     }
 
     #[test]

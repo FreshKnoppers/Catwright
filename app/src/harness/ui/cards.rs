@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::acp::protocol::{PermissionKind, ToolCallContent, ToolKind};
-use crate::acp::session::{repeated_tool_call, PendingPermission, TurnState};
+use crate::acp::session::{repeated_tool_call, PendingPermission, SessionView, TurnState};
 use crate::harness::extras::{self, QuestionAnswer};
 use crate::i18n::{tr, trf};
 use egui::Event;
@@ -369,126 +369,10 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 theme::section_header(ui, tr("Approval required"), true);
                 ui.add_space(2.0);
                 // number keys only answer a request that is on screen in
-                // full: no part of what is approved may be scrolled away
-                let mut all_shown = true;
-                let cached = s.tool_for_permission(p);
-                // Vibe sends only the id; anything else the request carries
-                // must agree with the call that id names (audit M2)
-                let contradicts = cached
-                    .map(|t| request_contradictions(&p.request.tool_call, t))
-                    .unwrap_or_default();
-                if !contradicts.is_empty() {
-                    ui.label(
-                        RichText::new(trf(
-                            "This request contradicts the tool call it names ({fields}). It is unclear which of the two would run: deny it unless you know why.",
-                            &[("fields", &contradicts.join(", "))],
-                        ))
-                        .size(12.5)
-                        .color(theme::RED),
-                    );
-                    ui.add_space(2.0);
-                }
-                if let Some(t) = cached {
-                    let headline = match t.kind {
-                        ToolKind::Execute => tr("Run command"),
-                        ToolKind::Edit => tr("Edit file"),
-                        ToolKind::Delete => tr("Delete file"),
-                        ToolKind::Move => tr("Move file"),
-                        ToolKind::Fetch => tr("Fetch web page"),
-                        ToolKind::Read => tr("Read file"),
-                        _ => tr("Run action"),
-                    };
-                    ui.label(RichText::new(headline).size(14.0).color(theme::TEXT));
-                    let command = t
-                        .raw_input
-                        .as_ref()
-                        .and_then(|v| v.get("command"))
-                        .and_then(Value::as_str);
-                    let shown = command.map_or_else(|| t.title.clone(), |c| format!("$ {c}"));
-                    all_shown &= request_text(ui, ("permission_cmd", idx), &shown);
-                    // what the tool will actually be called with: the title
-                    // is Vibe's summary ("Reading README.md"), the arguments
-                    // are the truth (full paths, URLs, patterns). ALL of
-                    // them are shown — this card is the user's only
-                    // safeguard when approving, so an argument that sits
-                    // next to `command` (cwd, env, …) must not be hidden.
-                    let has_diff = t
-                        .content
-                        .iter()
-                        .any(|c| matches!(c, ToolCallContent::Diff { .. }));
-                    let (args, cut) = permission_arguments(t.raw_input.as_ref(), has_diff);
-                    // the command itself is the headline above; its key
-                    // stays out of the argument list
-                    let args: Vec<(String, String)> = if command.is_some() {
-                        args.into_iter().filter(|(k, _)| k != "command").collect()
-                    } else {
-                        args
-                    };
-                    if !args.is_empty() {
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new(trf("Arguments ({n})", &[("n", &args.len())]))
-                                .size(12.0)
-                                .color(theme::DIM),
-                        );
-                        all_shown &= argument_rows(ui, ("permission_args", idx), &args);
-                        if cut > 0 {
-                            ui.label(
-                                RichText::new(trf(
-                                    "… {n} values cut to {chars} characters",
-                                    &[("n", &cut), ("chars", &MAX_ARGUMENT_CHARS)],
-                                ))
-                                .size(11.0)
-                                .color(theme::DIM),
-                            );
-                        }
-                    }
-                    for content in &t.content {
-                        if let ToolCallContent::Diff {
-                            path,
-                            old_text,
-                            new_text,
-                        } = content
-                        {
-                            ui.add_space(2.0);
-                            ui.label(
-                                RichText::new(relative_path(path, &s.cwd))
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(theme::MUTED),
-                            );
-                            egui::ScrollArea::vertical()
-                                .id_salt(("permission_diff", idx, path))
-                                .max_height(180.0)
-                                .auto_shrink([false, true])
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    transcript::diff_body(
-                                        ui,
-                                        old_text.as_deref(),
-                                        new_text,
-                                        200,
-                                        None,
-                                    );
-                                });
-                        }
-                    }
-                } else {
-                    all_shown &= unknown_call(ui, idx, &p.request.tool_call);
-                }
-                if !contradicts.is_empty() {
-                    ui.add_space(2.0);
-                    ui.label(
-                        RichText::new(tr("The request itself says:"))
-                            .size(12.0)
-                            .color(theme::DIM),
-                    );
-                    request_snapshot(ui, idx, &p.request.tool_call);
-                }
+                // full and agrees with the call it names (permission_body)
+                let keys_ok = permission_body(ui, s, p, egui::Id::new(("permission", idx)));
                 ui.add_space(4.0);
-                // no number key for a contradictory request: only a click
-                let keys = idx == 0 && digits && all_shown && contradicts.is_empty();
-                option_row(ui, p, keys, &mut answers);
+                option_row(ui, p, idx == 0 && digits && keys_ok, &mut answers);
             });
             ui.add_space(6.0);
         }
@@ -498,8 +382,134 @@ fn permission_cards(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     }
 }
 
-/// Most pending approvals of a session shown as full cards at once.
-const MAX_SHOWN_PERMISSIONS: usize = 3;
+/// Most pending approvals of a session shown in full at once (the pinned
+/// cards, and the activity feed's answerable entries).
+pub(super) const MAX_SHOWN_PERMISSIONS: usize = 3;
+
+/// What a pending approval would allow: headline, the command or Vibe's
+/// title, ALL arguments and the diff of an edit — and, when the request
+/// contradicts the call it names, a warning and what the request itself
+/// says (audit M2). Shared by the pinned card and the activity feed, so no
+/// place offers an approval without showing what it approves. `salt` keeps
+/// the scroll areas of several cards apart. Returns whether a number key
+/// may answer it: everything is on screen in full (nothing scrolled away)
+/// and the request agrees with its call.
+pub(super) fn permission_body(
+    ui: &mut egui::Ui,
+    s: &SessionView,
+    p: &PendingPermission,
+    salt: egui::Id,
+) -> bool {
+    let mut all_shown = true;
+    let cached = s.tool_for_permission(p);
+    // Vibe sends only the id; anything else the request carries must agree
+    // with the call that id names (audit M2)
+    let contradicts = cached
+        .map(|t| request_contradictions(&p.request.tool_call, t))
+        .unwrap_or_default();
+    if !contradicts.is_empty() {
+        ui.label(
+            RichText::new(trf(
+                "This request contradicts the tool call it names ({fields}). It is unclear which of the two would run: deny it unless you know why.",
+                &[("fields", &contradicts.join(", "))],
+            ))
+            .size(12.5)
+            .color(theme::RED),
+        );
+        ui.add_space(2.0);
+    }
+    if let Some(t) = cached {
+        let headline = match t.kind {
+            ToolKind::Execute => tr("Run command"),
+            ToolKind::Edit => tr("Edit file"),
+            ToolKind::Delete => tr("Delete file"),
+            ToolKind::Move => tr("Move file"),
+            ToolKind::Fetch => tr("Fetch web page"),
+            ToolKind::Read => tr("Read file"),
+            _ => tr("Run action"),
+        };
+        ui.label(RichText::new(headline).size(14.0).color(theme::TEXT));
+        let command = t
+            .raw_input
+            .as_ref()
+            .and_then(|v| v.get("command"))
+            .and_then(Value::as_str);
+        let shown = command.map_or_else(|| t.title.clone(), |c| format!("$ {c}"));
+        all_shown &= request_text(ui, salt.with("permission_cmd"), &shown);
+        // what the tool will actually be called with: the title is Vibe's
+        // summary ("Reading README.md"), the arguments are the truth (full
+        // paths, URLs, patterns). ALL of them are shown — this is the
+        // user's only safeguard when approving, so an argument that sits
+        // next to `command` (cwd, env, …) must not be hidden.
+        let has_diff = t
+            .content
+            .iter()
+            .any(|c| matches!(c, ToolCallContent::Diff { .. }));
+        let (args, cut) = permission_arguments(t.raw_input.as_ref(), has_diff);
+        // the command itself is the headline above; its key stays out of
+        // the argument list
+        let args: Vec<(String, String)> = if command.is_some() {
+            args.into_iter().filter(|(k, _)| k != "command").collect()
+        } else {
+            args
+        };
+        if !args.is_empty() {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(trf("Arguments ({n})", &[("n", &args.len())]))
+                    .size(12.0)
+                    .color(theme::DIM),
+            );
+            all_shown &= argument_rows(ui, salt.with("permission_args"), &args);
+            if cut > 0 {
+                ui.label(
+                    RichText::new(trf(
+                        "… {n} values cut to {chars} characters",
+                        &[("n", &cut), ("chars", &MAX_ARGUMENT_CHARS)],
+                    ))
+                    .size(11.0)
+                    .color(theme::DIM),
+                );
+            }
+        }
+        for content in &t.content {
+            if let ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } = content
+            {
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(relative_path(path, &s.cwd))
+                        .monospace()
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt(salt.with(("permission_diff", path)))
+                    .max_height(180.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        transcript::diff_body(ui, old_text.as_deref(), new_text, 200, None);
+                    });
+            }
+        }
+    } else {
+        all_shown &= unknown_call(ui, salt, &p.request.tool_call);
+    }
+    if !contradicts.is_empty() {
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(tr("The request itself says:"))
+                .size(12.0)
+                .color(theme::DIM),
+        );
+        request_snapshot(ui, salt, &p.request.tool_call);
+    }
+    all_shown && contradicts.is_empty()
+}
 
 /// The body of a permission card whose tool call this session has not seen
 /// (yet): vibe-acp sends only an id with the request — the call's entry id,
@@ -509,7 +519,7 @@ const MAX_SHOWN_PERMISSIONS: usize = 3;
 /// Returns whether all of it is on screen (see [`request_text`]).
 fn unknown_call(
     ui: &mut egui::Ui,
-    idx: usize,
+    salt: egui::Id,
     call: &crate::acp::protocol::ToolCallUpdate,
 ) -> bool {
     ui.label(
@@ -524,11 +534,11 @@ fn unknown_call(
         .unwrap_or_else(|| call.tool_call_id.clone());
     let mut all_shown = true;
     if !shown.trim().is_empty() {
-        all_shown &= request_text(ui, ("permission_unknown", idx), &shown);
+        all_shown &= request_text(ui, salt.with("permission_unknown"), &shown);
     }
     let args = permission_arguments(call.raw_input.as_ref(), false).0;
     if !args.is_empty() {
-        all_shown &= argument_rows(ui, ("permission_unknown_args", idx), &args);
+        all_shown &= argument_rows(ui, salt.with("permission_unknown_args"), &args);
     }
     if call.title.is_none() && call.raw_input.is_none() {
         ui.label(
@@ -602,13 +612,17 @@ pub(super) fn request_contradictions(
 
 /// What a contradictory request carries itself, below the call the card
 /// joined: its title, arguments and the files of its diffs.
-fn request_snapshot(ui: &mut egui::Ui, idx: usize, call: &crate::acp::protocol::ToolCallUpdate) {
+fn request_snapshot(
+    ui: &mut egui::Ui,
+    salt: egui::Id,
+    call: &crate::acp::protocol::ToolCallUpdate,
+) {
     if let Some(title) = call.title.as_deref().filter(|t| !t.trim().is_empty()) {
-        request_text(ui, ("permission_request_title", idx), title);
+        request_text(ui, salt.with("permission_request_title"), title);
     }
     let args = permission_arguments(call.raw_input.as_ref(), false).0;
     if !args.is_empty() {
-        argument_rows(ui, ("permission_request_args", idx), &args);
+        argument_rows(ui, salt.with("permission_request_args"), &args);
     }
     let files: Vec<(String, String)> = call
         .content
@@ -626,7 +640,7 @@ fn request_snapshot(ui: &mut egui::Ui, idx: usize, call: &crate::acp::protocol::
         )
         .collect();
     if !files.is_empty() {
-        argument_rows(ui, ("permission_request_files", idx), &files);
+        argument_rows(ui, salt.with("permission_request_files"), &files);
     }
 }
 
@@ -768,7 +782,7 @@ fn option_digit(kind: PermissionKind, eligible_before: usize) -> Option<usize> {
 
 /// The request's options; `digits` also binds number keys to the eligible
 /// ones.
-fn option_row(
+pub(super) fn option_row(
     ui: &mut egui::Ui,
     p: &PendingPermission,
     digits: bool,

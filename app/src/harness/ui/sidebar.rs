@@ -114,7 +114,7 @@ fn navigation(h: &mut Harness, ui: &mut egui::Ui) {
     let resp = widgets::nav_row(ui, Icon::List, tr("Activity"), None, h.ui.activity_open);
     if unseen_events > 0 {
         let label = unseen_events.min(99).to_string();
-        let g = line_galley(ui, &label, mono(10.0), theme::SIDEBAR, 30.0);
+        let g = line_galley(ui, &label, mono(10.5), theme::SIDEBAR, 30.0);
         let w = (g.size().x + 10.0).max(18.0);
         let badge = Rect::from_min_size(
             pos2(resp.rect.right() - w - 6.0, resp.rect.center().y - 8.0),
@@ -181,7 +181,8 @@ fn workspace_list(h: &mut Harness, ui: &mut egui::Ui) {
             if h.projects.is_empty() {
                 empty_projects(ui, &mut ops);
             }
-            for p in h.projects.clone() {
+            for i in 0..h.projects.len() {
+                let p = h.projects[i].clone();
                 workspace_tree(h, ui, &p, &mut ops);
             }
         });
@@ -729,7 +730,11 @@ fn footer(h: &mut Harness, ui: &mut egui::Ui, action: &mut HarnessAction) {
 }
 
 fn connection_line(h: &mut Harness, ui: &mut egui::Ui) {
+    // a Vibe outside the tested range: the version turns yellow and its
+    // tooltip says why (the same text as the one-time toast)
+    let compat_notice = h.vibe_compat.notice();
     let (text, color) = match &h.conn {
+        Conn::Ready { agent } if compat_notice.is_some() => (agent.to_uppercase(), theme::YELLOW),
         Conn::Ready { agent } => (agent.to_uppercase(), theme::DIM),
         Conn::Starting => (tr("CONNECTING …").to_string(), theme::DIM),
         Conn::Off => ("OFFLINE".to_string(), theme::DIM),
@@ -756,8 +761,15 @@ fn connection_line(h: &mut Harness, ui: &mut egui::Ui) {
         let label = ui.add(
             egui::Label::new(RichText::new(text).monospace().size(10.5).color(color)).truncate(),
         );
-        if let Conn::Failed(msg) = &h.conn {
-            label.on_hover_text(msg.clone());
+        let hover = match &h.conn {
+            Conn::Ready { .. } => compat_notice,
+            Conn::Failed(msg) => Some(msg.clone()),
+            _ => None,
+        };
+        if let Some(hover) = hover {
+            label.on_hover_text(hover);
+        }
+        if let Conn::Failed(_) = &h.conn {
             if ui
                 .add(IconButton::new(Icon::Refresh, tr("Reconnect")).side(20.0))
                 .clicked()
@@ -843,8 +855,12 @@ fn account_row(h: &mut Harness, ui: &mut egui::Ui, action: &mut HarnessAction) {
 
 /// A short meter of the monthly budget with the exact percentage.
 fn paint_budget(ui: &egui::Ui, origin: egui::Pos2, percent: f64, width: f32) {
-    let label = i18n::decimal(format!("{:.1} %", percent));
-    let g = line_galley(ui, &label, mono(10.5), theme::DIM, 70.0);
+    // named, so the bare number does not leave "12 % of what?" open
+    let label = trf(
+        "Quota {pct} %",
+        &[("pct", &i18n::decimal(format!("{:.1}", percent)))],
+    );
+    let g = line_galley(ui, &label, mono(10.5), theme::DIM, 100.0);
     let meter_w = (width - g.size().x - 6.0).max(20.0);
     let blocks = 16;
     let block = ((meter_w + 2.0) / blocks as f32 - 2.0).clamp(2.0, 5.0);

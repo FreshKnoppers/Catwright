@@ -61,7 +61,16 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         // .git/config is executable by git)
                         let trusted = h.git_trusted(&cwd);
                         if let Some(git) = h.watcher.git(&cwd, trusted).cloned() {
-                            git_chip(h, ui, &git, &cwd);
+                            if git.refused {
+                                ui.label(
+                                    RichText::new(tr("Git off for this repository"))
+                                        .size(12.0)
+                                        .color(theme::YELLOW),
+                                )
+                                .on_hover_text(git_refused_why());
+                            } else {
+                                git_chip(h, ui, &git, &cwd);
+                            }
                         } else if !trusted {
                             ui.label(
                                 RichText::new(tr("Git hidden until the folder is trusted"))
@@ -80,6 +89,12 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         });
 }
 
+/// Why git shows nothing in a repository whose config probe failed closed
+/// (the header label's and the environment card's tooltip).
+pub fn git_refused_why() -> &'static str {
+    tr("Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden.")
+}
+
 fn git_chip(
     h: &mut Harness,
     ui: &mut egui::Ui,
@@ -94,7 +109,7 @@ fn git_chip(
         let resp = ui
             .add(
                 egui::Label::new(
-                    RichText::new(trf("{n} changed", &[("n", &git.changed)]))
+                    RichText::new(trf("{n} uncommitted", &[("n", &git.changed)]))
                         .color(theme::AMBER)
                         .size(12.0),
                 )
@@ -102,7 +117,7 @@ fn git_chip(
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(tr(
-                "Changed files in the working directory (git status) — click for the list",
+                "Uncommitted files in the working directory (git status) — click for the list",
             ));
         changed_files_menu(h, ui, &resp, git, cwd);
     }
@@ -194,7 +209,7 @@ pub(crate) fn changed_files_popup(cwd: &std::path::Path) -> egui::Id {
     egui::Id::new(("changed_files", cwd))
 }
 
-/// The popup of the header's "N changed": every changed path from
+/// The popup of the header's "N uncommitted": every changed path from
 /// `git status`, relative to the workspace when it lies inside. A click on
 /// a file shows its diff in the preview pane (where it can be commented);
 /// an untracked folder opens in the file manager.

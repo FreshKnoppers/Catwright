@@ -12,8 +12,9 @@ API keys.
 - `app/src/`: `main.rs` (CLI + window), `app.rs` + `app/settings.rs` (egui UI),
   `acp/` (JSON-RPC framing, protocol, client, session views),
   `harness/` (Vibe harness state, Vibe extension payloads, local git/file
-  lookups), `harness/ui/` (sidebar, header, transcript, composer, cards, right
-  panel, palette, artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
+  lookups, the tested Vibe version range in `compat.rs`), `harness/ui/`
+  (sidebar, header, transcript, composer, cards, right panel, palette,
+  artifacts), `model.rs`, `store.rs` (persistence), `render.rs`,
   `script.rs`, `formula.rs`, `markdown.rs`, `diff.rs`, `syntax.rs`, `memo.rs`,
   `artifacts.rs` (Artefakte view + previews), `theme.rs`, `icons.rs`,
   `i18n.rs` (UI language, gettext catalogs in `app/i18n/`),
@@ -24,8 +25,11 @@ API keys.
   as design references; never commit them.
 - `tools/icons/render.py`: renders the app icons (`app/assets/icon.png`,
   `dist/icons/`) from `theme::LOGO`; rerun it after changing the logo.
-- `tools/mockups/`: HTML mockups of proposed UI (not implemented), rendered
-  to `docs/mockups/`; not part of the app.
+- `tools/mockups/`: HTML mockups the preview pane, review comments,
+  activity feed, work details, start screen and right panel were designed
+  from (all six are built; of 4 the level cards, not its large preview),
+  rendered to `docs/mockups/` (`node tools/mockups/render.js [file …]`);
+  not part of the app. New UI proposals go here first.
 - `tools/screenshots/`: renders the README screenshots against a stand-in
   for `vibe-acp` with prepared demo sessions (`render.sh`); not part of the app.
 - `app/src/softrender.rs`: CPU rasterizer for egui frames, so the UI can be
@@ -49,6 +53,15 @@ API keys.
   and identifiers are English.
 - Keep `cargo fmt --check`, `cargo clippy --all-targets` (no new warnings)
   and `cargo test` green.
+- Run as root (many containers), `cargo test` fails three tests that make a
+  directory read-only (`store::tests::save_settings_fails_into_a_read_only_directory`,
+  `store::tests::write_private_failure_keeps_old_file_and_cleans_up_temp`,
+  `app::tests::failed_autosave_is_visible_in_the_settings_status_line`):
+  root may write anyway. The tests are right; do not skip or change them.
+  To see the suite green there, build it with `cargo test --no-run` and run
+  the printed `target/debug/deps/catwright-…` binary as an unprivileged
+  user with its own `HOME` and `TMPDIR` (e.g. `runuser -u <user> -- env
+  HOME=/tmp/u TMPDIR=/tmp/u <binary>`). CI runs as a normal user.
 
 ## Seeing the UI (no display needed)
 

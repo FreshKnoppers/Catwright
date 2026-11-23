@@ -43,7 +43,7 @@ send the message (see [Voice input and output](#voice-input-and-output)):
 
 A project's start screen:
 
-![Start screen with the input field, model and thinking pickers and the recent sessions](docs/screenshots/start.png)
+![Start screen with the input field, model and thinking pickers, the session to continue and the recent sessions](docs/screenshots/start.png)
 
 The preview pane in Diff mode next to the transcript
 (`--project ~/my/project --session <id> --open analysis.py --preview-diff`):
@@ -123,7 +123,8 @@ The screenshots show demo projects with prepared sessions
   (`protocol.allow=never` plus `GIT_ALLOW_PROTOCOL=none`, no lazy fetch, so
   a partial-clone config cannot trigger `core.sshCommand`), repo-scope
   `include.*`/`includeIf.*` and `hook.*` keys (config-defined hooks run even
-  with `hooksPath=/dev/null` on git >= 2.46) fail the config probe closed,
+  with `hooksPath=/dev/null` on newer git; verified with 2.56) fail the config
+  probe closed,
   a non-regular `.git/config` (symlink/FIFO) fails closed, and committed
   blobs are read through plumbing (`git cat-file blob`), never `git show`,
   so a shipped `diff.*.textconv` can never run. Until a folder is trusted,
@@ -183,7 +184,8 @@ Catwright never logs or stores the dictated, summarised or spoken text.
 - Linux (Wayland or X11). Other systems are untested.
 - [Mistral Vibe](https://github.com/mistralai/mistral-vibe) installed and
   signed in: run `vibe` once in a terminal and follow the login. Tested with
-  Vibe 3.1.0 to 3.1.3.
+  Vibe 3.1.0 to 3.1.3. With an older or newer Vibe, Catwright says so once
+  and shows its version in yellow in the sidebar.
 - Optional: `notify-send` (libnotify) for desktop notifications.
 - Optional, for voice: a microphone and speakers. Vibe records and plays
   through PulseAudio or PipeWire (tested with Vibe 3.1.3).
@@ -204,6 +206,13 @@ Catwright never logs or stores the dictated, summarised or spoken text.
   language: Vibe's ACP interface takes none.
 - Routines run only while their session is open in Catwright and idle;
   Vibe's ACP interface takes intervals only, no cron expressions.
+- The config probe runs *before* each git call, but the call itself reads
+  `.git/config` again: a process that is already running as your user can
+  swap the config in that millisecond window and slip a filter driver past
+  the probe. That window only exists for someone who can already execute
+  code, and a filter written once (not flipped back and forth inside the
+  window) is caught by the next probe — the probe cannot close a race
+  against a live writer, it only refuses what it can see.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
 ## Download
@@ -212,8 +221,8 @@ Each [release](https://github.com/FreshKnoppers/Catwright/releases) has a
 ready-built archive for Linux x86_64 (glibc 2.39 or newer):
 
 ```sh
-tar xzf catwright-v0.5.1-x86_64-linux.tar.gz
-cd catwright-v0.5.1-x86_64-linux
+tar xzf catwright-v0.7.1-x86_64-linux.tar.gz
+cd catwright-v0.7.1-x86_64-linux
 ./dist/install.sh
 ```
 

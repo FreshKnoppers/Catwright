@@ -231,8 +231,8 @@ msgstr "Keine Dateien betroffen."
 msgid "Rewind"
 msgstr "Zurückspulen"
 
-msgid "{n} changed"
-msgstr "{n} geändert"
+msgid "{n} uncommitted"
+msgstr "{n} nicht committet"
 
 msgid "Work panel (Ctrl J)"
 msgstr "Arbeits-Leiste (Strg J)"
@@ -243,8 +243,8 @@ msgstr "Projektordner öffnen"
 msgid "Fork session"
 msgstr "Sitzung abzweigen (Fork)"
 
-msgid "Changed files in the working directory (git status) — click for the list"
-msgstr "Geänderte Dateien im Arbeitsverzeichnis (git status) – Klick zeigt die Liste"
+msgid "Uncommitted files in the working directory (git status) — click for the list"
+msgstr "Nicht committete Dateien im Arbeitsverzeichnis (git status) – Klick zeigt die Liste"
 
 msgid "… {n} more"
 msgstr "… {n} weitere"
@@ -300,8 +300,8 @@ msgstr "Nächste Nachricht einreihen …"
 msgid "Message to Vibe …"
 msgstr "Nachricht an Vibe …"
 
-msgid "What do you want to build?"
-msgstr "Was möchtest du entwickeln?"
+msgid "Describe a task. @ adds files, / runs commands"
+msgstr "Beschreib eine Aufgabe. @ fügt Dateien hinzu, / startet Befehle"
 
 msgid "Remove attachment"
 msgstr "Anhang entfernen"
@@ -606,8 +606,8 @@ msgstr "Frei"
 msgid "Split estimated (from Vibe’s measurement)"
 msgstr "Aufteilung geschätzt (aus Vibes Messung)"
 
-msgid "Changes"
-msgstr "Änderungen"
+msgid "Session changes"
+msgstr "Änderungen der Sitzung"
 
 msgid "Revert change"
 msgstr "Änderung zurücknehmen"
@@ -768,8 +768,8 @@ msgstr "Die Datei konnte nicht gelesen werden."
 msgid "Vibe asked a question that cannot be shown."
 msgstr "Vibe hat eine Rückfrage gestellt, die nicht dargestellt werden kann."
 
-msgid "Error ({code}): {message}"
-msgstr "Fehler ({code}): {message}"
+msgid "Vibe error: {message} ({code})."
+msgstr "Vibe-Fehler: {message} ({code})."
 
 msgid "Fork failed: {detail}"
 msgstr "Fork fehlgeschlagen: {detail}"
@@ -1695,6 +1695,9 @@ msgstr "Worktree „{name}“ löschen? Die Dateien im Hauptprojekt bleiben unbe
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "Der Worktree hat ungespeicherte Änderungen — sie gehen verloren."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "Der Worktree konnte nicht auf Änderungen geprüft werden — Dateien können verloren gehen."
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Auch den Branch „{branch}“ löschen"
 
@@ -1869,11 +1872,111 @@ msgstr "Diese Anfrage widerspricht dem Tool-Aufruf, den sie nennt ({fields}). Un
 msgid "The request itself says:"
 msgstr "Die Anfrage selbst sagt:"
 
-msgid "This request contradicts its tool call – open the session to decide."
-msgstr "Diese Anfrage widerspricht ihrem Tool-Aufruf – öffne die Session, um zu entscheiden."
 
 msgid "A request from Vibe had an unusable id and was refused."
 msgstr "Eine Anfrage von Vibe hatte eine unbrauchbare ID und wurde abgelehnt."
 
 msgid "{shown} of {total} approvals shown – the others follow once these are answered."
 msgstr "{shown} von {total} Freigaben angezeigt – die übrigen folgen, sobald diese beantwortet sind."
+
+msgid "Diff is being prepared …"
+msgstr "Die Diff-Vorschau wird vorbereitet …"
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
+msgstr "Catwright wurde mit Vibe {min} bis {max} getestet. Vibe {version} ist neuer: Wenn etwas nicht funktioniert, melde es bitte."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is older: some features may be missing, please update Vibe."
+msgstr "Catwright wurde mit Vibe {min} bis {max} getestet. Vibe {version} ist älter: Manche Funktionen fehlen vielleicht, bitte aktualisiere Vibe."
+
+msgid "L{line}: {text}"
+msgstr "L{line}: {text}"
+
+msgid "Git off for this repository"
+msgstr "Git für dieses Repository aus"
+
+msgid "Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden."
+msgstr "Catwright führt hier kein git aus: Die git-Config des Repositorys enthält include-, includeIf- oder hook-Einträge oder ließ sich nicht sicher prüfen. Branch, Änderungen und Diff-Vorschau bleiben ausgeblendet."
+
+msgid "Diff preview is off: Catwright runs no git in this repository."
+msgstr "Diff-Vorschau aus: Catwright führt in diesem Repository kein git aus."
+
+msgid "Running time so far"
+msgstr "Laufzeit bisher"
+
+msgid "Waiting for subagents"
+msgstr "Wartet auf Subagenten"
+
+msgid "Quota {pct} %"
+msgstr "Kontingent {pct} %"
+
+msgid "Reply to Vibe …"
+msgstr "Antwort an Vibe …"
+
+msgid "every hour at :{minute}"
+msgstr "stündlich um :{minute}"
+
+msgid "daily at {time}"
+msgstr "täglich um {time}"
+
+msgid "weekdays at {time}"
+msgstr "werktags um {time}"
+
+msgid "{day} at {time}"
+msgstr "{day} um {time}"
+
+msgid "Sundays"
+msgstr "sonntags"
+
+msgid "Mondays"
+msgstr "montags"
+
+msgid "Tuesdays"
+msgstr "dienstags"
+
+msgid "Wednesdays"
+msgstr "mittwochs"
+
+msgid "Thursdays"
+msgstr "donnerstags"
+
+msgid "Fridays"
+msgstr "freitags"
+
+msgid "Saturdays"
+msgstr "samstags"
+
+msgid "none"
+msgstr "keine"
+
+msgid "Needs you"
+msgstr "Braucht dich"
+
+msgid "New results"
+msgstr "Neue Ergebnisse"
+
+msgid "In this project"
+msgstr "In diesem Projekt"
+
+msgid "Approval:"
+msgstr "Freigabe:"
+
+msgid "Last active {time} ago"
+msgstr "Zuletzt aktiv vor {time}"
+
+msgid "Waiting for your approval"
+msgstr "Wartet auf deine Freigabe"
+
+msgid "While Vibe works, the running turn is one summary line."
+msgstr "Während Vibe arbeitet, ist die laufende Runde eine Zusammenfassungszeile."
+
+msgid "Tool calls as one closed line per group. The default."
+msgstr "Tool-Aufrufe als eine geschlossene Zeile pro Gruppe. Die Voreinstellung."
+
+msgid "Tool groups and thoughts open while Vibe works."
+msgstr "Tool-Gruppen und Gedanken offen, während Vibe arbeitet."
+
+msgid "Also every tool's output open while Vibe works."
+msgstr "Dazu die Ausgabe jedes Tools offen, während Vibe arbeitet."
+
+msgid "Waiting behind other approvals of this session – they come first."
+msgstr "Wartet hinter anderen Freigaben dieser Session – die kommen zuerst."

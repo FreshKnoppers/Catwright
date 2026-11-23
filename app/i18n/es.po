@@ -231,8 +231,8 @@ msgstr "Ningún archivo afectado."
 msgid "Rewind"
 msgstr "Rebobinar"
 
-msgid "{n} changed"
-msgstr "{n} modificados"
+msgid "{n} uncommitted"
+msgstr "{n} sin confirmar"
 
 msgid "Work panel (Ctrl J)"
 msgstr "Panel de trabajo (Ctrl J)"
@@ -243,8 +243,8 @@ msgstr "Abrir la carpeta del proyecto"
 msgid "Fork session"
 msgstr "Bifurcar sesión (fork)"
 
-msgid "Changed files in the working directory (git status) — click for the list"
-msgstr "Archivos modificados en el directorio de trabajo (git status) — haz clic para ver la lista"
+msgid "Uncommitted files in the working directory (git status) — click for the list"
+msgstr "Archivos sin confirmar en el directorio de trabajo (git status) — haz clic para ver la lista"
 
 msgid "… {n} more"
 msgstr "… {n} más"
@@ -300,8 +300,8 @@ msgstr "Poner el siguiente mensaje en cola …"
 msgid "Message to Vibe …"
 msgstr "Mensaje para Vibe …"
 
-msgid "What do you want to build?"
-msgstr "¿Qué quieres construir?"
+msgid "Describe a task. @ adds files, / runs commands"
+msgstr "Describe una tarea. @ añade archivos, / ejecuta comandos"
 
 msgid "Remove attachment"
 msgstr "Quitar archivo adjunto"
@@ -606,8 +606,8 @@ msgstr "Libre"
 msgid "Split estimated (from Vibe’s measurement)"
 msgstr "Distribución estimada (según la medición de Vibe)"
 
-msgid "Changes"
-msgstr "Cambios"
+msgid "Session changes"
+msgstr "Cambios de la sesión"
 
 msgid "Revert change"
 msgstr "Revertir cambio"
@@ -768,8 +768,8 @@ msgstr "No se pudo leer el archivo."
 msgid "Vibe asked a question that cannot be shown."
 msgstr "Vibe hizo una pregunta que no se puede mostrar."
 
-msgid "Error ({code}): {message}"
-msgstr "Error ({code}): {message}"
+msgid "Vibe error: {message} ({code})."
+msgstr "Error de Vibe: {message} ({code})."
 
 msgid "Fork failed: {detail}"
 msgstr "El fork ha fallado: {detail}"
@@ -1695,6 +1695,9 @@ msgstr "¿Eliminar el worktree «{name}»? Los archivos del proyecto principal n
 msgid "The worktree has uncommitted changes — they are lost."
 msgstr "El worktree tiene cambios sin confirmar: se perderán."
 
+msgid "The worktree could not be checked for changes — files may be lost."
+msgstr "No se pudo comprobar si el worktree tiene cambios — se pueden perder archivos."
+
 msgid "Also delete the branch “{branch}”"
 msgstr "Eliminar también la rama «{branch}»"
 
@@ -1869,11 +1872,111 @@ msgstr "Esta solicitud contradice la llamada de herramienta que nombra ({fields}
 msgid "The request itself says:"
 msgstr "La propia solicitud dice:"
 
-msgid "This request contradicts its tool call – open the session to decide."
-msgstr "Esta solicitud contradice su llamada de herramienta: abre la sesión para decidir."
 
 msgid "A request from Vibe had an unusable id and was refused."
 msgstr "Una solicitud de Vibe tenía un identificador inutilizable y se rechazó."
 
 msgid "{shown} of {total} approvals shown – the others follow once these are answered."
 msgstr "Se muestran {shown} de {total} aprobaciones: las demás siguen cuando se respondan estas."
+
+msgid "Diff is being prepared …"
+msgstr "Preparando la vista previa del diff …"
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is newer: if something does not work, please report it."
+msgstr "Catwright se probó con Vibe {min} a {max}. Vibe {version} es más nuevo: si algo no funciona, avísanos, por favor."
+
+msgid "Catwright was tested with Vibe {min} to {max}. Vibe {version} is older: some features may be missing, please update Vibe."
+msgstr "Catwright se probó con Vibe {min} a {max}. Vibe {version} es más antiguo: puede que falten funciones, actualiza Vibe, por favor."
+
+msgid "L{line}: {text}"
+msgstr "L{line}: {text}"
+
+msgid "Git off for this repository"
+msgstr "Git desactivado para este repositorio"
+
+msgid "Catwright runs no git here: the repository's own git config has include, includeIf or hook entries, or could not be checked safely. Branch, changes and diff preview stay hidden."
+msgstr "Catwright no ejecuta git aquí: la configuración git del repositorio tiene entradas include, includeIf o hook, o no se pudo comprobar de forma segura. La rama, los cambios y la vista de diff quedan ocultos."
+
+msgid "Diff preview is off: Catwright runs no git in this repository."
+msgstr "Vista de diff desactivada: Catwright no ejecuta git en este repositorio."
+
+msgid "Running time so far"
+msgstr "Tiempo de ejecución hasta ahora"
+
+msgid "Waiting for subagents"
+msgstr "Esperando a los subagentes"
+
+msgid "Quota {pct} %"
+msgstr "Cuota {pct} %"
+
+msgid "Reply to Vibe …"
+msgstr "Responder a Vibe …"
+
+msgid "every hour at :{minute}"
+msgstr "cada hora a los :{minute}"
+
+msgid "daily at {time}"
+msgstr "a diario a las {time}"
+
+msgid "weekdays at {time}"
+msgstr "días laborables a las {time}"
+
+msgid "{day} at {time}"
+msgstr "{day} a las {time}"
+
+msgid "Sundays"
+msgstr "los domingos"
+
+msgid "Mondays"
+msgstr "los lunes"
+
+msgid "Tuesdays"
+msgstr "los martes"
+
+msgid "Wednesdays"
+msgstr "los miércoles"
+
+msgid "Thursdays"
+msgstr "los jueves"
+
+msgid "Fridays"
+msgstr "los viernes"
+
+msgid "Saturdays"
+msgstr "los sábados"
+
+msgid "none"
+msgstr "ninguna"
+
+msgid "Needs you"
+msgstr "Te necesita"
+
+msgid "New results"
+msgstr "Resultados nuevos"
+
+msgid "In this project"
+msgstr "En este proyecto"
+
+msgid "Approval:"
+msgstr "Aprobación:"
+
+msgid "Last active {time} ago"
+msgstr "Activa por última vez hace {time}"
+
+msgid "Waiting for your approval"
+msgstr "Esperando tu aprobación"
+
+msgid "While Vibe works, the running turn is one summary line."
+msgstr "Mientras Vibe trabaja, la ronda en curso es una sola línea de resumen."
+
+msgid "Tool calls as one closed line per group. The default."
+msgstr "Llamadas a herramientas como una línea cerrada por grupo. El valor por defecto."
+
+msgid "Tool groups and thoughts open while Vibe works."
+msgstr "Grupos de herramientas y pensamientos abiertos mientras Vibe trabaja."
+
+msgid "Also every tool's output open while Vibe works."
+msgstr "Además, la salida de cada herramienta abierta mientras Vibe trabaja."
+
+msgid "Waiting behind other approvals of this session – they come first."
+msgstr "Espera detrás de otras aprobaciones de esta sesión: esas van primero."

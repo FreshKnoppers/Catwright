@@ -502,13 +502,28 @@ fn worktree_dialogs(h: &mut Harness, ctx: &egui::Context) {
                     .color(theme::TEXT)
                     .size(13.5),
                 );
-                if d.dirty {
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(tr("The worktree has uncommitted changes — they are lost."))
+                match d.dirty {
+                    Some(true) => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(tr(
+                                "The worktree has uncommitted changes — they are lost.",
+                            ))
                             .color(theme::RED_TEXT)
                             .size(12.5),
-                    );
+                        );
+                    }
+                    None => {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(tr(
+                                "The worktree could not be checked for changes — files may be lost.",
+                            ))
+                            .color(theme::YELLOW)
+                            .size(12.5),
+                        );
+                    }
+                    Some(false) => {}
                 }
                 if !d.branch.is_empty() {
                     ui.add_space(10.0);

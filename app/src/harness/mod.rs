@@ -5,6 +5,7 @@
 //! nothing is logged.
 
 pub mod catalog;
+pub mod compat;
 pub mod context;
 pub mod extras;
 pub mod state;
@@ -264,6 +265,12 @@ pub struct Harness {
     /// The agent accepts `image` blocks (agentCapabilities.promptCapabilities
     /// from `initialize`); PNG attachments need it, else they go as links.
     agent_images: bool,
+    /// How the connected Vibe's version (`agentInfo.version` from
+    /// `initialize`) relates to the versions this build was tested with.
+    pub vibe_compat: compat::VibeCompat,
+    /// The untested-version toast was shown in this run (reconnects do not
+    /// repeat it; the sidebar footer keeps the hint).
+    vibe_compat_warned: bool,
     // render state (consumed by harness::ui; RenderCtx needs these two).
     // Every per-interaction key starts with the owning session id
     // (Handoff 2.5), so one session's state never surfaces in another and
@@ -436,6 +443,8 @@ impl Harness {
             hint_pending: HashSet::new(),
             pinned: HashSet::new(),
             agent_images: true,
+            vibe_compat: compat::VibeCompat::Unknown,
+            vibe_compat_warned: false,
             ui_events: Vec::new(),
             form_values: HashMap::new(),
             scripts: HashMap::new(),
@@ -589,6 +598,21 @@ impl Harness {
                     None => "Vibe".to_string(),
                 };
                 self.conn = Conn::Ready { agent };
+                // a Vibe outside the tested range may have changed its ACP
+                // interface or extensions: say so once, instead of letting a
+                // feature fail silently
+                self.vibe_compat = r
+                    .agent_info
+                    .as_ref()
+                    .map_or(compat::VibeCompat::Unknown, |i| {
+                        compat::VibeCompat::of(&i.version)
+                    });
+                if !self.vibe_compat_warned {
+                    if let Some(notice) = self.vibe_compat.notice() {
+                        self.status = notice;
+                        self.vibe_compat_warned = true;
+                    }
+                }
                 self.ready_since = Some(Instant::now());
                 self.starting_since = None;
                 if let Some((cwd, sid)) = self.open_on_ready.take() {
@@ -1232,9 +1256,17 @@ impl Harness {
                 if error.code == rpc::AUTH_REQUIRED {
                     self.status = tr("Vibe is not signed in. Please start `vibe` once in a terminal and sign in.").to_string();
                 } else {
+                    // Vibe's messages come without a closing dot ("rate
+                    // limited"); the code goes last, so a note appended
+                    // after it starts a sentence of its own
+                    let message = error
+                        .message
+                        .trim()
+                        .trim_end_matches(&['.', '!'][..])
+                        .trim_end();
                     self.status = trf(
-                        "Error ({code}): {message}",
-                        &[("code", &error.code), ("message", &error.message)],
+                        "Vibe error: {message} ({code}).",
+                        &[("message", &message), ("code", &error.code)],
                     );
                 }
                 match &request {
@@ -1481,9 +1513,12 @@ impl Harness {
     /// Only in a trusted folder, with a short deadline (this runs on the UI
     /// thread) and without submodule recursion (a nested repo's own config
     /// must not be read). The filter probe still runs in the worktree itself.
-    pub fn worktree_dirty(path: &Path, trusted: bool) -> bool {
+    /// `None` = no trustworthy answer (untrusted folder, failed filter probe,
+    /// or over the deadline): deletion uses `--force`, so the dialog must
+    /// warn instead of silently discarding data.
+    pub fn worktree_dirty(path: &Path, trusted: bool) -> Option<bool> {
         if !trusted {
-            return false;
+            return None;
         }
         watch::git_output_timeout(
             path,
@@ -1491,7 +1526,6 @@ impl Harness {
             std::time::Duration::from_secs(2),
         )
         .map(|o| !o.trim().is_empty())
-        .unwrap_or(false)
     }
 
     /// Delete a worktree in the background; its branch only when
@@ -2222,28 +2256,30 @@ impl Harness {
     /// `sidebar_entries`) — a session Vibe has not listed yet stays visible
     /// and clickable in the sidebar.
     pub fn sidebar_rows(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
-        let list = self.listed.get(dir).cloned().unwrap_or_default();
-        let list: Vec<SessionInfo> = list
-            .into_iter()
-            .filter(|s| !self.archived.contains(&s.session_id))
-            .collect();
         let active = self
             .active
             .as_deref()
             .and_then(|sid| self.sessions.get(sid))
             .filter(|v| v.cwd == dir)
             .filter(|v| !self.archived.contains(&v.session_id));
-        sidebar_entries(&list, active, default_title, &self.pinned)
+        let listed = self
+            .listed
+            .get(dir)
+            .into_iter()
+            .flatten()
+            .filter(|s| !self.archived.contains(&s.session_id));
+        sidebar_entries(listed, active, default_title, &self.pinned)
     }
 
     /// The archived sessions of one workspace, for the sidebar's own group.
     pub fn sidebar_rows_archived(&self, dir: &Path, default_title: &str) -> Vec<SidebarEntry> {
-        let list = self.listed.get(dir).cloned().unwrap_or_default();
-        let list: Vec<SessionInfo> = list
+        let listed = self
+            .listed
+            .get(dir)
             .into_iter()
-            .filter(|s| self.archived.contains(&s.session_id))
-            .collect();
-        sidebar_entries(&list, None, default_title, &self.pinned)
+            .flatten()
+            .filter(|s| self.archived.contains(&s.session_id));
+        sidebar_entries(listed, None, default_title, &self.pinned)
     }
 
     /// Mark a session unread (its dot shows in the sidebar until opened).
@@ -4249,15 +4285,15 @@ pub struct SidebarEntry {
 /// from `session_info_update` (`SessionView::title`) wins over the
 /// possibly stale title of the list entry. `default_title` is the German
 /// placeholder for sessions without a title.
-pub fn sidebar_entries(
-    listed: &[SessionInfo],
+pub fn sidebar_entries<'a>(
+    listed: impl IntoIterator<Item = &'a SessionInfo>,
     active: Option<&SessionView>,
     default_title: &str,
     pinned: &HashSet<String>,
 ) -> Vec<SidebarEntry> {
     // pinned first, then most recently updated (`updatedAt` is ISO-8601,
     // so string order is time order; sessions without one sort last)
-    let mut listed: Vec<&SessionInfo> = listed.iter().collect();
+    let mut listed: Vec<&SessionInfo> = listed.into_iter().collect();
     listed.sort_by(|a, b| {
         let pa = pinned.contains(&a.session_id);
         let pb = pinned.contains(&b.session_id);
@@ -4288,10 +4324,10 @@ pub fn sidebar_entries(
         // the open session's own title is the freshest one
         let own = active
             .filter(|v| v.session_id == s.session_id)
-            .and_then(|v| v.title.clone());
-        let title = own.or_else(|| s.title.clone()).map_or_else(
+            .and_then(|v| v.title.as_deref());
+        let title = own.or(s.title.as_deref()).map_or_else(
             || default_title.to_string(),
-            |t| display_title(&t, default_title),
+            |t| display_title(t, default_title),
         );
         out.push(SidebarEntry {
             session_id: s.session_id.clone(),

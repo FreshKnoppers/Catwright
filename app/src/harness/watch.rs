@@ -32,6 +32,10 @@ pub struct GitInfo {
     pub files: Vec<ChangedFile>,
     /// The repository root: `files` are relative to it, not to the folder.
     pub root: Option<PathBuf>,
+    /// A repository exists, but Catwright runs no git in it: the config
+    /// probe failed closed (repo-scope `include.*`/`includeIf.*`/`hook.*`,
+    /// a config file that is not a regular file, or no answer in time).
+    pub refused: bool,
 }
 
 /// One `git status` entry: its two-letter status code (e.g. ` M`, `??`)
@@ -72,6 +76,7 @@ pub fn parse_git(branch: &str, status: &str) -> GitInfo {
         changed,
         files,
         root: None,
+        refused: false,
     }
 }
 
@@ -103,7 +108,13 @@ fn read_git(dir: &Path) -> GitInfo {
         .map(|r| PathBuf::from(r.trim()))
         .filter(|r| !r.as_os_str().is_empty() && plausible_root(dir, r))
     else {
-        return GitInfo::default();
+        // no work tree of its own: a plain folder, a repo-chosen work tree
+        // elsewhere (M10), or a repository the probe refuses — which the
+        // UI names instead of hiding
+        return GitInfo {
+            refused: probe_filter_drivers(dir).is_none(),
+            ..GitInfo::default()
+        };
     };
     let branch = git_output(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
     // `--ignore-submodules=all`: `status` would otherwise recurse into
@@ -119,7 +130,12 @@ fn read_git(dir: &Path) -> GitInfo {
             info.root = Some(root);
             info
         }
-        _ => GitInfo::default(),
+        // no answer: a plain folder (the probe says "no repository") or a
+        // repository git refuses, which the UI names instead of hiding
+        _ => GitInfo {
+            refused: probe_filter_drivers(dir).is_none(),
+            ..GitInfo::default()
+        },
     }
 }
 
@@ -835,14 +851,19 @@ pub fn parse_scoped_filter_list(out: &str) -> Vec<String> {
 /// to git through `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
 /// env (verified against git 2.56 to beat `.git/config`, and to survive
 /// driver names containing `=` or spaces, which a `-c key=value` argument
-/// would misparse): `cat` passes content through unchanged, an empty
-/// `process` disables the long-running filter process.
+/// would misparse): `cat` replaces the configured clean/smudge command, an
+/// empty `process` disables the long-running filter process, and
+/// `required=false` keeps git WORKING for existing setups such as git-lfs:
+/// with the real driver gone, a leftover `filter.<d>.required=true` (set by
+/// `git lfs install`) makes `status` and `worktree add` fail hard with exit
+/// 128 — verified against git 2.56.1 — instead of falling back to no filter.
 pub fn filter_neutralizers(drivers: &[String]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for d in drivers {
         out.push((format!("filter.{d}.clean"), "cat".to_string()));
         out.push((format!("filter.{d}.smudge"), "cat".to_string()));
         out.push((format!("filter.{d}.process"), String::new()));
+        out.push((format!("filter.{d}.required"), "false".to_string()));
     }
     out
 }
@@ -872,9 +893,12 @@ const PREVIEW_GIT_TIMEOUT: Duration = Duration::from_secs(2);
 /// verified against git 2.56 that this executes the configured command
 /// (RCE). `cat-file blob` applies no textconv and no filters and fails on
 /// non-blobs (gitlinks), which callers treat as "no old version".
-pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String> {
-    let neutral = filter_neutralizers(&probe_filter_drivers_timeout(dir, PREVIEW_GIT_TIMEOUT)?);
-    git_raw_bounded(
+pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> HeadBlob {
+    let Some(drivers) = probe_filter_drivers_timeout(dir, PREVIEW_GIT_TIMEOUT) else {
+        return HeadBlob::Refused;
+    };
+    let neutral = filter_neutralizers(&drivers);
+    match git_raw_bounded(
         dir,
         &[
             "cat-file".to_string(),
@@ -884,7 +908,23 @@ pub fn head_blob_sized(dir: &Path, rel: &str, max_bytes: usize) -> Option<String
         PREVIEW_GIT_TIMEOUT,
         max_bytes,
         &neutral,
-    )
+    ) {
+        Some(blob) => HeadBlob::Blob(blob),
+        None => HeadBlob::Missing,
+    }
+}
+
+/// The committed version of a file, as `head_blob_sized` found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeadBlob {
+    /// The content at HEAD.
+    Blob(String),
+    /// No committed version: an untracked file, no commit yet, no
+    /// repository, a gitlink, or over the size cap.
+    Missing,
+    /// Git does not run in this repository: the config probe failed closed
+    /// (see `probe_filter_drivers`), so there is no trustworthy answer.
+    Refused,
 }
 
 /// Outcome of one bounded git call, so callers can tell "the command ran
@@ -932,6 +972,10 @@ fn git_raw(
     }
     cmd.arg("-c")
         .arg("core.fsmonitor=false")
+        // hooksPath like run_git: no current caller starts hooks, but
+        // `git_output` is pub(crate) — belt and braces for future callers
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
         // no fetching, ever: a shipped partial-clone config
         // (`extensions.partialClone` + a promisor remote) would make git
         // lazily fetch missing objects, and an ssh remote would run the
@@ -1174,6 +1218,32 @@ mod tests {
         d
     }
 
+    /// What `probe_filter_drivers` must report for a repository whose own
+    /// config defines `repo_own`: the probe neutralizes drivers from ALL
+    /// scopes, so the system/global drivers of the machine running the
+    /// tests come first (the GitHub runner and many desktops ship git-lfs
+    /// in /etc/gitconfig or ~/.gitconfig), then the repo's own ones, each
+    /// name once — the parser's order. Read outside any repository, with
+    /// the same `--includes` as the probe, so only system/global count.
+    fn expected_drivers(repo_own: &[&str]) -> Vec<String> {
+        let outside = tmp_base("no-repo");
+        let out = std::process::Command::new("git")
+            .current_dir(&outside)
+            // discovery must not walk up into a repository around TMPDIR
+            .env("GIT_CEILING_DIRECTORIES", outside.parent().unwrap())
+            .args(["config", "--includes", "--show-scope", "--list", "-z"])
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&outside);
+        let mut names = parse_scoped_filter_list(&String::from_utf8_lossy(&out.stdout));
+        for own in repo_own {
+            if !names.iter().any(|n| n == own) {
+                names.push(own.to_string());
+            }
+        }
+        names
+    }
+
     /// A `!` alias makes git spawn a shell; the background `sleep` inherits
     /// the piped stdout and keeps its write end open, while git itself has
     /// already exited with status 0. The old `reader.join()` hung on this
@@ -1369,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_neutralizers_are_env_config_pairs_covering_all_three_keys() {
+    fn filter_neutralizers_are_env_config_pairs_covering_all_four_keys() {
         let args = filter_neutralizers(&["pwn".to_string(), "x=y".to_string()]);
         assert_eq!(
             args,
@@ -1377,10 +1447,12 @@ mod tests {
                 ("filter.pwn.clean".to_string(), "cat".to_string()),
                 ("filter.pwn.smudge".to_string(), "cat".to_string()),
                 ("filter.pwn.process".to_string(), String::new()),
+                ("filter.pwn.required".to_string(), "false".to_string()),
                 // a driver name with '=' must survive as an env KEY
                 ("filter.x=y.clean".to_string(), "cat".to_string()),
                 ("filter.x=y.smudge".to_string(), "cat".to_string()),
                 ("filter.x=y.process".to_string(), String::new()),
+                ("filter.x=y.required".to_string(), "false".to_string()),
             ]
         );
     }
@@ -1431,7 +1503,7 @@ mod tests {
 
         // the probe sees the driver …
         let drivers = probe_filter_drivers(&repo).expect("probe succeeds in a repo");
-        assert_eq!(drivers, vec!["pwn"]);
+        assert_eq!(drivers, expected_drivers(&["pwn"]));
         // … and our scan runs `status` with the filter neutralized
         let out = git_output(&repo, &["status", "--porcelain", "-z"]);
         assert!(out.is_some(), "status still answers");
@@ -1701,7 +1773,7 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
 
         let drivers = probe_filter_drivers(&repo).expect("probe succeeds");
-        assert_eq!(drivers, vec!["x=y"]);
+        assert_eq!(drivers, expected_drivers(&["x=y"]));
         assert!(git_output(&repo, &["status", "--porcelain", "-z"]).is_some());
         assert!(!marker.exists(), "the '='-named driver must not have run");
         let _ = std::fs::remove_dir_all(&base);
@@ -1717,8 +1789,12 @@ mod tests {
         std::fs::create_dir_all(&not_a_repo).unwrap();
         assert_eq!(probe_filter_drivers(&not_a_repo), Some(vec![]));
         assert!(git_output(&not_a_repo, &["init", "-q"]).is_some());
-        // now it is a repo: the probe reads its config (no filters here)
-        assert_eq!(probe_filter_drivers(&not_a_repo), Some(vec![]));
+        // now it is a repo: the probe reads its config (no repo filters
+        // here, only what system/global config defines)
+        assert_eq!(
+            probe_filter_drivers(&not_a_repo),
+            Some(expected_drivers(&[]))
+        );
         assert!(git_output(&not_a_repo, &["status", "--porcelain"]).is_some());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1794,11 +1870,15 @@ mod tests {
         // our path must not: blob content for a normal file, None for the
         // gitlink, and no textconv execution either way
         let _ = std::fs::remove_file(&marker);
-        let blob = head_blob_sized(&repo, "f.txt", 1024).expect("blob at HEAD");
-        assert_eq!(blob, "hello\n");
+        assert_eq!(
+            head_blob_sized(&repo, "f.txt", 1024),
+            HeadBlob::Blob("hello\n".to_string()),
+            "blob at HEAD"
+        );
         assert!(!marker.exists(), "cat-file must not run textconv");
-        assert!(
-            head_blob_sized(&repo, "sub", 1024).is_none(),
+        assert_eq!(
+            head_blob_sized(&repo, "sub", 1024),
+            HeadBlob::Missing,
             "gitlink is not a blob"
         );
         assert!(
@@ -2051,10 +2131,30 @@ mod tests {
             .output()
             .unwrap();
         let _ = plain.status;
-        assert!(
-            marker.exists(),
-            "PoC premise: worktree add runs the config-defined hook even with hooksPath=/dev/null"
-        );
+        // Config-defined hooks only exist in newer git: 2.56 runs them
+        // (PoC-verified), while older releases such as 2.43 (Ubuntu 24.04)
+        // and 2.47 do not run them at all, so there is no attack to show.
+        // The premise is required from 2.56 on; the fail-closed checks below
+        // run on every version.
+        let version = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                let out = String::from_utf8_lossy(&o.stdout).into_owned();
+                crate::harness::compat::Version::parse(
+                    out.trim().trim_start_matches("git version "),
+                )
+            });
+        let ran = marker.exists();
+        if version.is_some_and(|v| v >= crate::harness::compat::Version(2, 56, 0)) {
+            assert!(
+                ran,
+                "PoC premise: worktree add runs the config-defined hook even with hooksPath=/dev/null"
+            );
+        } else if !ran {
+            eprintln!("git {version:?} runs no config-defined hooks: PoC premise not checked");
+        }
         let _ = std::fs::remove_file(&marker);
         let _ = std::process::Command::new("git")
             .arg("-C")
@@ -2107,6 +2207,55 @@ mod tests {
             tries += 1;
         }
         assert!(w.git(&repo, true).is_some(), "trusted: the scan ran");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A repository whose config probe fails closed is reported as
+    /// `refused` (the UI names it instead of hiding git silently), and its
+    /// diff preview gets `HeadBlob::Refused`, not "no old version". A plain
+    /// folder and a healthy repository are not refused.
+    #[test]
+    fn refused_repository_is_told_apart_from_no_repository() {
+        let base = tmp_base("refused");
+        let plain = base.join("plain");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("-c")
+                .arg("user.email=t@t")
+                .arg("-c")
+                .arg("user.name=t")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "."]);
+        std::fs::write(repo.join("f.txt"), "hello\n").unwrap();
+        git(&["add", "f.txt"]);
+        git(&["commit", "-qm", "one"]);
+
+        // healthy repository: branch known, not refused
+        let ok = read_git(&repo);
+        assert!(ok.branch.is_some() && !ok.refused, "{ok:?}");
+        assert_eq!(
+            head_blob_sized(&repo, "f.txt", 1024),
+            HeadBlob::Blob("hello\n".to_string())
+        );
+        // plain folder: no repository, nothing refused
+        let none = read_git(&plain);
+        assert!(none.branch.is_none() && !none.refused, "{none:?}");
+
+        // a repo-scope include makes the probe fail closed
+        git(&["config", "include.path", "extra.cfg"]);
+        let refused = read_git(&repo);
+        assert!(refused.branch.is_none(), "no git ran: {refused:?}");
+        assert!(refused.refused, "the refusal is reported: {refused:?}");
+        assert_eq!(head_blob_sized(&repo, "f.txt", 1024), HeadBlob::Refused);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

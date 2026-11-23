@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::acp::protocol::ConfigOption;
+use crate::acp::session::Item;
 use crate::harness::state::Dictation;
 use crate::harness::watch::{filter_files, mention_at};
 use crate::harness::{
@@ -181,10 +182,13 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
             ui.input_mut(|i| !i.modifiers.shift && i.consume_key(Modifiers::NONE, Key::Enter));
     }
 
+    // typing anywhere lands here, so the composer is nearly always focused:
+    // a quiet step in the border instead of an accent ring; the accent
+    // belongs to the send button once there is something to send
     let stroke = Stroke::new(
         1.0_f32,
         if focused {
-            theme::ORANGE_DIM
+            theme::BORDER
         } else {
             theme::BORDER_SOFT
         },
@@ -208,12 +212,21 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
                 .map(|s| s.cwd.clone())
                 .or_else(|| h.current_project.clone())
                 .is_some_and(|dir| h.is_chat_dir(&dir));
+            // "What do you want to build?" opens a session; once the
+            // conversation has started, the next message is a reply
+            let started = sid
+                .as_deref()
+                .and_then(|s| h.sessions.get(s))
+                .is_some_and(|v| !v.items.is_empty());
             let hint = if running {
                 tr("Queue the next message …")
             } else if in_chat_dir {
                 tr("Message to Vibe …")
+            } else if started {
+                tr("Reply to Vibe …")
             } else {
-                tr("What do you want to build?")
+                // the start screen has no hint row: the placeholder says it
+                tr("Describe a task. @ adds files, / runs commands")
             };
             egui::ScrollArea::vertical()
                 .id_salt("composer_scroll")
@@ -282,7 +295,9 @@ pub(super) fn composer(h: &mut Harness, ui: &mut egui::Ui) {
         h.send();
         h.ui.focus_composer = true;
     }
-    hint_row(h, ui, sid.as_deref(), running);
+    if sid.is_some() {
+        hint_row(h, ui, sid.as_deref(), running);
+    }
 
     if list_open {
         let anchor = frame.response.rect.left_top() - vec2(0.0, 6.0);
@@ -409,7 +424,7 @@ fn toolbar(
                         .add(
                             IconButton::new(Icon::Send, tr("Queue (↵)"))
                                 .side(28.0)
-                                .color(egui::Color32::WHITE)
+                                .color(theme::ON_ACCENT)
                                 .fill(theme::ORANGE_DIM),
                         )
                         .clicked()
@@ -423,7 +438,7 @@ fn toolbar(
                     theme::RAISED
                 };
                 let color = if has_text {
-                    egui::Color32::WHITE
+                    theme::ON_ACCENT
                 } else {
                     theme::DIM
                 };
@@ -811,17 +826,11 @@ pub(super) fn start_screen(h: &mut Harness, ui: &mut egui::Ui) {
     let available = ui.available_height();
     let dir = h.current_project.clone();
     let chat = dir.as_deref().is_some_and(|d| h.is_chat_dir(d));
-    let recent = dir
-        .as_ref()
-        .map(|d| h.sidebar_rows(d, tr("New session")))
+    let overview = dir
+        .as_deref()
+        .map(|d| start_overview(h, d, chat))
         .unwrap_or_default();
-    let shown = recent.len().min(5);
-    let content = 268.0
-        + if shown > 0 {
-            34.0 + shown as f32 * 32.0
-        } else {
-            0.0
-        };
+    let content = 268.0 + overview.height();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -846,32 +855,8 @@ pub(super) fn start_screen(h: &mut Harness, ui: &mut egui::Ui) {
                     connection_card(h, ui);
                     cards::sessionless(h, ui);
                     composer(h, ui);
-                    if shown > 0 {
-                        ui.add_space(18.0);
-                        ui.label(theme::mono_label(if chat {
-                            tr("Recent chats")
-                        } else {
-                            tr("Recent")
-                        }));
-                        ui.add_space(4.0);
-                        let dir = dir.clone().expect("rows come from this folder");
-                        let mut open = None;
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        for entry in &recent[..shown] {
-                            let updated = h
-                                .listed
-                                .get(&dir)
-                                .and_then(|l| l.iter().find(|s| s.session_id == entry.session_id))
-                                .and_then(|s| s.updated_at.as_deref())
-                                .and_then(|u| extras::relative_time(u, extras::now_epoch()));
-                            let (icon, trailing) = (Icon::ChevronRight, updated);
-                            if widgets::nav_row(ui, icon, &entry.title, trailing.as_deref(), false)
-                                .clicked()
-                            {
-                                open = Some(entry.session_id.clone());
-                            }
-                        }
-                        if let Some(sid) = open {
+                    if let Some(dir) = dir.clone() {
+                        if let Some(sid) = overview.show(ui, chat) {
                             h.open_session(dir, &sid);
                         }
                     }
@@ -879,29 +864,381 @@ pub(super) fn start_screen(h: &mut Harness, ui: &mut egui::Ui) {
         });
 }
 
+/// One session on the start screen: its title, one line about it and its
+/// age.
+struct StartItem {
+    sid: String,
+    title: String,
+    /// (plain text, code) — the code part is set in monospace.
+    line: (String, Option<String>),
+    age: Option<String>,
+}
+
+/// What the start screen shows under the input field instead of repeating
+/// the sidebar: what waits for the user, new results of this run, the
+/// session to continue and the project's git state. Without anything
+/// waiting or new, the recent sessions follow as before.
+#[derive(Default)]
+struct StartOverview {
+    waiting: Vec<StartItem>,
+    new: Vec<StartItem>,
+    resume: Option<StartItem>,
+    recent: Vec<(String, String, Option<String>)>,
+    /// (branch, uncommitted, trusted)
+    project: Option<(Option<String>, usize, Option<bool>)>,
+}
+
+fn start_overview(h: &mut Harness, dir: &std::path::Path, chat: bool) -> StartOverview {
+    let rows = h.sidebar_rows(dir, tr("New session"));
+    let now = extras::now_epoch();
+    let age = |h: &Harness, sid: &str| {
+        h.listed
+            .get(dir)
+            .and_then(|l| l.iter().find(|s| s.session_id == sid))
+            .and_then(|s| s.updated_at.as_deref())
+            .and_then(|u| extras::relative_time(u, now))
+    };
+    let mut o = StartOverview::default();
+    for row in &rows {
+        let sid = row.session_id.as_str();
+        if h.session_state(sid) == SessionState::Waiting {
+            o.waiting.push(StartItem {
+                sid: sid.to_string(),
+                title: row.title.clone(),
+                line: waiting_line(h, sid),
+                age: age(h, sid),
+            });
+        } else if h.unseen.contains(sid) {
+            let first = h
+                .sessions
+                .get(sid)
+                .and_then(|v| {
+                    v.items.iter().rev().find_map(|i| match i {
+                        Item::Agent { text, .. } => first_line(text),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_else(|| tr("Finished").to_string());
+            o.new.push(StartItem {
+                sid: sid.to_string(),
+                title: row.title.clone(),
+                line: (first, None),
+                age: age(h, sid),
+            });
+        }
+    }
+    let shown: Vec<String> = o
+        .waiting
+        .iter()
+        .chain(&o.new)
+        .map(|i| i.sid.clone())
+        .collect();
+    let mut rest = rows.iter().filter(|r| !shown.contains(&r.session_id));
+    if let Some(r) = rest.next() {
+        let when = age(h, &r.session_id);
+        o.resume = Some(StartItem {
+            sid: r.session_id.clone(),
+            title: r.title.clone(),
+            line: (
+                when.as_ref()
+                    .map(|t| trf("Last active {time} ago", &[("time", t)]))
+                    .unwrap_or_default(),
+                None,
+            ),
+            age: None,
+        });
+    }
+    if o.waiting.is_empty() && o.new.is_empty() {
+        o.recent = rest
+            .take(4)
+            .map(|r| (r.session_id.clone(), r.title.clone(), age(h, &r.session_id)))
+            .collect();
+    }
+    if !chat {
+        // git only where the user stands behind Vibe's trust (audit H2)
+        let trusted = h.trust.get(dir).map(|_| h.git_trusted(dir));
+        let git = h.watcher.git(dir, trusted == Some(true)).cloned();
+        let branch = git.as_ref().and_then(|g| g.branch.clone());
+        let changed = git.as_ref().map_or(0, |g| g.changed);
+        // without git, the trust state alone is not worth a section
+        if branch.is_some() {
+            o.project = Some((branch, changed, trusted));
+        }
+    }
+    o
+}
+
+/// What a waiting session waits for: the command (or Vibe's title) of its
+/// approval, or its question.
+fn waiting_line(h: &Harness, sid: &str) -> (String, Option<String>) {
+    if let Some(v) = h.sessions.get(sid) {
+        if let Some(p) = v.permissions.first() {
+            let call = v.tool_for_permission(p);
+            let command = call
+                .and_then(|t| t.raw_input.as_ref())
+                .and_then(|r| r.get("command"))
+                .and_then(|c| c.as_str())
+                .map(|c| format!("$ {c}"));
+            let what = command
+                .or_else(|| call.map(|t| t.title.clone()))
+                .or_else(|| p.request.tool_call.title.clone())
+                .filter(|t| !t.trim().is_empty());
+            return match what {
+                Some(w) => (tr("Approval:").to_string(), Some(w)),
+                None => (tr("Waiting for your approval").to_string(), None),
+            };
+        }
+    }
+    let question = h
+        .questions
+        .iter()
+        .find(|q| q.session_id.as_deref() == Some(sid))
+        .and_then(|q| q.fields.first().map(|f| f.text.clone()))
+        .filter(|t| !t.trim().is_empty());
+    match question {
+        Some(q) => (q, None),
+        None => (tr("Vibe has a question").to_string(), None),
+    }
+}
+
+/// The first line of an answer that has words in it, without Markdown
+/// marks at its start.
+fn first_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .trim()
+        })
+        .find(|l| !l.is_empty() && !l.starts_with("```"))
+        .map(str::to_string)
+}
+
+impl StartOverview {
+    /// Rough height for the vertical centring of the start screen.
+    fn height(&self) -> f32 {
+        let section = |n: usize| if n == 0 { 0.0 } else { 34.0 + n as f32 * 62.0 };
+        section(self.waiting.len())
+            + section(self.new.len())
+            + section(usize::from(self.resume.is_some()))
+            + if self.recent.is_empty() {
+                0.0
+            } else {
+                34.0 + self.recent.len() as f32 * 32.0
+            }
+            + if self.project.is_some() { 52.0 } else { 0.0 }
+    }
+
+    /// Draw the sections; returns the session whose Open was clicked.
+    fn show(&self, ui: &mut egui::Ui, chat: bool) -> Option<String> {
+        let mut open = None;
+        let section = |ui: &mut egui::Ui, label: &str, mark: Option<egui::Color32>| {
+            ui.add_space(20.0);
+            ui.horizontal(|ui| {
+                if let Some(c) = mark {
+                    let (r, _) = ui.allocate_exact_size(vec2(6.0, 6.0), Sense::hover());
+                    ui.painter().rect_filled(r, 0.0, c);
+                    ui.add_space(2.0);
+                }
+                ui.label(theme::mono_label(label));
+            });
+            ui.add_space(4.0);
+        };
+        if !self.waiting.is_empty() {
+            section(ui, tr("Needs you"), Some(theme::YELLOW));
+            for i in &self.waiting {
+                if start_card(ui, i, Some(theme::YELLOW)) {
+                    open = Some(i.sid.clone());
+                }
+            }
+        }
+        if !self.new.is_empty() {
+            section(ui, tr("New results"), Some(theme::ORANGE));
+            for i in &self.new {
+                if start_card(ui, i, None) {
+                    open = Some(i.sid.clone());
+                }
+            }
+        }
+        if let Some(i) = &self.resume {
+            section(ui, tr("Continue"), None);
+            if start_card(ui, i, None) {
+                open = Some(i.sid.clone());
+            }
+        }
+        if !self.recent.is_empty() {
+            section(
+                ui,
+                if chat {
+                    tr("Recent chats")
+                } else {
+                    tr("Recent")
+                },
+                None,
+            );
+            ui.spacing_mut().item_spacing.y = 1.0;
+            for (sid, title, age) in &self.recent {
+                if widgets::nav_row(ui, Icon::ChevronRight, title, age.as_deref(), false).clicked()
+                {
+                    open = Some(sid.clone());
+                }
+            }
+        }
+        if let Some((branch, changed, trusted)) = &self.project {
+            section(ui, tr("In this project"), None);
+            ui.horizontal(|ui| {
+                let sep = |ui: &mut egui::Ui| {
+                    ui.label(
+                        RichText::new("│")
+                            .monospace()
+                            .size(12.0)
+                            .color(theme::BORDER),
+                    );
+                };
+                let mut first = true;
+                if let Some(b) = branch {
+                    let (r, _) = ui.allocate_exact_size(vec2(8.0, 12.0), Sense::hover());
+                    icons::paint(
+                        ui.painter(),
+                        Icon::Branch,
+                        pos2(r.left(), r.center().y - 3.5),
+                        1.0,
+                        theme::DIM,
+                    );
+                    ui.label(RichText::new(b).monospace().size(12.0).color(theme::MUTED));
+                    first = false;
+                }
+                if *changed > 0 {
+                    if !first {
+                        sep(ui);
+                    }
+                    ui.label(
+                        RichText::new(trf("{n} uncommitted", &[("n", changed)]))
+                            .monospace()
+                            .size(12.0)
+                            .color(theme::AMBER),
+                    );
+                    first = false;
+                }
+                if let Some(t) = trusted {
+                    if !first {
+                        sep(ui);
+                    }
+                    let (text, color) = if *t {
+                        (tr("Trusted"), theme::DIM)
+                    } else {
+                        (tr("Not trusted"), theme::YELLOW)
+                    };
+                    ui.label(RichText::new(text).monospace().size(12.0).color(color));
+                }
+            });
+        }
+        open
+    }
+}
+
+/// A session card of the start screen; true when its Open was clicked.
+/// `edge` marks an attention card (2 pt top edge, like the pinned cards).
+fn start_card(ui: &mut egui::Ui, item: &StartItem, edge: Option<egui::Color32>) -> bool {
+    let mut clicked = false;
+    let frame = egui::Frame::none()
+        .fill(theme::CARD)
+        .rounding(egui::Rounding::same(4.0))
+        .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
+        .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let text_w = (ui.available_width() - 130.0).max(80.0);
+                ui.vertical(|ui| {
+                    ui.set_width(text_w);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.add(
+                        egui::Label::new(RichText::new(&item.title).size(14.0).color(theme::TEXT))
+                            .truncate(),
+                    );
+                    let mut job = egui::text::LayoutJob::default();
+                    let (plain, code) = &item.line;
+                    job.append(
+                        plain,
+                        0.0,
+                        egui::TextFormat {
+                            font_id: widgets::font(13.0),
+                            color: theme::MUTED,
+                            ..Default::default()
+                        },
+                    );
+                    if let Some(c) = code {
+                        job.append(
+                            c,
+                            6.0,
+                            egui::TextFormat {
+                                font_id: mono(12.5),
+                                color: theme::TEXT,
+                                background: theme::RAISED,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    ui.add(egui::Label::new(job).truncate());
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::button(ui, tr("Open"), ButtonKind::Secondary).clicked() {
+                        clicked = true;
+                    }
+                    if let Some(a) = &item.age {
+                        ui.label(RichText::new(a).monospace().size(11.5).color(theme::DIM));
+                    }
+                });
+            });
+        });
+    if let Some(c) = edge {
+        let r = frame.response.rect;
+        ui.painter().rect_filled(
+            Rect::from_min_size(r.left_top(), vec2(r.width(), 2.0)),
+            egui::Rounding {
+                nw: 4.0,
+                ne: 4.0,
+                sw: 0.0,
+                se: 0.0,
+            },
+            c,
+        );
+    }
+    ui.add_space(6.0);
+    clicked
+}
+
 /// "Was baust du heute in [project ▾]" — or, in the chat workspace, "Worüber
 /// möchtest du chatten? [Allgemein ▾]": the picker chooses the workspace the
 /// new session starts in.
 fn greeting(h: &mut Harness, ui: &mut egui::Ui, chat: bool) {
-    ui.horizontal_wrapped(|ui| {
-        let size = 23.0;
-        let text = if chat {
-            tr("What do you want to chat about?")
-        } else {
-            tr("What are you building today in")
-        };
-        ui.label(RichText::new(text).size(size).color(theme::TEXT));
-        match h.current_project.clone() {
-            Some(p) => workspace_picker(h, ui, &p),
-            None => {
-                ui.label(
-                    RichText::new(tr("your project?"))
-                        .size(size)
-                        .color(theme::DIM),
-                );
+    // centred row, as tall as the picker: heading and picker share their
+    // middle (and, at one font size, their baseline); `with_layout` would
+    // centre in all the height that is left
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), 38.0),
+        egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+        |ui| {
+            let size = 23.0;
+            let text = if chat {
+                tr("What do you want to chat about?")
+            } else {
+                tr("What are you building today in")
+            };
+            ui.label(RichText::new(text).size(size).color(theme::TEXT));
+            match h.current_project.clone() {
+                Some(p) => workspace_picker(h, ui, &p),
+                None => {
+                    ui.label(
+                        RichText::new(tr("your project?"))
+                            .size(size)
+                            .color(theme::DIM),
+                    );
+                }
             }
-        }
-    });
+        },
+    );
     if chat {
         ui.label(
             RichText::new(tr(
@@ -935,8 +1272,8 @@ fn greeting(h: &mut Harness, ui: &mut egui::Ui, chat: bool) {
 fn workspace_picker(h: &mut Harness, ui: &mut egui::Ui, current: &std::path::Path) {
     let key = current.to_string_lossy().into_owned();
     let name = h.workspace_name(current);
-    let g = line_galley(ui, &name, widgets::font(22.0), theme::TEXT, 320.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 54.0, 38.0), Sense::click());
+    let g = line_galley(ui, &name, widgets::font(23.0), theme::TEXT, 320.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 62.0, 38.0), Sense::click());
     ui.painter().rect_filled(
         rect,
         4.0,
@@ -957,7 +1294,7 @@ fn workspace_picker(h: &mut Harness, ui: &mut egui::Ui, current: &std::path::Pat
     icons::paint(
         ui.painter(),
         Icon::ChevronDown,
-        pos2(rect.right() - 16.0, rect.center().y - 3.5),
+        pos2(rect.right() - 18.0, rect.center().y - 3.5),
         1.0,
         theme::DIM,
     );

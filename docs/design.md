@@ -20,9 +20,11 @@ agent desktop (sidebar, transcript, right panel).
 | `HOVER` | `#232328` | row under the pointer |
 | `TEXT` | `#ececec` | body text |
 | `MUTED` | `#b4b4ba` | secondary text that must stay comfortably readable |
-| `DIM` | `#8a8a8f` | tertiary text, mono labels |
+| `DIM` | `#9a9aa0` | tertiary text, mono labels (≥ 4.5:1 up to `RAISED`) |
 | `ORANGE` | `#fa500f` | primary accent: CTA buttons, active marks, logo |
-| `ORANGE_DIM` | `#ce6114` | pixel meters, numbers (context "1M", prices) |
+| `ON_ACCENT` | `#101010` | text and icons on `ORANGE`/`AMBER`/`YELLOW` fills (white on `ORANGE` is only 3.4:1) |
+| `SELECTION` | `ORANGE` at 35 % | selected text, selectable labels |
+| `ORANGE_DIM` | `#e06a16` | pixel meters, numbers (context "1M", prices), 5.2:1 on `BG` |
 | `YELLOW` | `#ffd800` | highlight tag (like "TRY IN PLAYGROUND"), focus |
 | `AMBER` | `#ffaf00` | gradient step |
 | `RED` | `#e10500` | error edges, deny outlines |
@@ -53,7 +55,9 @@ Pixel gradient (for pixel art / meters, left to right):
 - **Pixel meter**: row of square blocks (e.g. 10 × 10 px, 3 px gap). Filled
   = `ORANGE_DIM`, empty = `RAISED`. Use for the context window (Kontext
   panel: 20 blocks = 100 %), thinking level (low/medium/high = 1/2/3 of 3
-  blocks) and speed-like indicators.
+  blocks) and speed-like indicators. A meter never shows more than is
+  there: the context split goes into colours only while every part fills a
+  whole block, otherwise the meter shows the total and the legend the split.
 - **Pixel logo** (`theme::LOGO`): our OWN 12×12 pixel mark, an `ORANGE`
   cat sitting in profile on a `RED` branch, its tail hanging down over the
   branch; the eye is an empty cell (the tile shows through). Drawn at 2 pt
@@ -88,8 +92,15 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
 - **Actions appear on hover** in rows and at messages and cost no layout space
   (`widgets::place`; `Ui::put` would move everything after the row).
   A menu that is open keeps its row in the hover state.
-- **Buttons**: `Primary` (ORANGE) once per card, `Secondary` (RAISED), `Danger`
-  (RED outline, `RED_TEXT`).
+- **Accent budget**: ORANGE marks the one thing to do or the place you are,
+  not every state. One filled Primary per screen while a decision waits:
+  while an approval or a question card is open, other Primary buttons (e.g.
+  "Send to Vibe") drop to Secondary.
+- **Buttons**: `Primary` (ORANGE with `ON_ACCENT` text) once per card,
+  `Secondary` (RAISED), `Danger` (RED outline, `RED_TEXT`).
+- **Segmented switch** (`widgets::segmented`, e.g. Code | Diff): a state, not
+  an action, so no Primary fill: soft frame, the chosen segment RAISED with
+  TEXT and a 2 pt ORANGE underline, the others DIM.
 - **Attention cards**: a card with a 2 pt coloured top edge asks for a decision.
 - **Toasts**: the status line as a toast below the header. Info fades after six
   seconds, errors stay until dismissed.
@@ -104,7 +115,9 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   while folded), account footer with connection state and budget meter. There is
   no Code/Chat switch: chats are sessions of "Allgemein".
 - **Session header**: workspace crumb ("Allgemein" or the project), session title as menu (rename, fork, copy
-  transcript as Markdown, delete), git branch and dirty count, fork, folder,
+  transcript as Markdown, delete), git branch and dirty count ("4 uncommitted":
+  git's view of the working directory, deliberately not called "changes", which
+  is the right panel's word for Vibe's edits in this session), fork, folder,
   right-panel toggle.
 - **Conversation** (column max. 820 pt): user bubble right, agent text left in
   a quiet flow, tool groups as one line, edited files always visible as cards
@@ -117,14 +130,57 @@ unreadable), body 14, conversation 14.5, mono labels 10.5–12.5. Nothing below
   digits for its first painted frames), message queue.
 - **Composer**: grows up to 220 pt, mode and "+" left, model and thinking right;
   `/` and `@` open keyboard-driven lists. Typing anywhere goes into it. Each
-  session keeps its own draft.
-- **Right panel** (resizable, Strg J, hidden below 1120 pt): collapsible cards
-  Kontext, Plan, Änderungen (accept / revert), Subagents, Routinen, Konnektoren,
-  Umgebung. While it shows the plan, the conversation shows one plan line.
+  session keeps its own draft. Because it is nearly always focused, focus is
+  a quiet `BORDER` step, not an accent ring; the ORANGE belongs to the send
+  button once there is text.
+- **Tables**: columns of numbers align right (header included), so digits of
+  the same place line up; everything else aligns left.
+- **Diffs**: the transcript wraps long lines in its column. The preview pane
+  shows line numbers (the old side's on removed lines), never wraps and
+  scrolls sideways, so code keeps its shape. Added and removed lines form
+  continuous bands.
+- **Inline code** in answers: monospace in a calm warm tint (`#e3d4c2`) on a
+  quiet box (`#26262b`). The box marks where the code starts and ends, so the
+  colour can stay calm and never outshouts the sentence; file chips keep the
+  warmer `#ffd9a0` and a border because they are clickable.
+- **Right panel** (resizable, Strg J, hidden below 1120 pt): flat collapsible
+  sections on the panel background, separated by hairlines (no boxes inside
+  the box): Kontext, Plan, Session changes (Vibe's edits in this session;
+  accept / revert on hover), Subagents, Routinen, Konnektoren, Umgebung. A
+  folded section still shows its summary ("none", "2 connected",
+  "master · Trusted"). "Compact context" appears from 50 % on. While the
+  panel shows the plan, the conversation shows one plan line.
 - **Start screen**: cat, "Was baust du heute in [project ▾]" (in "Allgemein":
-  "Worüber möchtest du chatten? [Allgemein ▾]"), composer, recent sessions. The
-  picker chooses the workspace of the new session.
+  "Worüber möchtest du chatten? [Allgemein ▾]"; picker and heading share one
+  size and middle), composer (its placeholder names `@` and `/`, no hint
+  row). Below it what the sidebar does not tell: **Needs you** (waiting
+  sessions with the command of their approval), **New results** of this
+  run (first line of the answer), **Continue** (the latest other session),
+  **In this project** (branch, uncommitted files, trust). Only while nothing
+  waits and nothing is new, the recent sessions follow. The picker chooses
+  the workspace of the new session.
+- **Charts** (generative UI): round axis ticks (1, 2 or 5 × 10ⁿ), point marks
+  only while points stand at least 8 pt apart, one title style for cards and
+  charts (TEXT, bold); computed numbers use `ORANGE_DIM`. Bar charts keep
+  their labels in one column so all bars start at the same x, bars in
+  `ORANGE_DIM`, values without float noise. A pie sits on the middle of a
+  taller legend. The agent picks no colours: lines take
+  `theme::CHART_SERIES` by position, areas (pie slices) the calmer
+  `theme::CHART_FILLS` (same hues in the dark-surface band OKLCH L
+  0.48–0.67, ordered for the largest neighbour distance, validated for
+  colour-blind and normal vision). An element with a `tone` (good, bad,
+  warning, neutral) colours the whole chart by meaning (`TONE_*`; elements
+  without one turn neutral grey), never mixed with positional colours.
+  "Good" leans blue-green so it stays apart from bad for red–green colour
+  blindness. Sliders have a narrow square handle
+  with the stretch left of it filled; a ui button keeps its own width,
+  also inside columns.
 - **Command palette** (Strg K): sessions, projects, actions, slash commands.
+- **Transcript detail** (Settings → General): the four levels as cards in a
+  row (two rows when narrow), each with a check square, its name, what it
+  shows while Vibe works, and a little picture of how much is open (grey a
+  folded line, orange a tool group, green a result, amber a thought). The
+  chosen card has an ORANGE edge.
 
 Playful is welcome (pixel mascot, gradient blocks), but readability first:
 contrast of body text against `BG` stays high, and the pixel accents never carry

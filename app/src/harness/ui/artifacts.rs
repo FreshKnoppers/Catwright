@@ -1,7 +1,9 @@
 //! The Artefakte view in the main area: every file the agent touched, grouped
 //! by project, with a preview by file type.
 
-use super::transcript::{comment_section, diff_body, send_comments, Comments, MessageOp};
+use super::transcript::{
+    comment_section, diff_rows, send_comments, Comments, DiffLayout, MessageOp,
+};
 use super::*;
 use crate::artifacts::{self, ArtifactKind, Preview};
 use crate::i18n::{self, tr, trf};
@@ -193,6 +195,10 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     // else in the file's own parent — and only when THAT folder is trusted
     let git_dir = git_dir_for(&p.path, base.as_deref());
     let git_trusted = h.git_trusted(&git_dir);
+    let decision_open = h
+        .active
+        .as_deref()
+        .is_some_and(|sid| h.session_state(sid) == SessionState::Waiting);
     let out = egui::SidePanel::right("harness_preview")
         .resizable(true)
         .default_width(p.width)
@@ -220,17 +226,11 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                         close = true;
                     }
                     ui.add_space(4.0);
-                    if ui
-                        .selectable_label(mode == PreviewMode::Diff, tr("Diff"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Diff;
-                    }
-                    if ui
-                        .selectable_label(mode == PreviewMode::Code, tr("Code"))
-                        .clicked()
-                    {
-                        mode = PreviewMode::Code;
+                    let current = usize::from(mode == PreviewMode::Diff);
+                    match widgets::segmented(ui, &[tr("Code"), tr("Diff")], current) {
+                        Some(0) => mode = PreviewMode::Code,
+                        Some(_) => mode = PreviewMode::Diff,
+                        None => {}
                     }
                 });
             });
@@ -241,16 +241,20 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                     .unwrap_or_else(|_| p.path.clone()),
                 None => p.path.clone(),
             };
-            ui.add(
-                egui::Label::new(
-                    RichText::new(&shown)
-                        .monospace()
-                        .size(11.0)
-                        .color(theme::DIM),
+            // the path line only adds something when the file is not right
+            // in the workspace root (else it repeats the name above)
+            if shown != artifacts::file_name(&p.path) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&shown)
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::DIM),
+                    )
+                    .truncate(),
                 )
-                .truncate(),
-            )
-            .on_hover_text(&p.path);
+                .on_hover_text(&p.path);
+            }
             // re-check every frame, not only at open: a symlink swapped in
             // after the confirm must flip the badge (the read itself is
             // capped and non-blocking, but it must not look trusted)
@@ -262,28 +266,35 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
                 outside_workspace_badge(ui);
             }
             ui.add_space(4.0);
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match mode {
-                    PreviewMode::Code => preview_content(ui, &p.path, true),
-                    PreviewMode::Diff => {
-                        // review comments work here like in the transcript;
-                        // the draft names the path as shown above
-                        let key = format!("preview::{}", p.path);
-                        let mut comments =
-                            Comments::new(&mut h.ui.diff_comments, &mut h.ui.comment_edit);
-                        // git scans (and so the diff's HEAD read) only run
-                        // for folders the agent reported as trusted
-                        diff_content(
-                            ui,
-                            &p.path,
-                            base.as_deref(),
-                            git_trusted,
-                            (&key, &mut comments, &mut ops),
-                        );
-                        comment_section(ui, &key, &shown, &mut comments, &mut ops);
-                    }
-                });
+            // the diff keeps code lines whole and scrolls sideways; the code
+            // view has its own horizontal scroll inside
+            let area = match mode {
+                PreviewMode::Diff => egui::ScrollArea::both(),
+                PreviewMode::Code => egui::ScrollArea::vertical(),
+            };
+            area.auto_shrink([false, false]).show(ui, |ui| match mode {
+                PreviewMode::Code => preview_content(ui, &p.path, true),
+                PreviewMode::Diff => {
+                    // review comments work here like in the transcript;
+                    // the draft names the path as shown above
+                    let key = format!("preview::{}", p.path);
+                    let mut comments = Comments::new(
+                        &mut h.ui.diff_comments,
+                        &mut h.ui.comment_edit,
+                        decision_open,
+                    );
+                    // git scans (and so the diff's HEAD read) only run
+                    // for folders the agent reported as trusted
+                    diff_content(
+                        ui,
+                        &p.path,
+                        base.as_deref(),
+                        git_trusted,
+                        (&key, &mut comments, &mut ops),
+                    );
+                    comment_section(ui, &key, &shown, &mut comments, &mut ops);
+                }
+            });
         });
     for op in ops {
         match op {
@@ -333,12 +344,20 @@ fn diff_content(
     trusted: bool,
     comment: (&str, &mut Comments, &mut Vec<MessageOp>),
 ) {
-    type DiffCache = std::sync::Mutex<
-        std::collections::HashMap<
-            (String, String, Option<u64>, u64, bool),
-            (Option<String>, String),
-        >,
-    >;
+    type DiffKey = (String, String, Option<u64>, u64, bool);
+    enum DiffEntry {
+        // Read still running in its background thread. `since` is the fall
+        // back: a worker that died (its panic is caught, it stores nothing)
+        // or never finished leaves the entry parked, so after the grace —
+        // larger than the worst legitimate run (probe + cat-file, 2 s each)
+        // — the next frame starts a fresh worker: no diff is stuck on
+        // "being prepared" forever, and a panicking worker cannot respawn
+        // per frame.
+        Pending { since: std::time::Instant },
+        Ready((crate::harness::watch::HeadBlob, String)),
+    }
+    const DIFF_RETRY_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+    type DiffCache = std::sync::Mutex<std::collections::HashMap<DiffKey, DiffEntry>>;
     static CACHE: std::sync::OnceLock<DiffCache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let meta = std::fs::metadata(path);
@@ -369,66 +388,151 @@ fn diff_content(
     // the git folder and the trust state are part of the key: a diff cached
     // for another folder (session switch) or while the folder was untrusted
     // must not be served
-    let key = (
+    let key: DiffKey = (
         path.to_string(),
         dir.to_string_lossy().into_owned(),
         mtime,
         len,
         trusted,
     );
-    let (old, current) = {
+    // The git side runs OFF the UI thread: probe plus `cat-file` can take
+    // up to their two deadlines EACH (~4 s in a slow or hostile repo), and
+    // worse, the parked `rev-parse`/config probe of a FIFO-trapped repo
+    // blocks the open forever — none of that may stall a frame anymore.
+    // A miss marks the entry `Pending` and starts ONE background thread;
+    // it stores `Ready`, requests a repaint, and the next frame paints the
+    // diff. Meanwhile the frame below shows that the diff is coming.
+    let entry_ready = {
         let mut c = cache.lock().unwrap();
-        if let Some(t) = c.get(&key) {
-            t.clone()
-        } else {
-            let rel = std::path::Path::new(path)
-                .strip_prefix(&dir)
-                .map(|r| r.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| path.to_string());
-            // one bounded PLUMBING call: `HEAD:./path` is relative to the
-            // folder git runs in; no commit yet, untracked file or a gitlink
-            // -> non-zero exit -> None. Never `git show` here: on a gitlink
-            // it resolves to a commit and applies the repo's textconv (RCE,
-            // PoC-verified). The output is capped at the preview size: a
-            // huge blob counts as "no old version" instead of a huge String
-            // on the UI thread. And only in a folder the agent reported as
-            // trusted — a shipped .git/config is executable by git.
-            let old = if trusted {
-                crate::harness::watch::head_blob_sized(
-                    &dir,
-                    &rel,
-                    artifacts::MAX_PREVIEW_BYTES as usize,
-                )
-            } else {
+        match c.get(&key) {
+            Some(DiffEntry::Ready(v)) => Some(v.clone()),
+            // a worker within its grace: the notice below says the diff is
+            // coming; outside the grace the miss branch restarts it
+            Some(DiffEntry::Pending { since }) if since.elapsed() < DIFF_RETRY_GRACE => None,
+            _ => {
+                c.insert(
+                    key.clone(),
+                    DiffEntry::Pending {
+                        since: std::time::Instant::now(),
+                    },
+                );
+                let rel = std::path::Path::new(path)
+                    .strip_prefix(&dir)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| path.to_string());
+                let ctx = ui.ctx().clone();
+                let dir = dir.clone();
+                let path = path.to_string();
+                std::thread::spawn(move || {
+                    // The compute is panic-caught: nothing in it may poison
+                    // the cache mutex (it is only locked AFTER the compute),
+                    // and a panic must not leave a WRONG answer either — the
+                    // entry simply stays `Pending` with its original
+                    // `since`, so the grace in `DiffEntry::Pending` retries
+                    // later instead of showing a misleading "no changes".
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // one bounded PLUMBING call: `HEAD:./path` is
+                        // relative to the folder git runs in; no commit yet,
+                        // untracked file or a gitlink -> non-zero exit ->
+                        // Missing. Never `git show` here: on a gitlink it
+                        // resolves to a commit and applies the repo's
+                        // textconv (RCE, PoC-verified). The output is capped
+                        // at the preview size: a huge blob counts as "no old
+                        // version". And only in a folder the agent reported
+                        // as trusted — a shipped .git/config is executable
+                        // by git.
+                        let old = if trusted {
+                            crate::harness::watch::head_blob_sized(
+                                &dir,
+                                &rel,
+                                artifacts::MAX_PREVIEW_BYTES as usize,
+                            )
+                        } else {
+                            crate::harness::watch::HeadBlob::Missing
+                        };
+                        // capped, handle-based read — never a whole-file
+                        // read_to_string on an agent-named path, never a
+                        // blocking FIFO open (see
+                        // artifacts::load_preview_capped / store::read_regular_capped)
+                        let current = match artifacts::load_text_capped(&path) {
+                            artifacts::Preview::Text(t) => t,
+                            _ => String::new(),
+                        };
+                        (old, current)
+                    }));
+                    if let Ok((old, current)) = result {
+                        let mut c = cache.lock().unwrap();
+                        c.insert(key.clone(), DiffEntry::Ready((old, current)));
+                        if c.len() > 64 {
+                            let k = c.keys().next().cloned();
+                            if let Some(k) = k {
+                                c.remove(&k);
+                            }
+                        }
+                        drop(c);
+                    }
+                    // the result is here: paint it as soon as possible
+                    ctx.request_repaint();
+                });
                 None
-            };
-            // capped, handle-based read — never a whole-file read_to_string
-            // on an agent-named path, never a blocking FIFO open (see
-            // artifacts::load_preview_capped / open_nonblock)
-            let current = match artifacts::load_text_capped(path) {
-                artifacts::Preview::Text(t) => t,
-                _ => String::new(),
-            };
-            let entry = (old, current);
-            c.insert(key.clone(), entry.clone());
-            if c.len() > 64 {
-                let k = c.keys().next().cloned();
-                if let Some(k) = k {
-                    c.remove(&k);
-                }
             }
-            entry
+        }
+    };
+    use crate::harness::watch::HeadBlob;
+    // Stale-while-revalidate: the file changed while its preview is open,
+    // so this frame waits for a NEW diff — but an old FINISHED one for the
+    // same path may still sit in the cache (its key carries the previous
+    // mtime/size). Painting that instead of the placeholder keeps the
+    // preview from flashing "being prepared" on every agent write: the
+    // stale diff is briefly outdated, never misleading — the fresh one
+    // replaces it a frame later. The linear scan only runs on a miss and
+    // stays within the cache cap.
+    let (old, current) = if let Some(v) = entry_ready {
+        v
+    } else {
+        let stale = {
+            let c = cache.lock().unwrap();
+            c.iter()
+                .find(|((p, ..), v)| p == path && matches!(v, DiffEntry::Ready(_)))
+                .and_then(|(_, v)| {
+                    if let DiffEntry::Ready(v) = v {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+        };
+        match stale {
+            Some(v) => v,
+            None => {
+                notice(ui, tr("Diff is being prepared …"));
+                return;
+            }
         }
     };
     match (trusted, old) {
         // git runs only in trusted folders; without that there is no old
         // version and the diff would be misleading
         (false, _) => notice(ui, tr("Diff preview needs a trusted folder.")),
-        (_, Some(old)) if old != current => diff_body(ui, Some(&old), &current, 400, Some(comment)),
-        (_, Some(_)) => notice(ui, tr("No changes against the last commit.")),
+        // a repository git refuses: no answer is not "every line is new"
+        (_, HeadBlob::Refused) => notice(
+            ui,
+            tr("Diff preview is off: Catwright runs no git in this repository."),
+        ),
+        (_, HeadBlob::Blob(old)) if old != current => diff_rows(
+            ui,
+            Some(&old),
+            &current,
+            400,
+            Some(comment),
+            DiffLayout::PREVIEW,
+        ),
+        (_, HeadBlob::Blob(_)) => notice(ui, tr("No changes against the last commit.")),
         // no commit yet, or the file is untracked: every line is new
-        (_, None) if !current.is_empty() => diff_body(ui, None, &current, 400, Some(comment)),
-        (_, None) => notice(ui, tr("No changes against the last commit.")),
+        (_, HeadBlob::Missing) if !current.is_empty() => {
+            diff_rows(ui, None, &current, 400, Some(comment), DiffLayout::PREVIEW)
+        }
+        (_, HeadBlob::Missing) => notice(ui, tr("No changes against the last commit.")),
     }
 }
 
@@ -509,34 +613,21 @@ fn preview_content(ui: &mut egui::Ui, path: &str, numbered: bool) {
                 crate::render::render_blocks(ui, &blocks, 0, &mut rctx);
             }
             ArtifactKind::Csv => {
-                let mut grid = artifacts::parse_csv(text).into_iter();
-                let columns: Vec<Vec<crate::markdown::MdInline>> = grid
-                    .next()
-                    .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
-                    .unwrap_or_default();
-                let body: Vec<Vec<Vec<crate::markdown::MdInline>>> = grid
-                    .map(|row| {
-                        row.iter()
-                            .map(|c| crate::markdown::parse_inline(c))
-                            .collect()
-                    })
-                    .collect();
+                let grid = csv_grid_cached(text);
                 crate::render::render_table_grid(
                     ui,
                     egui::Id::new(("artifact_csv", path)),
-                    &columns,
-                    &body,
+                    &grid.0,
+                    &grid.1,
                     None,
                 );
             }
-            ArtifactKind::Html => crate::render::render_code_block(ui, code_id, "html", text),
-            _ => {
-                if numbered {
-                    crate::render::render_code_block_lines(ui, code_id, "", text)
-                } else {
-                    crate::render::render_code_block(ui, code_id, "", text)
-                }
+            // whole files: only the rows in view are laid out (an HTML
+            // file keeps its source view without line numbers)
+            ArtifactKind::Html => {
+                crate::render::render_code_block_lines(ui, code_id, "html", text, false)
             }
+            _ => crate::render::render_code_block_lines(ui, code_id, "", text, numbered),
         },
         Preview::Image(bytes) => match png_texture(ui.ctx(), path, bytes) {
             Ok(tex) => {
@@ -792,6 +883,36 @@ fn preview_cache_insert(
             None => break,
         }
     }
+}
+
+/// The parsed table of a CSV preview: header cells, then the body rows.
+type CsvGrid = (
+    Vec<Vec<crate::markdown::MdInline>>,
+    Vec<Vec<Vec<crate::markdown::MdInline>>>,
+);
+
+/// The parsed table of `text`, cached by content: the view runs every
+/// frame, and re-parsing up to MAX_CSV_ROWS × MAX_CSV_COLS cells each time
+/// is avoidable load.
+fn csv_grid_cached(text: &str) -> std::sync::Arc<CsvGrid> {
+    static CACHE: std::sync::OnceLock<crate::memo::Memo<CsvGrid>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| crate::memo::Memo::new(2))
+        .get_or_insert(crate::memo::hash_str(text), || {
+            let mut grid = artifacts::parse_csv(text).into_iter();
+            let columns = grid
+                .next()
+                .map(|r| r.iter().map(|c| crate::markdown::parse_inline(c)).collect())
+                .unwrap_or_default();
+            let body = grid
+                .map(|row| {
+                    row.iter()
+                        .map(|c| crate::markdown::parse_inline(c))
+                        .collect()
+                })
+                .collect();
+            (columns, body)
+        })
 }
 
 /// The file's preview, read once per file version (review M10): the view

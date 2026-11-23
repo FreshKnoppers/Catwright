@@ -17,8 +17,9 @@ pub enum MdBlock {
     Quote(Vec<MdInline>),
     /// Pipe table: header cells and body cells, each parsed as inline
     /// markdown. The `|---|`-style separator row is consumed; its optional
-    /// alignment colons are accepted but not honoured (tables render
-    /// left-aligned, like the generative-ui `table` node). Body rows are
+    /// alignment colons are accepted but not honoured (columns of numbers
+    /// render right-aligned, all others left-aligned, like the
+    /// generative-ui `table` node). Body rows are
     /// padded or truncated to the header's cell count.
     Table {
         columns: Vec<Vec<MdInline>>,

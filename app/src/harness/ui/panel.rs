@@ -27,15 +27,17 @@ pub(super) fn show(h: &mut Harness, ctx: &egui::Context) {
         .default_width(300.0)
         .width_range(250.0..=440.0)
         .frame(
+            // flat sections reach the panel's edges; their hairlines
+            // separate them (no boxes inside the box)
             egui::Frame::none()
                 .fill(theme::SIDEBAR)
-                .inner_margin(egui::Margin::symmetric(10.0, 10.0)),
+                .inner_margin(egui::Margin::symmetric(0.0, 2.0)),
         )
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     context_card(h, ui, &sid, sizes);
                     plan_card(h, ui, &sid);
                     changes_card(h, ui, &sid);
@@ -47,7 +49,9 @@ pub(super) fn show(h: &mut Harness, ctx: &egui::Context) {
         });
 }
 
-/// A collapsible card. `key` stores the open state.
+/// A collapsible section of the panel: a header row (title, summary on
+/// the right, also while folded) and a hairline under it across the panel.
+/// `key` stores the open state.
 fn card(
     sections: &mut HashMap<&'static str, bool>,
     ui: &mut egui::Ui,
@@ -59,12 +63,16 @@ fn card(
 ) -> bool {
     let open = *sections.get(key).unwrap_or(&default_open);
     let mut toggled = false;
-    egui::Frame::none()
-        .rounding(egui::Rounding::same(4.0))
-        .stroke(Stroke::new(1.0_f32, theme::BORDER_SOFT))
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+    let section = egui::Frame::none()
+        .inner_margin(egui::Margin {
+            left: 14.0,
+            right: 14.0,
+            top: 8.0,
+            bottom: 8.0,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 6.0;
             let (rect, resp) =
                 ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
             let icon = if open {
@@ -98,11 +106,16 @@ fn card(
                 toggled = true;
             }
             if open {
-                ui.add_space(4.0);
                 add(ui);
                 ui.add_space(2.0);
             }
         });
+    let r = section.response.rect;
+    ui.painter().hline(
+        r.x_range(),
+        r.bottom(),
+        Stroke::new(1.0_f32, theme::BORDER_SOFT),
+    );
     if toggled {
         sections.insert(key, !open);
     }
@@ -119,6 +132,9 @@ const CONTEXT_COLORS: [Color32; 4] = [
     Color32::from_rgb(0xa8, 0x55, 0xf7), // skills
     Color32::from_rgb(0x3b, 0x82, 0xf6), // conversation
 ];
+
+/// From this fill level on, the context card offers "Compact context".
+const COMPACT_FROM: f32 = 0.5;
 
 fn context_card(
     h: &mut Harness,
@@ -151,7 +167,10 @@ fn context_card(
         true,
         |ui| {
             context_body(ui, s_ref, sizes);
-            if has_compact && s_ref.usage.as_ref().is_some_and(|u| u.used > 0) {
+            // offered once it matters; below, the button only competes
+            // (/compact stays available as a command)
+            let worth = s_ref.context_fraction().unwrap_or(0.0) >= COMPACT_FROM;
+            if has_compact && worth && s_ref.usage.as_ref().is_some_and(|u| u.used > 0) {
                 ui.add_space(2.0);
                 ui.add_enabled_ui(idle, |ui| {
                     if widgets::button(ui, tr("Compact context"), ButtonKind::Secondary)
@@ -188,16 +207,22 @@ fn context_body(
     let frac = s.context_fraction().unwrap_or(0.0);
     let parts = sizes.map(|z| crate::harness::context::split_tokens(u.used, &z));
     let block = ((ui.available_width() + 2.0) / 20.0 - 2.0).clamp(4.0, 10.0);
-    match parts {
-        Some(parts) => {
-            let segments: Vec<(Color32, f32)> = parts
-                .iter()
-                .zip(CONTEXT_COLORS)
-                .map(|(t, c)| (c, *t as f32 / size as f32))
-                .collect();
+    let segments: Option<Vec<(Color32, f32)>> = parts.map(|parts| {
+        parts
+            .iter()
+            .zip(CONTEXT_COLORS)
+            .map(|(t, c)| (c, *t as f32 / size as f32))
+            .collect()
+    });
+    match segments {
+        // the split in colour only while every part fills a whole block:
+        // the stacked meter gives a smaller part one block anyway, and at
+        // 4 % that would light 3 blocks (15 %); then the meter shows the
+        // total and the legend below carries the split
+        Some(segments) if segments.iter().all(|(_, f)| *f == 0.0 || *f >= 1.0 / 20.0) => {
             theme::stacked_meter(ui, &segments, 20, block);
         }
-        None => {
+        _ => {
             theme::pixel_meter(ui, theme::meter_blocks(frac, 20), 20, block);
         }
     }
@@ -369,7 +394,8 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         &mut h.ui.panel_sections,
         ui,
         "changes",
-        tr("Changes"),
+        // "session": Vibe's edits here, not the header's git count
+        tr("Session changes"),
         &summary,
         true,
         |ui| {
@@ -458,7 +484,7 @@ fn changes_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 let mut x = rect.left();
                 if let Some(f) = open {
                     let tag = extras::review_status_label(&f.status);
-                    let g = line_galley(ui, tag, mono(9.5), theme::AMBER, 80.0);
+                    let g = line_galley(ui, tag, mono(10.5), theme::AMBER, 80.0);
                     let r = paint_line(ui, x, rect.center().y, g);
                     x = r.right() + 6.0;
                 }
@@ -577,9 +603,17 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
     ui.horizontal(|ui| {
         ui.add(egui::Label::new(RichText::new(&a.name).color(theme::TEXT).size(13.5)).truncate())
             .on_hover_text(&a.name);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(theme::mono_tag(&a.agent, theme::DIM));
-        });
+        // the type only when it tells subagents apart: Vibe starts nearly
+        // all of them as "generic", and a tag on every card says nothing
+        if let Some(agent) = a
+            .agent
+            .as_deref()
+            .filter(|t| !t.trim().is_empty() && !t.eq_ignore_ascii_case("generic"))
+        {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(theme::mono_tag(agent, theme::DIM));
+            });
+        }
     });
     if !a.task.is_empty() {
         let mut job = egui::text::LayoutJob::default();
@@ -612,7 +646,23 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
         SubagentState::Failed => (tr("Failed").to_string(), theme::RED_TEXT),
         SubagentState::Cancelled => (tr("Cancelled").to_string(), theme::DIM),
     };
-    ui.label(theme::mono_tag(&text, color));
+    ui.horizontal(|ui| {
+        ui.label(theme::mono_tag(&text, color));
+        // the cat's run is a loop, not progress: the real measure of a
+        // running subagent is how long it has been at it
+        if a.state == SubagentState::Running && a.started > 0 {
+            let secs = (extras::now_epoch() as u64).saturating_sub(a.started);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(extras::elapsed_label(secs))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme::DIM),
+                )
+                .on_hover_text(tr("Running time so far"));
+            });
+        }
+    });
     ui.add_space(4.0);
 }
 
@@ -623,7 +673,7 @@ fn subagent(ui: &mut egui::Ui, a: &SubagentInfo, time: f64) {
 fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
     let loops = h.loops.get(sid).cloned().unwrap_or_default();
     let summary = if loops.is_empty() {
-        String::new()
+        tr("none").to_string()
     } else {
         loops.len().to_string()
     };
@@ -719,7 +769,7 @@ fn routines_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         form.open = true;
                     }
                     if !loops.is_empty()
-                        && widgets::button(ui, tr("Delete all"), ButtonKind::Secondary).clicked()
+                        && widgets::button(ui, tr("Delete all"), ButtonKind::Danger).clicked()
                     {
                         clear_all = true;
                     }
@@ -867,12 +917,26 @@ fn environment_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
         h.watcher.git(&cwd, trusted).cloned()
     };
     let mut fork = false;
+    // folded, the section still says where the session works
+    let summary = git
+        .as_ref()
+        .and_then(|g| g.branch.clone())
+        .into_iter()
+        .chain(trust.as_ref().map(|t| {
+            if t.trusted {
+                tr("Trusted").to_string()
+            } else {
+                tr("Not trusted").to_string()
+            }
+        }))
+        .collect::<Vec<_>>()
+        .join(" · ");
     card(
         &mut h.ui.panel_sections,
         ui,
         "environment",
         tr("Environment"),
-        "",
+        &summary,
         false,
         |ui| {
             let key = cwd.to_string_lossy().into_owned();
@@ -895,6 +959,12 @@ fn environment_card(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                     &trf("Branch {branch}", &[("branch", branch)]),
                     theme::DIM,
                 ));
+            } else if git.as_ref().is_some_and(|g| g.refused) {
+                ui.label(theme::mono_tag(
+                    tr("Git off for this repository"),
+                    theme::YELLOW,
+                ))
+                .on_hover_text(super::header::git_refused_why());
             }
             if let Some(t) = &trust {
                 let (text, color) = if t.trusted {

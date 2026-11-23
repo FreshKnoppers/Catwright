@@ -25,10 +25,17 @@ enum FeedOp {
 pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
     let mut close = false;
     let mut ops: Vec<FeedOp> = Vec::new();
-    ui.add_space(6.0);
+    // a destination of its own (like the start screen), so a real title
+    // with air above it instead of a small label at the window's edge
+    ui.add_space(24.0);
     column(ui, |ui| {
         ui.horizontal(|ui| {
-            theme::section_header(ui, tr("Activity"), true);
+            ui.label(
+                RichText::new(tr("Activity"))
+                    .size(20.0)
+                    .strong()
+                    .color(theme::TEXT),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(IconButton::new(Icon::Close, tr("Back to the session")).side(22.0))
@@ -41,7 +48,7 @@ pub(super) fn view(h: &mut Harness, ui: &mut egui::Ui) {
         // the user is looking at the feed: what arrives meanwhile is seen,
         // too (opening it already marked the rest)
         h.ui.activity_seen = h.activity.len();
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         let events: Vec<ActivityEvent> = h
             .activity
             .iter()
@@ -167,52 +174,73 @@ fn entry_card(h: &Harness, ui: &mut egui::Ui, e: &ActivityEvent, ops: &mut Vec<F
                 ops.push(FeedOp::Open { cwd, sid });
             }
             ui.add_space(2.0);
-            ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
-            ui.add_space(4.0);
-            // a waiting permission can be answered right here while it
-            // is still open in its session
-            if e.kind == ActivityKind::Waiting {
-                ui.horizontal(|ui| {
-                    if let (Some(rid), Some(v)) = (&e.request_id, h.sessions.get(&e.sid)) {
-                        if let Some(p) = v.permissions.iter().find(|p| &p.request_id == rid) {
-                            // a request that contradicts its tool call is
-                            // decided on its card, where both are shown
-                            // (audit M2), not from a one-line feed entry
-                            let contradicts = v.tool_for_permission(p).is_some_and(|t| {
-                                !super::cards::request_contradictions(&p.request.tool_call, t)
-                                    .is_empty()
-                            });
-                            if contradicts {
-                                ui.label(
-                                    RichText::new(tr(
-                                        "This request contradicts its tool call – open the session to decide.",
-                                    ))
-                                    .size(12.0)
-                                    .color(theme::RED),
-                                );
-                                return;
-                            }
-                            let shown = p
-                                .request
-                                .options
-                                .iter()
-                                .take(extras::MAX_PERMISSION_OPTIONS);
-                            for opt in shown {
-                                // the same checked label as the card (H1)
-                                let label =
-                                    extras::option_view(&opt.option_id, &opt.kind, &opt.name).label;
-                                if widgets::button(ui, &label, ButtonKind::Secondary).clicked() {
-                                    ops.push(FeedOp::Answer {
-                                        sid: e.sid.clone(),
-                                        request_id: rid.clone(),
-                                        option_id: opt.option_id.clone(),
-                                    });
-                                }
-                            }
-                        }
-                    }
+            // a waiting permission can be answered right here while it is
+            // still open in its session, with everything the pinned card
+            // shows (command, arguments, diff, a contradiction): no blind
+            // approvals. Like the cards, only a session's first few are
+            // shown in full (audit M4); the rest wait their turn.
+            let pending = e
+                .request_id
+                .as_ref()
+                .filter(|_| e.kind == ActivityKind::Waiting)
+                .and_then(|rid| {
+                    let v = h.sessions.get(&e.sid)?;
+                    let i = v.permissions.iter().position(|p| &p.request_id == rid)?;
+                    Some((v, &v.permissions[i], i))
                 });
+            // the entry's text is the call's title; the details below show
+            // that same title when the call has no command, so it is not
+            // printed twice
+            // (only where the details are shown)
+            let repeated = pending.is_some_and(|(v, p, i)| {
+                if i >= super::cards::MAX_SHOWN_PERMISSIONS {
+                    return false;
+                }
+                let call = v.tool_for_permission(p);
+                let has_command = call
+                    .and_then(|t| t.raw_input.as_ref())
+                    .and_then(|r| r.get("command"))
+                    .is_some();
+                let title = call
+                    .map(|t| t.title.as_str())
+                    .or(p.request.tool_call.title.as_deref());
+                !has_command && title == Some(e.text.as_str())
+            });
+            if !repeated {
+                ui.label(RichText::new(&e.text).color(theme::MUTED).size(12.5));
             }
+            match pending {
+                Some((_, _, i)) if i >= super::cards::MAX_SHOWN_PERMISSIONS => {
+                    ui.label(
+                        RichText::new(tr(
+                            "Waiting behind other approvals of this session – they come first.",
+                        ))
+                        .size(12.0)
+                        .color(theme::AMBER),
+                    );
+                }
+                Some((v, p, _)) => {
+                    ui.add_space(2.0);
+                    super::cards::permission_body(
+                        ui,
+                        v,
+                        p,
+                        egui::Id::new(("feed_permission", &e.sid, p.request_id.to_string())),
+                    );
+                    ui.add_space(4.0);
+                    let mut answers = Vec::new();
+                    super::cards::option_row(ui, p, false, &mut answers);
+                    for (request_id, option_id) in answers {
+                        ops.push(FeedOp::Answer {
+                            sid: e.sid.clone(),
+                            request_id,
+                            option_id,
+                        });
+                    }
+                }
+                None => {}
+            }
+            ui.add_space(2.0);
         });
     ui.add_space(6.0);
 }

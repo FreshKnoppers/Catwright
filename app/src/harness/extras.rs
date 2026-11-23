@@ -135,14 +135,89 @@ impl LoopInfo {
         self.prompt.lines().next().unwrap_or_default().trim()
     }
 
-    /// "every 5 min" or the cron expression.
+    /// "every 5 min", the common cron shapes in words ("daily at 09:00",
+    /// "Mondays at 09:00") or else the cron expression itself.
     pub fn schedule(&self) -> String {
         match (self.interval_seconds, &self.cron) {
             (Some(s), _) => trf("every {time}", &[("time", &human_duration(s))]),
-            (None, Some(c)) => format!("cron {c}"),
+            (None, Some(c)) => cron_words(c).unwrap_or_else(|| format!("cron {c}")),
             (None, None) => "–".to_string(),
         }
     }
+}
+
+/// The usual five-field cron expressions in words: every N minutes or hours,
+/// hourly at a minute, daily, on weekdays or on one weekday at a time.
+/// `None` for anything else, which is then shown as it is.
+pub fn cron_words(cron: &str) -> Option<String> {
+    let f: Vec<&str> = cron.split_whitespace().collect();
+    let [min, hour, dom, month, dow] = f.as_slice() else {
+        return None;
+    };
+    if *dom != "*" || *month != "*" {
+        return None;
+    }
+    let num = |s: &str, max: u32| s.parse::<u32>().ok().filter(|n| *n <= max);
+    let every = |s: &str| {
+        s.strip_prefix("*/")
+            .and_then(|n| n.parse::<u64>().ok())
+            .filter(|n| *n > 0)
+    };
+    // every N minutes / hours
+    if *hour == "*" && *dow == "*" {
+        if let Some(n) = every(min) {
+            return Some(trf("every {time}", &[("time", &human_duration(n * 60))]));
+        }
+        if let Some(m) = num(min, 59) {
+            return Some(trf(
+                "every hour at :{minute}",
+                &[("minute", &format!("{m:02}"))],
+            ));
+        }
+        return None;
+    }
+    if *dow == "*" {
+        if let (Some(0), Some(n)) = (num(min, 59), every(hour)) {
+            return Some(trf("every {time}", &[("time", &human_duration(n * 3600))]));
+        }
+    }
+    let (m, h) = (num(min, 59)?, num(hour, 23)?);
+    let time = format!("{h:02}:{m:02}");
+    let days = [
+        "Sundays",
+        "Mondays",
+        "Tuesdays",
+        "Wednesdays",
+        "Thursdays",
+        "Fridays",
+        "Saturdays",
+    ];
+    match *dow {
+        "*" => Some(trf("daily at {time}", &[("time", &time)])),
+        "1-5" => Some(trf("weekdays at {time}", &[("time", &time)])),
+        d => {
+            let day = days[num(d, 7)? as usize % 7];
+            Some(trf(
+                "{day} at {time}",
+                &[("day", &tr_day(day)), ("time", &time)],
+            ))
+        }
+    }
+}
+
+/// A weekday of `cron_words`, translated (the names are literals, so the
+/// catalogs know them).
+fn tr_day(day: &str) -> String {
+    match day {
+        "Sundays" => tr("Sundays"),
+        "Mondays" => tr("Mondays"),
+        "Tuesdays" => tr("Tuesdays"),
+        "Wednesdays" => tr("Wednesdays"),
+        "Thursdays" => tr("Thursdays"),
+        "Fridays" => tr("Fridays"),
+        _ => tr("Saturdays"),
+    }
+    .to_string()
 }
 
 fn parse_loop(v: &Value) -> Option<LoopInfo> {
@@ -871,6 +946,37 @@ mod tests {
         assert!(done.trusted);
         assert!(!done.needs_decision());
         assert_eq!(trust_of_meta(None), None);
+    }
+
+    #[test]
+    fn cron_in_words() {
+        let w = |c: &str| cron_words(c);
+        assert_eq!(w("0 9 * * *").as_deref(), Some("daily at 09:00"));
+        assert_eq!(w("30 8 * * 1-5").as_deref(), Some("weekdays at 08:30"));
+        assert_eq!(w("0 9 * * 1").as_deref(), Some("Mondays at 09:00"));
+        assert_eq!(w("0 9 * * 0").as_deref(), Some("Sundays at 09:00"));
+        assert_eq!(w("0 9 * * 7").as_deref(), Some("Sundays at 09:00"));
+        assert_eq!(w("*/15 * * * *").as_deref(), Some("every 15 min"));
+        assert_eq!(w("0 */2 * * *").as_deref(), Some("every 2 h"));
+        assert_eq!(w("5 * * * *").as_deref(), Some("every hour at :05"));
+        // anything else stays a cron expression
+        for c in [
+            "0 9 1 * *",
+            "0 9 * * 1,3",
+            "61 9 * * *",
+            "0 9 * *",
+            "@daily",
+        ] {
+            assert_eq!(w(c), None, "{c}");
+        }
+        let l = LoopInfo {
+            id: String::new(),
+            prompt: String::new(),
+            interval_seconds: None,
+            cron: Some("0 9 * * 1,3".to_string()),
+            next_fire_at: 0.0,
+        };
+        assert_eq!(l.schedule(), "cron 0 9 * * 1,3");
     }
 
     #[test]
