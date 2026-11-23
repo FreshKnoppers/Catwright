@@ -3,6 +3,72 @@
 Release notes per version. The release workflow publishes the section of a
 tag (`## v0.2.0`) as that release's description.
 
+## v0.7.2
+
+**Download:** `catwright-v0.7.2-x86_64-linux.tar.gz` below, then:
+
+```sh
+tar xzf catwright-v0.7.2-x86_64-linux.tar.gz
+cd catwright-v0.7.2-x86_64-linux
+./dist/install.sh
+```
+
+This installs for the current user only (no root): the program to
+`~/.local/bin/catwright`, a menu entry and icons. Start it from the
+application menu or with `catwright`.
+
+**Requirements:** Linux x86_64 (built on Ubuntu 24.04; needs glibc 2.39 or
+newer, e.g. Ubuntu 24.04+, Fedora 40+, Arch), and the Mistral Vibe CLI
+installed and signed in (`vibe` once in a terminal). Tested with Vibe 3.1.3.
+
+**Check the download:**
+
+```sh
+sha256sum -c catwright-v0.7.2-x86_64-linux.tar.gz.sha256
+gh attestation verify catwright-v0.7.2-x86_64-linux.tar.gz --repo FreshKnoppers/Catwright
+```
+
+**What's new:**
+
+A security release: the seventh review of what Vibe, an opened
+repository or a file on disk can make Catwright do.
+
+- Approvals show what they send. An option's label, colour and number key
+  come from the option id that is sent; an option Catwright does not know
+  is shown neutral, click-only, as "name (sends …)". A number key answers
+  only a request whose command, arguments and buttons are all on screen,
+  and stops answering once you click into the composer or type. Long
+  commands scroll, and hidden control or direction characters show as
+  ⟨U+…⟩.
+- A request that contradicts the tool call it names (another title,
+  command or diff) is flagged in red, shows both, and needs a click. An
+  approval without an open session (a subagent) shows what it names
+  instead of only its buttons. At most three approvals show in full at
+  once; the others follow as these are answered.
+- Folder trust: a folder you declined stays untrusted whatever Vibe
+  answers. Catwright runs its own git lookups only in folders Vibe trusts
+  and you picked or trusted yourself, and the trust card names the folder.
+  A session can only be opened in one of your projects; `/` or a folder
+  above your home folder cannot be a project.
+- The background `git status` reads a private copy of the repository
+  config, the same bytes its filter check read, so rewriting `.git/config`
+  in between has no effect. A repository whose `core.worktree` points
+  elsewhere is not scanned.
+- Crash and freeze fixes: a session date with non-ASCII characters no
+  longer ends the app; every file Catwright reads (settings, Vibe's files,
+  previews) is read capped and without blocking on special files; very
+  long or deeply marked-up answers, huge previews, charts with thousands
+  of entries and oversized plans, approvals or command lists stay fast.
+- Answer scripts (`ui-js`) run with a 512 MiB memory limit, slash command
+  names from Vibe are checked, and picking a command from the palette
+  keeps what you had typed.
+- The config folder is used only while it is private (0700, not a
+  symlink); otherwise nothing is read from or saved to it, and the app
+  says so. `install.sh` and "Install skill" no longer write through a
+  symlink planted at their target.
+- The start screen offers the thinking levels of the selected model from
+  Vibe's model catalogue, also for a model not used yet.
+
 ## v0.7.1
 
 **Download:** `catwright-v0.7.1-x86_64-linux.tar.gz` below, then:

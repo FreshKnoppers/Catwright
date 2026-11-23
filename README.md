@@ -206,13 +206,13 @@ Catwright never logs or stores the dictated, summarised or spoken text.
   language: Vibe's ACP interface takes none.
 - Routines run only while their session is open in Catwright and idle;
   Vibe's ACP interface takes intervals only, no cron expressions.
-- The config probe runs *before* each git call, but the call itself reads
-  `.git/config` again: a process that is already running as your user can
-  swap the config in that millisecond window and slip a filter driver past
-  the probe. That window only exists for someone who can already execute
-  code, and a filter written once (not flipped back and forth inside the
-  window) is caught by the next probe — the probe cannot close a race
-  against a live writer, it only refuses what it can see.
+- The git calls that change the repository (creating or deleting a
+  worktree, deleting its branch) still read `.git/config` twice: once for
+  the filter probe, once for the call. A process already running as your
+  user could swap the config in that millisecond window. These calls run
+  only when you click; the background scans (`git status` every few
+  seconds) read a private copy of the config instead, the same bytes the
+  probe checked, so they have no such window.
 - Tested on Linux only, with Vibe 3.1.0 to 3.1.3.
 
 ## Download
@@ -221,8 +221,8 @@ Each [release](https://github.com/FreshKnoppers/Catwright/releases) has a
 ready-built archive for Linux x86_64 (glibc 2.39 or newer):
 
 ```sh
-tar xzf catwright-v0.7.1-x86_64-linux.tar.gz
-cd catwright-v0.7.1-x86_64-linux
+tar xzf catwright-v0.7.2-x86_64-linux.tar.gz
+cd catwright-v0.7.2-x86_64-linux
 ./dist/install.sh
 ```
 
