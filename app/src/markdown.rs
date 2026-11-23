@@ -397,38 +397,32 @@ impl Next {
     }
 }
 
-/// The next run of exactly n backticks per n, remembered like [`Next`].
+/// Every run of backticks in the line, by its length: filled in one pass
+/// at the first code span, then each closer is a binary search. Searching
+/// forward once per run length (as before) was O(n·k) for k different
+/// lengths — runs of growing length, `` ` `` `` `` `` … ``, made that
+/// O(n^1.5), and a 245 KiB line took 0.7 s in a debug build.
 #[derive(Default)]
-struct Runs(std::collections::HashMap<usize, (usize, Option<usize>)>);
+struct Runs(Option<std::collections::HashMap<usize, Vec<usize>>>);
 
 impl Runs {
     /// Start of the first run of exactly `n` backticks at or after `p`
     /// (`p` is never inside a run).
     fn at(&mut self, hay: &str, n: usize, p: usize) -> Option<usize> {
-        if let Some(&(from, found)) = self.0.get(&n) {
-            if p >= from {
-                match found {
-                    None => return None,
-                    Some(f) if f >= p => return Some(f),
-                    _ => {}
-                }
+        let runs = self.0.get_or_insert_with(|| {
+            let bytes = hay.as_bytes();
+            let mut runs: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            let mut i = 0;
+            while let Some(off) = hay[i..].find('`') {
+                let start = i + off;
+                let len = bytes[start..].iter().take_while(|b| **b == b'`').count();
+                runs.entry(len).or_default().push(start);
+                i = start + len;
             }
-        }
-        let bytes = hay.as_bytes();
-        let mut i = p;
-        let found = loop {
-            let Some(off) = hay[i..].find('`') else {
-                break None;
-            };
-            let start = i + off;
-            let run = bytes[start..].iter().take_while(|b| **b == b'`').count();
-            if run == n {
-                break Some(start);
-            }
-            i = start + run;
-        };
-        self.0.insert(n, (p, found));
-        found
+            runs
+        });
+        let starts = runs.get(&n)?;
+        starts.get(starts.partition_point(|&s| s < p)).copied()
     }
 }
 
