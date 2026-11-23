@@ -1983,3 +1983,12 @@ msgstr "Wartet hinter anderen Freigaben dieser Session – die kommen zuerst."
 
 msgid "{error} – nothing is read from or saved to it in this run."
 msgstr "{error} – in diesem Lauf wird dort nichts gelesen oder gespeichert."
+
+msgid "no skill folder"
+msgstr "kein Skill-Ordner"
+
+msgid "the skill folder is a symlink or not a folder"
+msgstr "der Skill-Ordner ist ein Symlink oder kein Ordner"
+
+msgid "the skill folder lies outside the home folder"
+msgstr "der Skill-Ordner liegt außerhalb des Home-Ordners"

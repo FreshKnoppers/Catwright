@@ -1983,3 +1983,12 @@ msgstr "À espera atrás de outras aprovações desta sessão – essas vêm pri
 
 msgid "{error} – nothing is read from or saved to it in this run."
 msgstr "{error} – nesta execução nada é lido nem guardado aí."
+
+msgid "no skill folder"
+msgstr "nenhuma pasta de skill"
+
+msgid "the skill folder is a symlink or not a folder"
+msgstr "a pasta do skill é uma ligação simbólica ou não é uma pasta"
+
+msgid "the skill folder lies outside the home folder"
+msgstr "a pasta do skill está fora da pasta pessoal"

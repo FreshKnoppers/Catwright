@@ -606,8 +606,26 @@ fn vibe_skill_path_at(home: &Path) -> PathBuf {
 const SKILL_NAME: &str = "catwright-ui";
 
 /// Write the skill below `home` (`.vibe/skills/catwright-ui/SKILL.md`).
+///
+/// The skill's own folder must be a real folder (not a symlink), and where
+/// it really lies must be below the real home folder: a planted
+/// `catwright-ui -> elsewhere` would otherwise get SKILL.md written into
+/// that other folder (audit L5). A `~/.vibe` linked elsewhere inside the
+/// home folder (dotfiles) still works.
 pub fn install_vibe_skill_at(home: &Path) -> std::io::Result<PathBuf> {
     let path = vibe_skill_path_at(home);
+    let refuse =
+        |what: &str| std::io::Error::new(std::io::ErrorKind::PermissionDenied, what.to_string());
+    let dir = path.parent().ok_or_else(|| refuse(tr("no skill folder")))?;
+    if let Ok(m) = std::fs::symlink_metadata(dir) {
+        if !m.is_dir() {
+            return Err(refuse(tr("the skill folder is a symlink or not a folder")));
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    if !dir.canonicalize()?.starts_with(home.canonicalize()?) {
+        return Err(refuse(tr("the skill folder lies outside the home folder")));
+    }
     write_generic(&path, UI_DSL_SKILL)?;
     Ok(path)
 }
@@ -932,6 +950,45 @@ mod tests {
         assert!(result.is_err(), "read-only config dir must fail the save");
         assert!(!target.exists(), "no settings file is written");
         drop(_restore);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Audit L5: "Install skill" does not write through a planted symlink
+    /// at the skill folder, nor into a folder outside the home folder; a
+    /// `.vibe` linked elsewhere inside home still works.
+    #[test]
+    fn install_vibe_skill_refuses_a_redirected_folder() {
+        let base = std::env::temp_dir().join(format!("cw-skill-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(home.join(".vibe/skills")).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, home.join(".vibe/skills/catwright-ui")).unwrap();
+        assert!(install_vibe_skill_at(&home).is_err());
+        assert!(
+            !elsewhere.join("SKILL.md").exists(),
+            "nothing written through the link"
+        );
+
+        // `.vibe` itself links outside home: refused as well
+        let home2 = base.join("home2");
+        std::fs::create_dir_all(&home2).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, home2.join(".vibe")).unwrap();
+        assert!(install_vibe_skill_at(&home2).is_err());
+        assert!(!elsewhere.join("skills/catwright-ui/SKILL.md").exists());
+
+        // `.vibe` linked to a folder inside home (dotfiles): fine
+        let home3 = base.join("home3");
+        std::fs::create_dir_all(home3.join("dotfiles/vibe")).unwrap();
+        std::os::unix::fs::symlink(home3.join("dotfiles/vibe"), home3.join(".vibe")).unwrap();
+        let written = install_vibe_skill_at(&home3).unwrap();
+        assert!(
+            home3
+                .join("dotfiles/vibe/skills/catwright-ui/SKILL.md")
+                .exists(),
+            "{written:?}"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

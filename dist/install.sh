@@ -7,6 +7,7 @@
 # Without an argument it takes the binary next to dist/ (release archive),
 # else the one cargo built (source checkout).
 set -e
+: "${HOME:?HOME is not set}"
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -n "$1" ]; then
     bin="$1"
@@ -22,10 +23,14 @@ fi
 install -D -m 0755 "$bin" "$HOME/.local/bin/catwright"
 install -D -m 0644 "$dir/catwright.desktop" \
     "$HOME/.local/share/applications/catwright.desktop"
-# icon -> the full freedesktop hicolor set: titlebars pick 16-32 px
-# (cp -R of "hicolor/." lands INSIDE hicolor: the size dirs belong under it)
-mkdir -p "$HOME/.local/share/icons/hicolor"
-cp -R "$dir/icons/hicolor/." "$HOME/.local/share/icons/hicolor/"
+# icon -> the full freedesktop hicolor set: titlebars pick 16-32 px.
+# One `install` per regular file, not `cp -R`: install replaces whatever
+# sits at the target (cp would write THROUGH a symlink planted there, e.g.
+# ~/.local/share/icons/.../catwright.png -> ~/.bashrc), and symlinks in
+# the archive itself are skipped (find does not follow or list them).
+(cd "$dir/icons/hicolor" && find . -type f) | while IFS= read -r f; do
+    install -D -m 0644 "$dir/icons/hicolor/$f" "$HOME/.local/share/icons/hicolor/$f"
+done
 # overwriting an icon leaves its folder's mtime alone, so an existing
 # icon-theme.cache still counts as fresh: refresh it (when the tool is
 # there) and the desktop's app database, so a new icon shows up
