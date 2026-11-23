@@ -1565,7 +1565,15 @@ mod tests {
             let marker = base.join("marker");
 
             let scan = Scan::prepare(&work, GIT_TIMEOUT).expect("scan in a repo");
-            assert!(scan.neutral.is_empty(), "the probe saw no driver");
+            // (system/global drivers such as git-lfs on the CI runner are
+            // neutralized too; the repo's own `pwn` is not defined yet)
+            assert!(
+                !scan
+                    .neutral
+                    .iter()
+                    .any(|(k, _)| k.starts_with("filter.pwn.")),
+                "the probe saw no `pwn` driver"
+            );
             // … the attacker now defines it in the live config
             git(
                 &repo,
