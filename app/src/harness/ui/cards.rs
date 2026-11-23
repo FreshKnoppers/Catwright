@@ -87,6 +87,19 @@ fn trust_banner(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                 }
             });
         });
+        // the folder the decision is about, in full: the session's cwd is
+        // agent data and need not be the project the user has in mind
+        let path = cwd.to_string_lossy();
+        ui.add(
+            egui::Label::new(
+                RichText::new(path.as_ref())
+                    .monospace()
+                    .size(11.5)
+                    .color(theme::TEXT),
+            )
+            .truncate(),
+        )
+        .on_hover_text(path.as_ref());
         let files = if trust.detected_files.is_empty() {
             tr("Project files").to_string()
         } else {

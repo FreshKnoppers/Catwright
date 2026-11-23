@@ -192,7 +192,7 @@ pub(super) fn preview_panel(h: &mut Harness, ctx: &egui::Context) {
     // git for the diff runs in the workspace when the path is inside it,
     // else in the file's own parent — and only when THAT folder is trusted
     let git_dir = git_dir_for(&p.path, base.as_deref());
-    let git_trusted = h.trust.get(&git_dir).is_some_and(|t| t.trusted);
+    let git_trusted = h.git_trusted(&git_dir);
     let out = egui::SidePanel::right("harness_preview")
         .resizable(true)
         .default_width(p.width)

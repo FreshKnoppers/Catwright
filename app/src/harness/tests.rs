@@ -4880,6 +4880,8 @@ fn trust_comes_from_the_session_meta_and_the_decision_updates_it() {
         result,
     });
     assert!(h.trust[&dir].needs_decision());
+    assert!(!h.git_trusted(&dir));
+    h.decide_trust("s1", &dir, "trust_cwd");
     h.handle_event(AcpEvent::ExtResult {
         kind: ExtKind::TrustDecision {
             session_id: "s1".to_string(),
@@ -4889,7 +4891,110 @@ fn trust_comes_from_the_session_meta_and_the_decision_updates_it() {
         result: json!({"trust_status": "trusted", "details": null}),
     });
     assert!(h.trust[&dir].trusted);
+    assert!(h.git_trusted(&dir));
     assert!(h.status.contains("trusted"));
+}
+
+fn trust_meta(status: &str) -> proto::NewSessionResult {
+    serde_json::from_value(json!({"sessionId": "s1", "_meta": {"workspace_trust": {
+        "status": status,
+        "details": {"detectedFiles": ["AGENTS.md"], "availableDecisions": ["trust_cwd", "decline"]}
+    }}}))
+    .unwrap()
+}
+
+fn trust_answer(h: &mut Harness, dir: &Path, decision: &str, status: &str) {
+    h.handle_event(AcpEvent::ExtResult {
+        kind: ExtKind::TrustDecision {
+            session_id: "s1".to_string(),
+            cwd: dir.to_path_buf(),
+            decision: decision.to_string(),
+        },
+        result: json!({"trust_status": status, "details": null}),
+    });
+}
+
+/// Audit H2: the user clicks "Don't trust", the agent answers "trusted".
+/// The app must neither say so nor run git there — not on the answer and
+/// not on a later session's `_meta` either.
+#[test]
+fn a_declined_folder_stays_untrusted_whatever_the_agent_answers() {
+    let dir = PathBuf::from("/w");
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: dir.clone(),
+        result: trust_meta("untrusted"),
+    });
+    h.decide_trust("s1", &dir, "decline");
+    trust_answer(&mut h, &dir, "decline", "trusted");
+    assert!(!h.trust[&dir].trusted);
+    assert!(!h.git_trusted(&dir));
+    assert_eq!(h.status, tr("The folder stays untrusted."));
+
+    // the next session in the same folder claims trust in its `_meta`
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: dir.clone(),
+        result: trust_meta("trusted"),
+    });
+    assert!(!h.trust[&dir].trusted);
+    assert!(!h.git_trusted(&dir));
+    // the git consumers get `trusted = false`: no scan starts
+    assert!(h.watcher.git(&dir, h.git_trusted(&dir)).is_none());
+    assert!(h.worktrees_of(&dir).is_empty());
+}
+
+/// The user trusts, Vibe answers that it did not: the folder is not
+/// reported as trusted.
+#[test]
+fn a_trust_vibe_did_not_take_is_not_reported() {
+    let dir = PathBuf::from("/w");
+    let (mut h, _agent) = setup(vec![dir.clone()], "ask");
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: dir.clone(),
+        result: trust_meta("untrusted"),
+    });
+    h.decide_trust("s1", &dir, "trust_cwd");
+    trust_answer(&mut h, &dir, "trust_cwd", "untrusted");
+    assert!(!h.git_trusted(&dir));
+    assert_eq!(h.status, tr("The folder stays untrusted."));
+}
+
+/// Vibe's "trusted" opens git only for folders the user stands behind:
+/// a project, the chat workspace, or a folder trusted on the card.
+#[test]
+fn git_runs_only_in_folders_the_user_picked_or_trusted() {
+    let project = PathBuf::from("/w");
+    let elsewhere = PathBuf::from("/");
+    let (mut h, _agent) = setup(vec![project.clone()], "ask");
+    h.chat_dir = Some(PathBuf::from("/chat"));
+    for dir in [&project, &elsewhere, &PathBuf::from("/chat")] {
+        h.handle_event(AcpEvent::SessionCreated {
+            origin: SessionOrigin::New,
+            cwd: dir.clone(),
+            result: trust_meta("trusted"),
+        });
+    }
+    assert!(h.git_trusted(&project));
+    assert!(h.git_trusted(Path::new("/chat")));
+    // a folder only the agent named (e.g. a listed session's cwd)
+    assert!(h.trust[&elsewhere].trusted);
+    assert!(!h.git_trusted(&elsewhere));
+    assert!(!h.git_trusted(Path::new("/w/sub")));
+
+    // the user trusts it on the card: now it counts
+    h.decide_trust("s1", &elsewhere, "trust_cwd");
+    trust_answer(&mut h, &elsewhere, "trust_cwd", "trusted");
+    assert!(h.git_trusted(&elsewhere));
+    // a project Vibe does not trust stays off as well
+    h.handle_event(AcpEvent::SessionCreated {
+        origin: SessionOrigin::New,
+        cwd: project.clone(),
+        result: trust_meta("untrusted"),
+    });
+    assert!(!h.git_trusted(&project));
 }
 
 /// Background refreshes stay quiet when they fail; user actions speak up.
@@ -5795,6 +5900,15 @@ fn safety_ui_screenshots() {
     });
     shot(&mut h, "25-diff-needs-trust");
     h.ui.preview = None;
+
+    // 7) Vibe asks for trust: the card names the folder it is about
+    if let Some(t) = h.trust.get_mut(&dir) {
+        t.detected_files = vec!["AGENTS.md".to_string(), ".vibe/".to_string()];
+        t.decisions = ["trust_cwd", "trust_repo", "decline"]
+            .map(String::from)
+            .to_vec();
+    }
+    shot(&mut h, "26-trust-card");
     if let Some(t) = h.trust.get_mut(&dir) {
         t.trusted = true;
     }

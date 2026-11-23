@@ -110,8 +110,11 @@ The screenshots show demo projects with prepared sessions
 - File chips only check whether a mentioned file exists; the file is read
   only when you open it.
 - Catwright runs its own `git` lookups (branch/dirty count, file list, diff
-  previews) only in folders Vibe reported as trusted, and neutralizes any
-  `filter.*` drivers a shipped `.git/config` (zip/tarball) or a user-global
+  previews) only in folders Vibe reports as trusted *and* you stand behind
+  (one of your projects, the chat workspace, or a folder you trusted on
+  the trust card; a folder you declined stays off whatever Vibe answers),
+  and neutralizes any `filter.*` drivers a shipped `.git/config`
+  (zip/tarball) or a user-global
   one (git-lfs) might define — `git status` would otherwise execute them,
   and a repo can weaponize a global driver via `.gitattributes` plus
   repo-local `lfs.*` keys. Fetching is disabled outright

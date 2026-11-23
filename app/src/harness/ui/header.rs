@@ -57,9 +57,9 @@ pub(super) fn show(h: &mut Harness, ui: &mut egui::Ui, sid: &str) {
                         h.fork_active_session();
                     }
                     if !is_chat {
-                        // git scans only run in folders Vibe reported as
-                        // trusted (a shipped .git/config is executable by git)
-                        let trusted = h.trust.get(&cwd).is_some_and(|t| t.trusted);
+                        // git scans only run in trusted folders (a shipped
+                        // .git/config is executable by git)
+                        let trusted = h.git_trusted(&cwd);
                         if let Some(git) = h.watcher.git(&cwd, trusted).cloned() {
                             git_chip(h, ui, &git, &cwd);
                         } else if !trusted {

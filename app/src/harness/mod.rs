@@ -303,10 +303,17 @@ pub struct Harness {
     account_after_probe: bool,
     /// A probe session opened only for the account read; closed afterwards.
     account_probe_session: Option<String>,
-    /// Workspace trust per folder (from `_meta.workspace_trust`).
+    /// Workspace trust per folder as Vibe reports it
+    /// (`_meta.workspace_trust`, `_trust/decision`): what Vibe itself
+    /// loads. Agent data — whether the app runs git is `git_trusted`.
     pub trust: HashMap<PathBuf, TrustInfo>,
     /// Trust banners the user waved away in this run.
     pub trust_dismissed: HashSet<PathBuf>,
+    /// Folders the user trusted on the trust card in this run.
+    trust_granted: HashSet<PathBuf>,
+    /// Folders the user declined on the trust card in this run: they stay
+    /// untrusted whatever Vibe answers or reports afterwards.
+    trust_declined: HashSet<PathBuf>,
     /// Open `elicitation/create` requests (Vibe's questions).
     pub questions: Vec<PendingQuestion>,
     /// Messages typed while a turn was running, per session.
@@ -435,6 +442,8 @@ impl Harness {
             account_probe_session: None,
             trust: HashMap::new(),
             trust_dismissed: HashSet::new(),
+            trust_granted: HashSet::new(),
+            trust_declined: HashSet::new(),
             questions: Vec::new(),
             queue: HashMap::new(),
             loops: HashMap::new(),
@@ -696,7 +705,7 @@ impl Harness {
             } => {
                 let sid = result.session_id.clone();
                 if let Some(t) = extras::trust_of_meta(result.meta.as_ref()) {
-                    self.trust.insert(cwd.clone(), t);
+                    self.record_trust(cwd.clone(), t);
                 }
                 match origin {
                     // a fork's answer: the new view shows the source transcript
@@ -848,7 +857,7 @@ impl Harness {
                     }
                     if let Some(t) = extras::trust_of_meta(result.meta.as_ref()) {
                         let cwd = v.cwd.clone();
-                        self.trust.insert(cwd, t);
+                        self.record_trust(cwd, t);
                     }
                 }
                 self.remember_config(&result.config_options);
@@ -1447,8 +1456,8 @@ impl Harness {
 
     /// Worktrees of `project` without the main worktree (the sidebar list).
     pub fn worktrees_of(&mut self, project: &Path) -> Vec<watch::WorktreeInfo> {
-        // a git scan: only in folders Vibe reported as trusted
-        let trusted = self.trust.get(project).is_some_and(|t| t.trusted);
+        // a git scan: only in trusted folders
+        let trusted = self.git_trusted(project);
         self.watcher
             .worktrees(project, trusted)
             .iter()
@@ -3378,7 +3387,42 @@ impl Harness {
         }
     }
 
+    /// Store Vibe's trust report for `cwd`. A folder the user declined in
+    /// this run shows as untrusted whatever Vibe reports.
+    fn record_trust(&mut self, cwd: PathBuf, mut t: TrustInfo) {
+        if self.trust_declined.contains(&cwd) {
+            t.trusted = false;
+        }
+        self.trust.insert(cwd, t);
+    }
+
+    /// May the app run git (status, file list, worktrees, diffs) in
+    /// `folder`? Vibe must report it trusted, and the user must stand
+    /// behind the folder: one of their projects (picked, from the command
+    /// line, or a worktree the app made), the chat workspace, or trusted on
+    /// the trust card in this run — and not declined in this run. Vibe's
+    /// report alone is agent data: it named a folder nobody picked (a
+    /// listed session's `cwd`) or answered "trusted" to a decline
+    /// (audit H2).
+    pub fn git_trusted(&self, folder: &Path) -> bool {
+        self.trust.get(folder).is_some_and(|t| t.trusted)
+            && !self.trust_declined.contains(folder)
+            && (self.projects.iter().any(|p| p == folder)
+                || self.is_chat_dir(folder)
+                || self.trust_granted.contains(folder))
+    }
+
+    /// The user's choice on the trust card. It is recorded here before Vibe
+    /// answers: the answer is agent data and cannot turn a decline into
+    /// trust (audit H2).
     pub fn decide_trust(&mut self, session_id: &str, cwd: &Path, decision: &str) {
+        if decision.starts_with("trust_") {
+            self.trust_declined.remove(cwd);
+            self.trust_granted.insert(cwd.to_path_buf());
+        } else {
+            self.trust_granted.remove(cwd);
+            self.trust_declined.insert(cwd.to_path_buf());
+        }
         self.send_ext(ExtKind::TrustDecision {
             session_id: session_id.to_string(),
             cwd: cwd.to_path_buf(),
@@ -3588,14 +3632,17 @@ impl Harness {
                 self.account_answered();
             }
             ExtKind::TrustDecision { cwd, .. } => {
+                // "trusted" only when the user trusted it AND Vibe says it
+                // took the decision
                 let trust = extras::trust_of_answer(&result);
-                self.status = if trust.trusted {
+                self.record_trust(cwd.clone(), trust);
+                let trusted = self.trust.get(&cwd).is_some_and(|t| t.trusted);
+                self.status = if trusted && self.trust_granted.contains(&cwd) {
                     tr("Folder trusted – AGENTS.md, skills and hooks apply from the next session.")
                         .to_string()
                 } else {
                     tr("The folder stays untrusted.").to_string()
                 };
-                self.trust.insert(cwd, trust);
             }
             ExtKind::LoopsList { session_id } => {
                 self.loops.insert(session_id, extras::parse_loops(&result));

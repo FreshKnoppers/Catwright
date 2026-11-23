@@ -106,7 +106,7 @@ pub(crate) fn entries(h: &mut Harness, query: &str) -> Vec<Entry> {
     if let Some(cwd) = cwd.as_ref().filter(|_| !query.trim().is_empty()) {
         let name = h.workspace_name(cwd);
         // the file list is a git scan too: only in trusted folders
-        let trusted = h.trust.get(cwd).is_some_and(|t| t.trusted);
+        let trusted = h.git_trusted(cwd);
         for rel in crate::harness::watch::filter_files(h.watcher.files(cwd, trusted), query, 12) {
             out.push(Entry {
                 icon: Icon::File,

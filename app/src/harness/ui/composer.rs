@@ -80,7 +80,7 @@ fn list_rows(h: &mut Harness, ctx: &egui::Context) -> Vec<ListRow> {
         return Vec::new();
     };
     // the file list is a git scan too: only in trusted folders
-    let trusted = h.trust.get(&cwd).is_some_and(|t| t.trusted);
+    let trusted = h.git_trusted(&cwd);
     filter_files(h.watcher.files(&cwd, trusted), &query, LIST_ROWS)
         .into_iter()
         .map(|rel| ListRow {
